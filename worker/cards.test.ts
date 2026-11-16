@@ -4,13 +4,11 @@ import { handleCard } from './cards.ts'
 import { testDb, type D1 } from './testDb.ts'
 
 const VALID_TOKEN = 'abc123def456gh78'
-const ADMIN_TOKEN = 'this-is-a-valid-32-char-admin-to'
 
 function makeEnv(db: D1, opts: { cardIpLimit?: boolean } = {}) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('asset') },
-    ADMIN_TOKEN,
     CARD_IP_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.cardIpLimit ?? true }) },
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
   }
