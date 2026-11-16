@@ -58,7 +58,7 @@ These steps are performed **once** in the Cloudflare dashboard (outside the repo
    - Click **Settings** and scroll to find:
      - **Team domain**: looks like `https://<team>.cloudflareaccess.com` — copy this
      - **Application Audience tag**: a UUID like `abc123...` — copy this
-   - (These become the secrets `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` below)
+   - (These become the values of `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` below, in `vars` or as secrets)
 
 6. **Access application CORS settings**
    - In the application settings, leave **CORS** and **Bypass OPTIONS** both **OFF** — the Worker handles CSRF protection via the `X-Requested-With` header
@@ -119,7 +119,7 @@ wrangler secret put ACCESS_AUD
 # Paste: <application-audience-tag>
 ```
 
-**Do not use `wrangler.jsonc` for secrets** — that file is version-controlled. Secrets are set **only via the CLI**.
+`ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are identifiers, so they may live in `vars` in `wrangler.jsonc` (see "Automatic deploy"). Use the CLI secrets here only when you deploy from a laptop, and never set the same key in both places. Real secrets of any kind never go in `wrangler.jsonc`.
 
 #### 4. Set ONE claim variable (via CLI) for first bootstrap
 
@@ -159,6 +159,8 @@ npx wrangler deploy
    - "admin: bootstrap" → you successfully claimed admin (good!)
 
 #### 6. Remove the claim variable and redeploy
+
+(CLI route. On the Git-connected route `BOOTSTRAP_EMAIL` in `vars` may stay; only `ALLOW_FIRST_CLAIM` must always be removed.)
 
 ```bash
 # Remove the variable (choose whichever you set):
@@ -204,34 +206,20 @@ If you also want to stop them from reaching the site at all, remove their email 
 
 ### Recovery when the only admin loses access
 
-If your Gmail account is deleted or compromised and you're the only admin:
+If your Gmail account is deleted or compromised and you're the only admin. First check where `BOOTSTRAP_EMAIL` is currently set (`vars` in `wrangler.jsonc`, or a Wrangler secret) and change it **in that place only**. Setting it in both places lets the old value come back on the next deploy.
 
-1. Set a new BOOTSTRAP_EMAIL via the CLI:
-   ```bash
-   wrangler secret put BOOTSTRAP_EMAIL
-   # Paste: recovery@example.com (your new email)
-   ```
-   Make sure `ALLOW_FIRST_CLAIM` is **not set** (delete it if it is).
+1. Set the new recovery address and make sure `ALLOW_FIRST_CLAIM` is **not set** anywhere (`wrangler secret delete ALLOW_FIRST_CLAIM` if it is).
+   - Git-connected deploy (vars): edit `"BOOTSTRAP_EMAIL"` in the `vars` block of `wrangler.jsonc` to the new address, commit and push, and wait for the build to finish.
+   - Laptop deploy (secret): `wrangler secret put BOOTSTRAP_EMAIL`, paste the new address, then `npx wrangler deploy`.
 
-2. Delete the admin table via D1:
+2. Only after step 1 is live, empty the admin table:
    ```bash
    wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM admin"
    ```
 
-3. Redeploy:
-   ```bash
-   npx wrangler deploy
-   ```
+3. Log in via Access with the recovery address. You become the new first admin; confirm it in the admin list.
 
-4. Log in via Access with the recovery email address
-
-5. You should now become the new first admin
-
-6. Remove the `BOOTSTRAP_EMAIL`:
-   ```bash
-   wrangler secret delete BOOTSTRAP_EMAIL
-   npx wrangler deploy
-   ```
+4. Clean up. Laptop deploy: `wrangler secret delete BOOTSTRAP_EMAIL` if you do not want to keep it. Git deploy: the address in `vars` may stay (it only lets that person claim an empty table), or restore the previous value and push.
 
 **Common error after first deploy**: "401 Unauthorized" with a log line `admin: misconfigured`. This means neither `BOOTSTRAP_EMAIL` nor `ALLOW_FIRST_CLAIM` was set. Set one of them and redeploy.
 
@@ -306,7 +294,7 @@ When the admin API fails, the response includes an error code. Common ones:
 If you see 401, check:
 - You're logged in to Cloudflare Access (the login page should not appear for `/admin`)
 - Your email is in the Access allow-list policy (ask an admin to verify)
-- The two secrets are correctly set (`ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`)
+- `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set (in `vars` or as secrets, not both)
 
 If you see 403, check:
 - You're using a modern browser (Edge, Chrome, Firefox, Safari) — old browsers may not send the required headers
