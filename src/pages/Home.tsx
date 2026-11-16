@@ -1,5 +1,3 @@
-import { Link } from 'react-router-dom'
-import { cards } from '../cards'
 import site from '../content/site.json'
 
 export default function Home() {
@@ -25,12 +23,6 @@ export default function Home() {
       </section>
       <section className="note">
         <p>{home.qrNote}</p>
-        {/* Mockup helper: lets us preview a personal card without scanning. Not included in production builds. */}
-        {import.meta.env.DEV && (
-          <p>
-            <Link to={`/t/${cards[0].id}`}>Xem thiệp mẫu</Link>
-          </p>
-        )}
       </section>
     </>
   )

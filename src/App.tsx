@@ -1,6 +1,7 @@
 import { Link, Route, Routes } from 'react-router-dom'
 import site from './content/site.json'
 import About from './pages/About'
+import Admin from './pages/Admin'
 import CardPage from './pages/CardPage'
 import Home from './pages/Home'
 
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/t/:id" element={<CardPage />} />
           <Route path="/ve-clb-ai" element={<About />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<p>Không tìm thấy trang.</p>} />
         </Routes>
       </main>

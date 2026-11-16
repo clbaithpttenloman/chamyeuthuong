@@ -1,10 +1,39 @@
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { findCard } from '../cards'
+import { type CardData, getCard } from '../api'
 import site from '../content/site.json'
 
+type State =
+  | { status: 'loading' }
+  | { status: 'found'; card: CardData }
+  | { status: 'notfound' }
+
 export default function CardPage() {
-  const card = findCard(useParams().id)
-  if (!card) return <p className="notfound">Không tìm thấy thiệp. Hãy quét lại mã QR.</p>
+  const { id } = useParams<{ id: string }>()
+  const [state, setState] = useState<State>({ status: 'loading' })
+
+  useEffect(() => {
+    if (!id) {
+      setState({ status: 'notfound' })
+      return
+    }
+    setState({ status: 'loading' })
+    void getCard(id).then((card) => {
+      setState(card ? { status: 'found', card } : { status: 'notfound' })
+    }).catch(() => {
+      setState({ status: 'notfound' })
+    })
+  }, [id])
+
+  if (state.status === 'loading') {
+    return <p className="notfound">Đang tải thiệp...</p>
+  }
+
+  if (state.status === 'notfound') {
+    return <p className="notfound">Không tìm thấy thiệp. Hãy quét lại mã QR.</p>
+  }
+
+  const { card } = state
   return (
     <article className="card">
       <p className="kicker">{site.title}</p>

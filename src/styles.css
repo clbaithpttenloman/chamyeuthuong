@@ -35,3 +35,57 @@ footer { text-align: center; padding: 2rem 1rem; color: #78716c; font-size: 0.9r
 .when { font-size: 0.8rem; font-weight: 700; color: var(--gold); text-transform: uppercase; }
 .member { text-align: center; }
 .avatar { width: 4rem; height: 4rem; margin: 0 auto 0.6rem; border-radius: 50%; display: grid; place-items: center; background: #ffe4e6; color: var(--rose); font-size: 1.5rem; font-weight: 700; }
+
+/* ── Admin ───────────────────────────────────────────────────────────────── */
+.admin-login { max-width: 24rem; margin: 4rem auto; padding: 2rem; background: #fff; border: 1px solid #fed7aa; border-radius: 0.9rem; }
+.admin-login h1 { margin-top: 0; }
+.admin-login form { display: flex; flex-direction: column; gap: 0.75rem; }
+.admin-login label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; font-weight: 600; }
+.admin-login input { padding: 0.5rem 0.75rem; border: 1px solid #d6d3d1; border-radius: 0.4rem; font-size: 1rem; }
+.admin-login button { padding: 0.6rem; background: var(--rose-dark); color: #fff; border: none; border-radius: 0.4rem; font-size: 1rem; cursor: pointer; }
+.admin-login button:hover { background: var(--rose); }
+
+.admin-page { padding-top: 1.5rem; }
+.admin-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem; }
+.admin-header h1 { margin: 0; }
+.admin-header-actions { display: flex; gap: 0.5rem; }
+
+.admin-error { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; padding: 0.75rem 1rem; border-radius: 0.4rem; margin-bottom: 1rem; }
+.admin-loading, .admin-empty { color: #78716c; padding: 1rem 0; }
+
+button { padding: 0.35rem 0.75rem; border: 1px solid var(--rose-dark); background: #fff; color: var(--rose-dark); border-radius: 0.4rem; cursor: pointer; font-size: 0.85rem; white-space: nowrap; }
+button:hover { background: #fff1f2; }
+button:disabled { opacity: 0.5; cursor: default; }
+.btn-ghost { border-color: #d6d3d1; color: #57534e; }
+.btn-ghost:hover { background: #f5f5f4; }
+.btn-warn { border-color: var(--gold); color: var(--gold); }
+.btn-warn:hover { background: #fef3c7; }
+.btn-danger { border-color: #dc2626; color: #dc2626; }
+.btn-danger:hover { background: #fef2f2; }
+.btn-link { display: inline-block; padding: 0.35rem 0.75rem; border: 1px solid var(--rose-dark); background: #fff; color: var(--rose-dark); border-radius: 0.4rem; font-size: 0.85rem; text-decoration: none; white-space: nowrap; }
+.btn-link:hover { background: #fff1f2; }
+
+.table-wrap { overflow-x: auto; margin-bottom: 1.5rem; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.admin-table th { text-align: left; padding: 0.5rem 0.75rem; background: #fff7ed; border-bottom: 2px solid #fed7aa; font-weight: 600; }
+.admin-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f5f5f4; vertical-align: middle; }
+.admin-table tr.row-active td { background: #fff7ed; }
+.admin-table tr:last-child td { border-bottom: none; }
+.admin-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+.status-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+.status-draft { background: #f5f5f4; color: #57534e; }
+.status-published { background: #dcfce7; color: #166534; }
+
+.admin-form { background: #fff; border: 1px solid #fed7aa; border-radius: 0.9rem; padding: 1.5rem; margin-bottom: 1.5rem; display: flex; flex-direction: column; gap: 0.9rem; max-width: 36rem; }
+.admin-form h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
+.admin-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; font-weight: 600; }
+.admin-form input, .admin-form textarea, .admin-form select { padding: 0.45rem 0.65rem; border: 1px solid #d6d3d1; border-radius: 0.4rem; font-size: 0.95rem; font-family: inherit; }
+.admin-form textarea { resize: vertical; }
+.admin-form small { color: #78716c; font-weight: 400; font-size: 0.8rem; }
+.form-actions { display: flex; gap: 0.5rem; }
+
+.admin-qr { background: #fff; border: 1px solid #fed7aa; border-radius: 0.9rem; padding: 1.5rem; margin-bottom: 1.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; max-width: 24rem; }
+.admin-qr h2 { margin: 0; font-size: 1.1rem; }
+.admin-qr img { display: block; }
+.qr-url { font-size: 0.78rem; color: #78716c; word-break: break-all; text-align: center; margin: 0; }
