@@ -173,6 +173,14 @@ describe('requireAdmin — JWT rejection', () => {
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
   })
+
+  it('no Cf-Access-Jwt-Assertion header → zero DDL (rate limit and config checked first)', async () => {
+    const { db, state } = testDb()
+    const r = await requireAdmin(makeReq(null), accessEnv({ db }), { keys: await localJwks() })
+    expect((r as Response).status).toBe(401)
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
 })
 
 // ---- alg: none and HS256 — decodeProtectedHeader check ----
@@ -317,6 +325,22 @@ describe('requireAdmin — misconfiguration → 401 + console.error', () => {
     expect((r as Response).status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalid-config (empty ACCESS_AUD) → zero DDL (config checked before DB)', async () => {
+    const { db, state } = testDb()
+    const jwt = await validJwt()
+    await requireAdmin(makeReq(jwt), accessEnv({ aud: '', db }), { keys: await localJwks() })
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+
+  it('invalid-config (empty ACCESS_TEAM_DOMAIN) → zero DDL', async () => {
+    const { db, state } = testDb()
+    const jwt = await validJwt()
+    await requireAdmin(makeReq(jwt), accessEnv({ teamDomain: '', db }), { keys: await localJwks() })
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 })
 
@@ -495,6 +519,20 @@ describe('requireAdmin — CSRF checks', () => {
     await requireAdmin(
       makeReq(jwt, { secFetchSite: 'cross-site' }),
       accessEnv({ db: freshDb }),
+      { keys: await localJwks() },
+    )
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+
+  it('cross-site POST → zero DDL (Sec-Fetch-Site checked before ensureSchema)', async () => {
+    const { db, state } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    state.prepares = 0
+    const jwt = await validJwt()
+    await requireAdmin(
+      makeReq(jwt, { method: 'POST', secFetchSite: 'cross-site' }),
+      accessEnv({ db }),
       { keys: await localJwks() },
     )
     expect(state.prepares).toBe(0)
@@ -740,14 +778,17 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
 
   it('DDL failure on first request → requireAdmin rejects, no admin row inserted, no grant', async () => {
     // state.fail = true from start: ensureSchema batch throws → requireAdmin propagates the error.
-    // index.ts catches it and returns 503 "unavailable". No row is inserted, no grant issued.
-    const { db, state } = testDb({ schema: false })
+    // No row is inserted, no grant issued. The caller (index.ts) is responsible for the 503 response.
+    const { db, state, sqlite } = testDb({ schema: false })
     state.fail = true
     const jwt = await validJwt()
     await expect(
       requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: '1' }), { keys: await localJwks() })
     ).rejects.toThrow()
     // Tables were never created; no row could have been inserted; no grant was issued.
+    state.fail = false
+    const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(tables).toHaveLength(0)
   })
 })
 
@@ -926,8 +967,7 @@ describe('requireAdmin — zero DB prepares before email shape check', () => {
 
 describe('requireAdmin — empty DB: admin bootstrap (ensureSchema integration)', () => {
   it('ALLOW_FIRST_CLAIM=1 on a table-less DB bootstraps successfully (ensureSchema creates tables first)', async () => {
-    // testDb({ schema: false }): no tables yet.
-    // After Group 2: requireAdmin calls ensureSchema, which creates all tables, then proceeds.
+    // testDb({ schema: false }): no tables yet. requireAdmin calls ensureSchema, then proceeds.
     const { db, state } = testDb({ schema: false })
     const jwt = await validJwt()
     const r = await requireAdmin(
@@ -983,7 +1023,7 @@ describe('requireAdmin — empty DB: admin bootstrap (ensureSchema integration)'
 describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
   it('DDL failure → requireAdmin rejects (503 path), no admin row inserted, no grant', async () => {
     // state.fail = true from start: ensureSchema batch throws → requireAdmin propagates.
-    const { db, state } = testDb({ schema: false })
+    const { db, state, sqlite } = testDb({ schema: false })
     state.fail = true
     const jwt = await validJwt()
     await expect(
@@ -993,9 +1033,10 @@ describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
         { keys: await localJwks() },
       )
     ).rejects.toThrow()
-    // Tables were never created; no row could have been inserted; no grant issued.
+    // Assert no tables were created and no row was inserted.
     state.fail = false
-    // We cannot query the admin table (never created) — the rejection alone is the assertion.
+    const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(tables).toHaveLength(0)
   })
 
   it('DDL failure issues DDL prepares but zero non-DDL prepares', async () => {

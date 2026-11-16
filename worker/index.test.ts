@@ -13,6 +13,9 @@ vi.mock('./admin.ts', () => ({
 
 import worker from './index.ts'
 import { TEST_TEAM_DOMAIN, TEST_AUD } from './testAccess.ts'
+import { testDb } from './testDb.ts'
+
+const VALID_TOKEN = 'abc123def456gh78'
 
 type Env = {
   DB: never
@@ -53,5 +56,31 @@ describe('worker index — catch boundary (real index.ts)', () => {
     expect(r.status).toBe(503)
     expect(await r.json()).toEqual({ error: 'unavailable' })
     expect(spy).toHaveBeenCalledWith('api: unavailable')
+  })
+})
+
+// ---- Fix Group 1: W2 — card-path DDL failure via real worker.fetch ----
+// admin.ts is mocked in this file, but cards.ts is NOT mocked, so a real handleCard
+// call with state.fail=true propagates the ensureSchema throw through the try/catch
+// in index.ts → 503. This proves the try/catch boundary works for the card path.
+
+describe('worker.fetch — card path DDL failure → 503', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('GET /api/card/<token> with schema:false + state.fail → 503 { error: "unavailable" }, no tables', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db, state, sqlite } = testDb({ schema: false })
+    state.fail = true
+    const env = { ...makeEnv(), DB: db as never }
+    const r = await worker.fetch(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      env as never,
+    )
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'unavailable' })
+    expect(spy).toHaveBeenCalledWith('api: unavailable')
+    state.fail = false
+    const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(tables).toHaveLength(0)
   })
 })

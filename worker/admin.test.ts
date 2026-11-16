@@ -589,6 +589,23 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(0)
   })
+
+  it('DDL failure (schema:false, state.fail=true) → 503, no tables created, no admin row', async () => {
+    // state.fail=true before ensureSchema runs: db.batch() throws → requireAdmin propagates
+    // → safeHandleAdmin catches → 503. No tables ever created, no admin row inserted.
+    const { db, state, sqlite } = testDb({ schema: false })
+    state.fail = true
+    const env = { ...makeEnv(db), ALLOW_FIRST_CLAIM: '1' as string | undefined }
+    const r = await safeHandleAdmin(
+      adminReq('GET', '/api/admin/teachers'),
+      env,
+    )
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'unavailable' })
+    state.fail = false
+    const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(tables).toHaveLength(0)
+  })
 })
 
 // ---- Fix Group 1: W4 — router-level /api/admin/admins* (authenticated) ----

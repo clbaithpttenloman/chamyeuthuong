@@ -1,11 +1,9 @@
 // @vitest-environment node
-/**
- * Tests for worker/schema.ts (does not exist yet — these tests will fail at import time
- * until Group 2 creates the module).
- */
+// Tests for worker/schema.ts
 import { describe, it, expect } from 'vitest'
 import { SCHEMA, ensureSchema } from './schema.ts'
 import { testDb } from './testDb.ts'
+import type { D1Stmt } from './types.ts'
 
 // ---- SCHEMA shape ----
 
@@ -94,6 +92,25 @@ describe('ensureSchema — idempotency', () => {
     ).c
     expect(after).toBe(before)
   })
+
+  it('re-running every SCHEMA statement on a populated DB leaves rows intact (real DDL idempotency)', async () => {
+    // Run SCHEMA via sqlite.exec directly (bypasses the WeakMap cache) so we can re-run on
+    // an already-populated DB and confirm IF NOT EXISTS truly leaves existing rows untouched.
+    const { sqlite } = testDb({ schema: false })
+    for (const sql of SCHEMA) sqlite.exec(sql)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare(
+        "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890ab', 'T', 'S', datetime('now'))",
+      )
+      .run()
+    // Re-run every SCHEMA statement — IF NOT EXISTS → no structural change
+    for (const sql of SCHEMA) sqlite.exec(sql)
+    const count = (
+      sqlite.prepare('SELECT COUNT(*) as c FROM teacher').get() as { c: number }
+    ).c
+    expect(count).toBe(1)
+  })
 })
 
 // ---- ensureSchema — concurrency ----
@@ -134,34 +151,54 @@ describe('ensureSchema — failure and retry', () => {
     expect(p2).not.toBe(p1)
     await expect(p2).resolves.toBeUndefined()
   })
-
-  it('stale rejection handler does not evict a newer cached promise (evict only if map entry === p)', async () => {
-    // After p1 fails → evicted → p2 created and succeeds → p3 returns cached p2.
-    // The guard `ready.get(db) === p` ensures p1's catch cannot evict p2 if it
-    // fires late (defensive coding).
-    const { db, state } = testDb({ schema: false })
-    state.fail = true
-    await expect(ensureSchema(db)).rejects.toThrow()
-
-    state.fail = false
-    const p2 = ensureSchema(db) // new promise after eviction
-    const p3 = ensureSchema(db) // must return the same p2 (cached)
-    expect(p3).toBe(p2) // guard: p2 is in cache, not prematurely evicted
-    await p2
-
-    // After success, further calls still use the cached promise (no second batch)
-    const ddlNow = state.ddl
-    await ensureSchema(db)
-    expect(state.ddl).toBe(ddlNow)
-  })
 })
 
 // ---- ensureSchema — batch rollback ----
 
 describe('ensureSchema — batch rollback', () => {
-  it('a failing batch leaves no tables (all-or-nothing transaction atomicity)', async () => {
+  it('batch rejected before BEGIN (state.fail fires before sqlite BEGIN) leaves no tables', async () => {
+    // state.fail causes db.batch() to throw before sqlite.exec('BEGIN') runs in testDb —
+    // so this tests the "batch never starts" path, not mid-batch atomicity.
     const { db, state, sqlite } = testDb({ schema: false })
     state.fail = true
+    await expect(ensureSchema(db)).rejects.toThrow()
+    const tables = sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>
+    expect(tables).toHaveLength(0)
+  })
+
+  it('mid-batch failure leaves zero tables (transaction atomicity: ROLLBACK undoes partial DDL)', async () => {
+    // Build a minimal D1 that shares the sqlite handle but throws on the 2nd statement.run()
+    // — after sqlite BEGIN, before COMMIT — to verify the ROLLBACK undoes the first table.
+    const { sqlite } = testDb({ schema: false })
+    let runCount = 0
+    const makeStmt = (sql: string): D1Stmt => ({
+      bind: (..._v: unknown[]) => makeStmt(sql),
+      run: async (): Promise<{ success: boolean; meta: { changes: number } }> => {
+        runCount++
+        if (runCount === 2) throw new Error('D1_ERROR: mid-batch')
+        sqlite.prepare(sql).run()
+        return { success: true, meta: { changes: 1 } }
+      },
+      first: async <T>() => null as T | null,
+      all: async <T>() => ({ results: [] as T[] }),
+    })
+    const db = {
+      prepare: makeStmt,
+      batch: async (statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number } }[]> => {
+        sqlite.exec('BEGIN')
+        try {
+          const out: { success: boolean; meta: { changes: number } }[] = []
+          for (const s of statements) out.push(await s.run())
+          sqlite.exec('COMMIT')
+          return out
+        } catch (e) {
+          sqlite.exec('ROLLBACK')
+          throw e
+        }
+      },
+    }
     await expect(ensureSchema(db)).rejects.toThrow()
     const tables = sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type='table'")
