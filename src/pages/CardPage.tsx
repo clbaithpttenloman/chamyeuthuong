@@ -22,7 +22,7 @@ export default function CardPage() {
     void getCard(id).then((card) => {
       setState(card ? { status: 'found', card } : { status: 'notfound' })
     }).catch((e) => {
-      setState(e instanceof ApiError ? { status: 'error' } : { status: 'notfound' })
+      setState(e instanceof ApiError && e.status === 404 ? { status: 'notfound' } : { status: 'error' })
     })
   }, [id])
 
