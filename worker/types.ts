@@ -15,6 +15,11 @@ export type RateLimit = {
   limit(options: { key: string }): Promise<{ success: boolean }>
 }
 
+/** Minimal Cloudflare ExecutionContext (subset needed by the worker). */
+export type ExecutionContext = {
+  waitUntil(promise: Promise<unknown>): void
+}
+
 export type Env = {
   DB: D1
   ASSETS: { fetch(request: Request): Promise<Response> }

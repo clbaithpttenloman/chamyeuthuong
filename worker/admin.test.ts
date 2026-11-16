@@ -1002,3 +1002,139 @@ describe('worker routing — /api/image/:token (failing until Group 2)', () => {
     expect(r.headers.get('Content-Type')).toContain('application/json')
   })
 })
+
+// ===================================================================
+// Fix Group 1 — new tests (must fail before fixes)
+// ===================================================================
+
+describe('PUT /api/admin/teachers/:id — unknown id with layout/images (Fix Group 1 W2)', () => {
+  it('image deleted between validation and the batch (FK violation) → 400, not 503', async () => {
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES (?,?,?,?)")
+      .bind('racetoken0000001', 'Race', '', now).run()
+    const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('racetoken0000001').first<{ id: number }>())!.id
+    await db.prepare("INSERT INTO card (teacher_id,message,status,updated_at) VALUES (?,?,?,?)").bind(tid, '', 'draft', now).run()
+    // Wrap the DB so the batch fails with the SQLite FK message, as D1 would after a concurrent delete.
+    const racyDb = {
+      ...db,
+      prepare: db.prepare.bind(db),
+      batch: async () => { throw new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT') },
+    }
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('raceimg000000001', 'r.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL).run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('raceimg000000001').first<{ id: number }>())!.id
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${tid}`, { name: 'Race', subject: '', message: '', status: 'draft', images: { banner: imgId } }),
+      makeEnv(racyDb as typeof db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('unknown teacher id with layout update → 404 (not 503)', async () => {
+    // Before fix: batch runs UPDATE(0 changes) then INSERT INTO card_style with FK→503.
+    // After fix: existence check first → 404.
+    const r = await handleAdmin(
+      adminReq('PUT', '/api/admin/teachers/999', { name: 'X', subject: '', message: '', status: 'draft', layout: 'lotus' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+
+  it('unknown teacher id with image slot set → 404 (not 503)', async () => {
+    // Seed an image so the validation step passes.
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
+      .run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
+
+    const r = await handleAdmin(
+      adminReq('PUT', '/api/admin/teachers/999', {
+        name: 'X', subject: '', message: '', status: 'draft', images: { banner: imgId },
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+})
+
+describe('POST /api/admin/teachers/bulk — collision retry (Fix Group 1 W3)', () => {
+  it('token UNIQUE collision on first attempt → retry succeeds → 200', async () => {
+    // Pre-seed the collision token
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+      .bind('collision00000001', 'Existing', '', now).run()
+    await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (?, ?, ?, ?)')
+      .bind(1, '', 'draft', now).run()
+
+    vi.mocked(newToken)
+      .mockReturnValueOnce('collision00000001')  // attempt 0: UNIQUE fail
+      .mockReturnValueOnce('newtoken000000001')  // attempt 1: success
+
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'Retry' }] }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: Array<{ token: string }> }
+    expect(body.created[0].token).toBe('newtoken000000001')
+  })
+
+  it('token UNIQUE collision on both attempts → 503', async () => {
+    // Pre-seed both collision tokens
+    const now = new Date().toISOString()
+    for (const tok of ['collision00000001', 'collision00000002']) {
+      await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+        .bind(tok, 'Existing', '', now).run()
+      await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
+        .bind('', 'draft', now).run()
+    }
+
+    vi.mocked(newToken)
+      .mockReturnValueOnce('collision00000001')  // attempt 0: UNIQUE fail
+      .mockReturnValueOnce('collision00000002')  // attempt 1: UNIQUE fail again
+
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'Unlucky' }] }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(503)
+    expect((await r.json() as { error: string }).error).toBe('unavailable')
+  })
+
+  it('DB-level batch failure → all-or-nothing: zero teachers inserted', async () => {
+    // Force a DB-level failure (not a validation failure) in the batch:
+    // pre-seed both attempt tokens → batch throws UNIQUE → ROLLBACK.
+    const countBefore = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
+
+    const now = new Date().toISOString()
+    for (const tok of ['collision00000001', 'collision00000002']) {
+      await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+        .bind(tok, 'Existing', '', now).run()
+      await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
+        .bind('', 'draft', now).run()
+    }
+
+    // 2 items; both attempts collide → 503 and nothing inserted beyond the seed rows
+    vi.mocked(newToken)
+      .mockReturnValueOnce('collision00000001')
+      .mockReturnValueOnce('collision00000002')  // second item first attempt
+      .mockReturnValueOnce('collision00000001')  // retry attempt — still collides
+      .mockReturnValueOnce('collision00000002')
+
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'A' }, { name: 'B' }] }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(503)
+    const countAfter = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
+    // Only the pre-seeded 2 rows; none from the failed bulk
+    expect(countAfter).toBe(countBefore + 2)
+  })
+})

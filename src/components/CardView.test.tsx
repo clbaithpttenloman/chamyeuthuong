@@ -80,6 +80,16 @@ describe('CardView — image URL handling', () => {
     expect(html).not.toContain('/api/image/')
   })
 
+  it('does not render URLs for a 17-character token (tokens must be exactly 16 chars)', () => {
+    // TOKEN_RE must be /^[a-z0-9]{16}$/ — exactly 16, not 16+
+    // imgabc12345678901 is 17 lowercase alphanumeric chars
+    const token17 = 'imgabc12345678901'
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{ banner: token17 }} />,
+    )
+    expect(html).not.toContain(`/api/image/${token17}`)
+  })
+
   it('does not render URLs for tokens with uppercase characters', () => {
     const html = renderToString(
       <CardView card={baseCard} layout="classic" images={{ banner: 'IMGABC1234567890' }} />,
@@ -97,9 +107,9 @@ describe('CardView — image URL handling', () => {
 
   it('renders all three slot images when all tokens are valid', () => {
     const images: Record<string, string> = {
-      background: 'img001234567890ab',
-      banner: 'img001234567890cd',
-      photo: 'img001234567890ef',
+      background: 'img001234567890a',
+      banner:     'img001234567890b',
+      photo:      'img001234567890c',
     }
     const html = renderToString(
       <CardView card={baseCard} layout="classic" images={images} />,

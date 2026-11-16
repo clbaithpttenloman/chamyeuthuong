@@ -23,25 +23,25 @@ async function createWish(
   email: string,
 ): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 4096)
-  const title = typeof body.title === 'string' ? body.title : ''
-  const wishBody = typeof body.body === 'string' ? body.body : ''
+  const title = (typeof body.title === 'string' ? body.title : '').trim()
+  const wishBody = (typeof body.body === 'string' ? body.body : '').trim()
 
   if (title.length === 0 || title.length > 80) throw new HttpError('bad_request')
   if (wishBody.length === 0 || wishBody.length > 600) throw new HttpError('bad_request')
 
-  // Cap at 200 wishes
-  const count = await env.DB.prepare('SELECT COUNT(*) as c FROM wish').first<{ c: number }>()
-  if ((count?.c ?? 0) >= 200) throw new HttpError('conflict')
-
   const now = new Date().toISOString()
-  await env.DB
-    .prepare('INSERT INTO wish (title, body, created_at, created_by) VALUES (?, ?, ?, ?)')
-    .bind(title, wishBody, now, email)
-    .run()
 
+  // Atomic: INSERT only when COUNT < 200; RETURNING avoids last_insert_rowid() race.
   const row = await env.DB
-    .prepare('SELECT id, title, body, created_at, created_by FROM wish WHERE rowid = last_insert_rowid()')
+    .prepare(
+      'INSERT INTO wish (title, body, created_at, created_by) ' +
+      'SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM wish) < 200 ' +
+      'RETURNING id, title, body, created_at, created_by',
+    )
+    .bind(title, wishBody, now, email)
     .first<WishRow>()
+
+  if (!row) throw new HttpError('conflict')
   return json(row)
 }
 

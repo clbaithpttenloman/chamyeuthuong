@@ -52,11 +52,11 @@ describe('compressImage — size reduction loop', () => {
     expect(result.size).toBeLessThanOrEqual(307200)
   })
 
-  it('callable without an encoder argument (uses default implementation)', async () => {
-    // Should not throw even without a canvas environment; may return original or throw
-    // as a stub until real implementation is in place
+  it('throws a Vietnamese "trình duyệt không hỗ trợ" error when no encoder and no canvas support', async () => {
+    // In Node/Vitest OffscreenCanvas/createImageBitmap are absent; without an injected
+    // encoder the function must throw rather than silently returning the original blob.
     const input = blobOfSize(100, 'image/jpeg')
-    await expect(compressImage(input)).resolves.toBeDefined()
+    await expect(compressImage(input)).rejects.toThrow('Trình duyệt không hỗ trợ')
   })
 
   it('output MIME type is image/webp (preferred) or image/jpeg (fallback)', async () => {
@@ -67,10 +67,10 @@ describe('compressImage — size reduction loop', () => {
 
   it('encoder is called with decreasing quality values when output is too large', async () => {
     const qualities: number[] = []
-    const encoder = async (_c: unknown, _m: string, q: number): Promise<Blob> => {
+    const encoder = async (_c: unknown, m: string, q: number): Promise<Blob> => {
       qualities.push(q)
-      // Always return over-limit until quality drops below 0.4
-      return blobOfSize(q < 0.4 ? 100000 : 500000)
+      // Always over-limit until quality drops below 0.4; use `m` so result.type matches targetMime
+      return blobOfSize(q < 0.4 ? 100000 : 500000, m)
     }
     await compressImage(blobOfSize(600000, 'image/jpeg'), { maxBytes: 307200 }, encoder)
     // Quality sequence must be strictly decreasing
@@ -106,5 +106,45 @@ describe('compressImage — injectable encoder contract', () => {
     expect(typeof qualityArg).toBe('number')
     expect(qualityArg).toBeGreaterThan(0)
     expect(qualityArg).toBeLessThanOrEqual(1)
+  })
+})
+
+// ===================================================================
+// JPEG fallback when encoder returns wrong MIME type
+// ===================================================================
+
+describe('compressImage — JPEG fallback on wrong encoder MIME type', () => {
+  it('skips a WebP result whose type is image/png and falls back to JPEG', async () => {
+    // Some browsers return PNG when asked for WebP (unsupported). The function
+    // must skip such results and eventually use JPEG.
+    const encoder = async (_c: unknown, m: string, _q: number): Promise<Blob> => {
+      // Returns PNG when WebP is requested (simulates unsupported WebP encoder)
+      if (m === 'image/webp') return blobOfSize(100000, 'image/png')
+      return blobOfSize(100000, 'image/jpeg')
+    }
+    const result = await compressImage(blobOfSize(600000, 'image/jpeg'), { maxBytes: 307200 }, encoder)
+    // Must not return a PNG blob; must have fallen back to JPEG
+    expect(result.type).toBe('image/jpeg')
+  })
+})
+
+// ===================================================================
+// Dimension step-down after quality loop exhausted
+// ===================================================================
+
+describe('compressImage — dimension step-down', () => {
+  it('retries encoder after quality loop exhausted (dimension step-down)', async () => {
+    // The function must call the encoder MORE than 18 times
+    // (9 quality steps × 2 MIME types = 18 calls per canvas size).
+    // If it throws after 18 calls, dimension step-down is missing.
+    let calls = 0
+    const encoder = async (_c: unknown, m: string, _q: number): Promise<Blob> => {
+      calls++
+      // Returns a fitting blob only after 18 calls (i.e. after dimension step-down happens)
+      return blobOfSize(calls > 18 ? 100000 : 500000, m)
+    }
+    const result = await compressImage(blobOfSize(600000, 'image/jpeg'), { maxBytes: 307200 }, encoder)
+    expect(calls).toBeGreaterThan(18)
+    expect(result.size).toBeLessThanOrEqual(307200)
   })
 })

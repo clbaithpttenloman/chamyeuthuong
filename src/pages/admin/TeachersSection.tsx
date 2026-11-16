@@ -621,6 +621,7 @@ export default function TeachersSection({
 
       {showForm && (
         <TeacherForm
+          key={editTeacher?.id ?? 'new'}
           teacher={editTeacher}
           images={images}
           wishes={wishes}

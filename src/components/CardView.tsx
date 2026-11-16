@@ -17,10 +17,10 @@ import site from '../content/site.json'
 type CardData = { name: string; subject: string; message: string }
 type ImageMap = Partial<Record<string, string>>
 
-// Accepts 16+ lowercase alphanumeric chars (the same character set tokens use).
-// 16 is the minimum generated length; validation rejects path traversal and
-// special characters regardless of length.
-const TOKEN_RE = /^[a-z0-9]{16,}$/
+// Accepts exactly 16 lowercase alphanumeric chars — the generated token length.
+// 16 is the only valid length; validation rejects shorter/longer strings, path
+// traversal, and special characters regardless.
+const TOKEN_RE = /^[a-z0-9]{16}$/
 
 function imageUrl(token: string | undefined): string | null {
   if (!token || !TOKEN_RE.test(token)) return null

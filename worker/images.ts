@@ -25,12 +25,14 @@ function parsePNG(b: Uint8Array): DimResult {
   const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
   if (b.length < 24) return null
   for (let i = 0; i < 8; i++) if (b[i] !== SIG[i]) return null
-  // IHDR must be 13 bytes; type bytes 12-15 = "IHDR"
+  // IHDR must be exactly 13 bytes; type bytes 12-15 = "IHDR"
   const ihdrLen = u32be(b, 8)
+  if (ihdrLen !== 13) return null
   if (b[12] !== 0x49 || b[13] !== 0x48 || b[14] !== 0x44 || b[15] !== 0x52) return null
   if (b.length < 24) return null
   const w = u32be(b, 16)
   const h = u32be(b, 20)
+  if (w === 0 || h === 0) return null  // zero dimensions are invalid
   // Scan chunks after IHDR for eXIf
   let off = 8 + 4 + 4 + ihdrLen + 4
   while (off + 8 <= b.length) {
@@ -67,8 +69,10 @@ function parseJPEG(b: Uint8Array): DimResult {
     // SOF markers: C0-CF excluding C4 (DHT), C8, CC (DAC)
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
       if (off + 7 > b.length) return null
+      if (segLen < 8) return null  // SOF segment must have at least 8 bytes (len+precision+h+w+ncomp)
       const h = (b[off + 3] << 8) | b[off + 4]
       const w = (b[off + 5] << 8) | b[off + 6]
+      if (w === 0 || h === 0) return null  // zero dimensions are invalid
       return { w, h }
     }
     off += segLen
@@ -120,7 +124,10 @@ function hasWebPExifChunk(b: Uint8Array): boolean {
   let off = 12  // past RIFF/size/WEBP
   while (off + 8 <= b.length) {
     if (b[off] === 0x45 && b[off + 1] === 0x58 && b[off + 2] === 0x49 && b[off + 3] === 0x46) return true  // "EXIF"
-    const size = b[off + 4] | (b[off + 5] << 8) | (b[off + 6] << 16) | (b[off + 7] << 24)
+    // Use unsigned arithmetic to prevent negative size / infinite-loop on crafted input.
+    const size = (b[off + 4] | (b[off + 5] << 8) | (b[off + 6] << 16) | (b[off + 7] << 24)) >>> 0
+    // Guard: chunk must fit inside the buffer; break if not (don't loop on oversized sizes).
+    if (off + 8 + size > b.length) break
     off += 8 + size + (size & 1)  // chunks are padded to even size
   }
   return false
@@ -334,6 +341,7 @@ export async function handleImages(
 export async function handlePublicImage(
   request: Request,
   env: Pick<Env, 'DB' | 'IMAGE_IP_LIMIT'> & { _caches?: CacheStore },
+  ctx?: { waitUntil(p: Promise<unknown>): void },
 ): Promise<Response> {
   if (request.method !== 'GET') return error('method')
 
@@ -384,7 +392,11 @@ export async function handlePublicImage(
 
   // 6. Cache the 200 response (only 200s; 404s are never cached)
   if (cache) {
-    cache.put(cacheKey, resp.clone()).catch(() => {})
+    if (ctx) {
+      ctx.waitUntil(cache.put(cacheKey, resp.clone()))
+    } else {
+      cache.put(cacheKey, resp.clone()).catch(() => {})
+    }
   }
 
   return resp

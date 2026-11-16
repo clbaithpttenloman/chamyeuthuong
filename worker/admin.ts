@@ -190,6 +190,11 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
 
   const now = new Date().toISOString()
 
+  // Check teacher exists before building the batch; layout/image FK statements would throw
+  // a FK violation (→ 503) if the id is unknown, so check first and return 404 cleanly.
+  const teacherExists = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
+  if (!teacherExists) return error('not_found')
+
   const stmts: D1Stmt[] = [
     env.DB.prepare('UPDATE teacher SET name = ?, subject = ? WHERE id = ?').bind(name, subject, id),
     env.DB.prepare('UPDATE card SET message = ?, status = ?, updated_at = ? WHERE teacher_id = ?').bind(message, status, now, id),
@@ -207,8 +212,13 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
     }
   }
 
-  const results = await env.DB.batch(stmts)
-  if (results[0].meta.changes === 0) return error('not_found')
+  try {
+    await env.DB.batch(stmts)
+  } catch (e) {
+    // A teacher or image deleted between the checks above and this batch: client-side data is stale.
+    if (e instanceof Error && e.message.includes('FOREIGN KEY constraint failed')) throw new HttpError('bad_request')
+    throw e
+  }
 
   const row = await fetchTeacherById(env.DB, id)
   return json(row)

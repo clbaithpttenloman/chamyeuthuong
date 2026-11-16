@@ -265,3 +265,44 @@ describe('wishes cap — max 200', () => {
     expect((await r.json() as { error: string }).error).toBe('conflict')
   })
 })
+
+// ===================================================================
+// Fix Group 1 — new tests (must fail before fixes)
+// ===================================================================
+
+describe('wishes — RETURNING and atomic cap (Fix Group 1)', () => {
+  it('created wish returns the inserted row (title/body trimmed, correct created_by)', async () => {
+    const r = await handleWishes(
+      wishReq('POST', '/api/admin/wishes', { title: '  Tiêu đề  ', body: '  Nội dung  ' }),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { title: string; body: string; created_by: string }
+    // After fix: title and body are trimmed.
+    expect(body.title).toBe('Tiêu đề')
+    expect(body.body).toBe('Nội dung')
+    expect(body.created_by).toBe(TEST_EMAIL)
+  })
+
+  it('concurrent creates at 199 wishes → exactly one succeeds, one gets 409 (atomic cap)', async () => {
+    // Seed 199 wishes (the seeded ones from schema count toward the cap).
+    // Clear the seeded wishes first, then seed exactly 199.
+    await db.prepare('DELETE FROM wish').run()
+    for (let i = 0; i < 199; i++) {
+      await db
+        .prepare('INSERT INTO wish (title, body, created_at, created_by) VALUES (?, ?, ?, ?)')
+        .bind(`t${i}`, `b${i}`, new Date().toISOString(), TEST_EMAIL)
+        .run()
+    }
+
+    // Two concurrent creates: both see count=199 without atomic fix → both insert → [200,200].
+    // With atomic INSERT…SELECT…WHERE COUNT < 200: one inserts, one gets no row → 409 → [200,409].
+    const [r1, r2] = await Promise.all([
+      handleWishes(wishReq('POST', '/api/admin/wishes', { title: 'Wish A', body: 'Body A' }), makeEnv(db), TEST_EMAIL),
+      handleWishes(wishReq('POST', '/api/admin/wishes', { title: 'Wish B', body: 'Body B' }), makeEnv(db), TEST_EMAIL),
+    ])
+    const statuses = [r1.status, r2.status].sort()
+    expect(statuses).toEqual([200, 409])
+  })
+})

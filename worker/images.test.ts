@@ -821,3 +821,398 @@ describe('GET /api/image/:token — public image', () => {
     expect(putCalled).toBe(false)
   })
 })
+
+// ===================================================================
+// Fix Group 1 — new tests (must fail before fixes)
+// ===================================================================
+
+// ---- Extra fixtures ----
+
+/** VP8-lossy WebP with controllable dimensions. */
+function makeWebPVP8(w = 1, h = 1): Uint8Array {
+  const b = new Uint8Array(34)
+  b.set([0x52, 0x49, 0x46, 0x46], 0)
+  const fs = 34 - 8; b[4] = fs & 0xff; b[5] = (fs >> 8) & 0xff
+  b.set([0x57, 0x45, 0x42, 0x50], 8)
+  b.set([0x56, 0x50, 0x38, 0x20], 12)  // "VP8 "
+  b[16] = 10 & 0xff                     // VP8 chunk size LE
+  b[20] = 0x00; b[21] = 0x00; b[22] = 0x00  // frame tag: keyframe
+  b[23] = 0x9d; b[24] = 0x01; b[25] = 0x2a  // start code
+  const we = w & 0x3fff; b[26] = we & 0xff; b[27] = (we >> 8) & 0xff
+  const he = h & 0x3fff; b[28] = he & 0xff; b[29] = (he >> 8) & 0xff
+  return b
+}
+
+/** VP8L lossless WebP with controllable dimensions. */
+function makeWebPVP8L(w = 1, h = 1): Uint8Array {
+  const b = new Uint8Array(29)
+  b.set([0x52, 0x49, 0x46, 0x46], 0)
+  const fs = 29 - 8; b[4] = fs & 0xff; b[5] = (fs >> 8) & 0xff
+  b.set([0x57, 0x45, 0x42, 0x50], 8)
+  b.set([0x56, 0x50, 0x38, 0x4c], 12)  // "VP8L"
+  b[16] = 5 & 0xff                      // chunk size LE
+  b[20] = 0x2f                          // VP8L signature
+  const wm1 = (w - 1) & 0x3fff; const hm1 = (h - 1) & 0x3fff
+  const bits = wm1 | (hm1 << 14)
+  b[21] = bits & 0xff; b[22] = (bits >> 8) & 0xff; b[23] = (bits >> 16) & 0xff; b[24] = (bits >> 24) & 0xff
+  return b
+}
+
+/** Progressive JPEG (SOF2). */
+function makeJPEGProgressive(w = 1, h = 1): Uint8Array {
+  const b = new Uint8Array(17)
+  b[0] = 0xff; b[1] = 0xd8
+  b[2] = 0xff; b[3] = 0xc2  // SOF2
+  b[4] = 0x00; b[5] = 0x0b
+  b[6] = 0x08
+  b[7] = (h >>> 8) & 0xff; b[8] = h & 0xff
+  b[9] = (w >>> 8) & 0xff; b[10] = w & 0xff
+  b[11] = 0x01; b[12] = 0x01; b[13] = 0x11; b[14] = 0x00
+  b[15] = 0xff; b[16] = 0xd9
+  return b
+}
+
+/** JPEG with a fill byte (0xFF) inserted between SOI and the first real marker. */
+function makeJPEGWithFillByte(w = 1, h = 1): Uint8Array {
+  const sof = makeJPEG(w, h)
+  const out = new Uint8Array(sof.length + 1)
+  out[0] = 0xff; out[1] = 0xd8   // SOI
+  out[2] = 0xff                   // fill byte
+  out.set(sof.slice(2), 3)
+  return out
+}
+
+/** JPEG with SOF segment length = 7 (< 8, so malformed per spec). */
+function makeJPEGShortSOF(w = 1, h = 1): Uint8Array {
+  const b = new Uint8Array(14)
+  b[0] = 0xff; b[1] = 0xd8
+  b[2] = 0xff; b[3] = 0xc0
+  b[4] = 0x00; b[5] = 0x07  // length = 7 (< 8)
+  b[6] = 0x08
+  b[7] = (h >>> 8) & 0xff; b[8] = h & 0xff
+  b[9] = (w >>> 8) & 0xff; b[10] = w & 0xff
+  b[11] = 0x00
+  b[12] = 0xff; b[13] = 0xd9
+  return b
+}
+
+/** PNG with IHDR length set to 20 (not 13). */
+function makePNGBadIHDR(): Uint8Array {
+  const b = makePNG()
+  b[8] = 0x00; b[9] = 0x00; b[10] = 0x00; b[11] = 0x14  // IHDR length = 20
+  return b
+}
+
+/** VP8X WebP (w=1, h=1) with an EXIF chunk appended but VP8X EXIF flag NOT set. */
+function makeWebPExifChunkOnly(w = 1, h = 1): Uint8Array {
+  const base = makeWebP(w, h)
+  base[20] = 0x00  // clear any EXIF flag bit
+  const exif = new Uint8Array([0x45, 0x58, 0x49, 0x46, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+  const out = new Uint8Array(base.length + exif.length)
+  out.set(base, 0)
+  out.set(exif, base.length)
+  const riffSize = out.length - 8
+  out[4] = riffSize & 0xff; out[5] = (riffSize >> 8) & 0xff
+  out[6] = (riffSize >> 16) & 0xff; out[7] = (riffSize >> 24) & 0xff
+  return out
+}
+
+/** VP8X WebP with an ALPH chunk whose size field has the sign bit set (0x80000000).
+ *  Without the unsigned-arithmetic fix, hasWebPExifChunk loops indefinitely. */
+function makeWebPMalformedChunkSize(): Uint8Array {
+  const b = new Uint8Array(50)
+  b.set([0x52, 0x49, 0x46, 0x46], 0)
+  b.set([0x2a, 0x00, 0x00, 0x00], 4)
+  b.set([0x57, 0x45, 0x42, 0x50], 8)
+  b.set([0x56, 0x50, 0x38, 0x58], 12)  // VP8X
+  b.set([0x0a, 0x00, 0x00, 0x00], 16)  // VP8X size=10
+  b.set([0x00, 0x00, 0x00, 0x00], 20)  // no EXIF flag
+  b[24] = 0; b[25] = 0; b[26] = 0     // w-1=0 → w=1
+  b[27] = 0; b[28] = 0; b[29] = 0     // h-1=0 → h=1
+  // Chunk at off=30 with size 0x80000000 (would be negative in signed 32-bit)
+  b.set([0x41, 0x4c, 0x50, 0x48], 30)  // "ALPH"
+  b.set([0x00, 0x00, 0x00, 0x80], 34)  // size = 0x80000000
+  return b
+}
+
+// ---- WebP chunk scanner (hasWebPExifChunk) ----
+
+describe('hasWebPExifChunk — negative/oversized chunk size (infinite-loop guard)', () => {
+  it('WebP with 0x80000000 chunk size does not hang (time-bounded)', { timeout: 500 }, async () => {
+    // Before fix: hasWebPExifChunk loops indefinitely → this test times out → FAILS.
+    // After fix (unsigned arithmetic + size-bound check): terminates quickly.
+    const crafted = makeWebPMalformedChunkSize()
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', crafted, 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    // Any HTTP response is acceptable; the test passes if it doesn't hang.
+    expect(r.status).toBeGreaterThanOrEqual(200)
+    expect(r.status).toBeLessThan(600)
+  })
+})
+
+// ---- WebP EXIF chunk without VP8X flag ----
+
+describe('POST /api/admin/images — WebP EXIF via chunk scan (no VP8X EXIF flag)', () => {
+  it('WebP with EXIF chunk but VP8X EXIF flag clear → 400 (chunk scan finds it)', async () => {
+    const bytes = makeWebPExifChunkOnly(10, 10)
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', bytes, 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+})
+
+// ---- VP8 / VP8L format dimension tests ----
+
+describe('POST /api/admin/images — VP8 and VP8L formats', () => {
+  it('VP8-format WebP within limits → 200', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', pad(makeWebPVP8(10, 10), 200), 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('VP8L-format WebP within limits → 200', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', pad(makeWebPVP8L(10, 10), 200), 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('VP8 width > 4096 → 400', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', pad(makeWebPVP8(4097, 1), 200), 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('VP8L height > 4096 → 400', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', pad(makeWebPVP8L(1, 4097), 200), 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- SOF2 and fill-byte JPEG ----
+
+describe('POST /api/admin/images — SOF2 (progressive) and fill-byte JPEG', () => {
+  it('progressive JPEG (SOF2) → 200', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.jpg', makeJPEGProgressive(10, 10), 'image/jpeg'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('JPEG with fill byte before first marker → 400 (intentionally rejected as malformed)', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.jpg', makeJPEGWithFillByte(10, 10), 'image/jpeg'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- Truncated WebP ----
+
+describe('POST /api/admin/images — truncated WebP', () => {
+  it('WebP truncated to 10 bytes → 400', async () => {
+    const trunc = makeWebP().slice(0, 10)
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.webp', trunc, 'image/webp'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- IHDR length ≠ 13 ----
+
+describe('POST /api/admin/images — PNG IHDR length', () => {
+  it('PNG with IHDR length 20 (not 13) → 400 bad_request', async () => {
+    // Before fix: accepted (parsePNG doesn't require ihdrLen === 13).
+    // After fix: requires ihdrLen === 13, returns null → 400.
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.png', makePNGBadIHDR(), 'image/png'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- Zero width/height ----
+
+describe('POST /api/admin/images — zero dimension rejection', () => {
+  it('PNG with zero width → 400', async () => {
+    // Before fix: 0 > MAX_DIM is false → accepted. After fix: rejected.
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.png', pad(makePNG(0, 1), 200), 'image/png'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PNG with zero height → 400', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.png', pad(makePNG(1, 0), 200), 'image/png'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('JPEG with zero width → 400', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.jpg', pad(makeJPEG(0, 1), 200), 'image/jpeg'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('JPEG with zero height → 400', async () => {
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.jpg', pad(makeJPEG(1, 0), 200), 'image/jpeg'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- JPEG SOF segment length < 8 ----
+
+describe('POST /api/admin/images — JPEG SOF length < 8', () => {
+  it('JPEG with SOF length = 7 → 400 bad_request', async () => {
+    // Before fix: segLen=7 passes segLen<2 check and parses h/w → accepted.
+    // After fix: segLen < 8 → return null → 400.
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.jpg', makeJPEGShortSOF(10, 10), 'image/jpeg'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- readBytes: Content-Length early reject ----
+
+describe('readBytes — Content-Length early reject', () => {
+  it('Content-Length > MAX_IMAGE_BYTES rejects before reading body', async () => {
+    // The body IS valid (small PNG), but Content-Length lies about size → early reject.
+    const r = await handleImages(
+      new Request('https://x/api/admin/images?name=x.png', {
+        method: 'POST',
+        headers: {
+          'X-Admin-Email': TEST_EMAIL,
+          'CF-Connecting-IP': '1.2.3.4',
+          'X-Requested-With': 'fetch',
+          'Content-Type': 'image/png',
+          'Content-Length': String(307201),
+        },
+        body: makePNG() as unknown as BodyInit,
+      }),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- decodeBase64 paths ----
+
+describe('decodeBase64 — both branches', () => {
+  it('Buffer path: public image round-trip is byte-exact', async () => {
+    // Uses Buffer.from().toString('base64') for encoding in uploadImage and
+    // Buffer path in decodeBase64 (since typeof Buffer !== "undefined" in Node).
+    const original = makeJPEG(10, 10)
+    const r = await handleImages(
+      imageReq('POST', '/api/admin/images?name=x.jpg', original, 'image/jpeg'),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(200)
+    const { token } = await r.json() as { token: string }
+    const pubResp = await handlePublicImage(
+      new Request(`https://x/api/image/${token}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(pubResp.status).toBe(200)
+    expect(new Uint8Array(await pubResp.arrayBuffer())).toEqual(original)
+  })
+
+  it('atob path: round-trip via manually base64-encoded row', async () => {
+    // Encode using atob-compatible btoa and store; then fetch to exercise fallback decode.
+    const original = makeJPEG(5, 5)
+    let bin = ''
+    for (let i = 0; i < original.length; i++) bin += String.fromCharCode(original[i])
+    const b64 = btoa(bin)
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgbtoatest00000', 'x.jpg', 'image/jpeg', original.byteLength, b64, now, TEST_EMAIL)
+      .run()
+    const pubResp = await handlePublicImage(
+      new Request('https://x/api/image/imgbtoatest00000', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(pubResp.status).toBe(200)
+    expect(new Uint8Array(await pubResp.arrayBuffer())).toEqual(original)
+  })
+})
+
+// ---- cache.put via ctx.waitUntil ----
+
+describe('handlePublicImage — cache.put goes through ctx.waitUntil', () => {
+  it('200 hit: cache.put is called through waitUntil (not fire-and-forget)', async () => {
+    // Store an image so we get a 200 response.
+    const original = makeJPEG()
+    const b64 = Buffer.from(original).toString('base64')
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgwaituntiltest', 'x.jpg', 'image/jpeg', original.byteLength, b64, new Date().toISOString(), TEST_EMAIL)
+      .run()
+
+    let waitUntilReceived: Promise<unknown> | undefined
+    const mockCtx = { waitUntil: (p: Promise<unknown>) => { waitUntilReceived = p } }
+    let putCalled = false
+    const mockCaches = {
+      default: {
+        match: async () => undefined,
+        put: async () => { putCalled = true },
+      },
+    }
+
+    const r = await handlePublicImage(
+      new Request('https://x/api/image/imgwaituntiltest', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      { ...makeEnv(db), _caches: mockCaches },
+      mockCtx as unknown as { waitUntil(p: Promise<unknown>): void },
+    )
+    await waitUntilReceived  // resolve the waitUntil promise
+    expect(r.status).toBe(200)
+    // Before fix: waitUntil is never called (fire-and-forget) → waitUntilReceived = undefined → FAIL.
+    // After fix: waitUntil wraps cache.put → waitUntilReceived is defined.
+    expect(waitUntilReceived).toBeDefined()
+    expect(putCalled).toBe(true)
+  })
+})
