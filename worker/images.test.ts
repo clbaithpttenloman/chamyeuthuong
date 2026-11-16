@@ -1142,9 +1142,8 @@ describe('readBytes — Content-Length early reject', () => {
 // ---- decodeBase64 paths ----
 
 describe('decodeBase64 — both branches', () => {
-  it('Buffer path: public image round-trip is byte-exact', async () => {
-    // Uses Buffer.from().toString('base64') for encoding in uploadImage and
-    // Buffer path in decodeBase64 (since typeof Buffer !== "undefined" in Node).
+  it('default runtime path: public image round-trip is byte-exact', async () => {
+    // On Node 22 there is no Uint8Array.fromBase64, so this exercises the atob fallback.
     const original = makeJPEG(10, 10)
     const r = await handleImages(
       imageReq('POST', '/api/admin/images?name=x.jpg', original, 'image/jpeg'),
@@ -1159,6 +1158,30 @@ describe('decodeBase64 — both branches', () => {
     )
     expect(pubResp.status).toBe(200)
     expect(new Uint8Array(await pubResp.arrayBuffer())).toEqual(original)
+  })
+
+  it('Uint8Array.fromBase64 path is used when the runtime provides it', async () => {
+    const original = makeJPEG(7, 7)
+    const up = await handleImages(imageReq('POST', '/api/admin/images?name=f.jpg', original, 'image/jpeg'), makeEnv(db), TEST_EMAIL)
+    expect(up.status).toBe(200)
+    const { token } = await up.json() as { token: string }
+    const U = Uint8Array as unknown as { fromBase64?: (s: string) => Uint8Array }
+    const had = Object.prototype.hasOwnProperty.call(U, 'fromBase64')
+    const prev = U.fromBase64
+    const spy = vi.fn((s: string) => new Uint8Array(Buffer.from(s, 'base64')))
+    U.fromBase64 = spy
+    try {
+      const pub = await handlePublicImage(
+        new Request(`https://x/api/image/${token}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+        makeEnv(db),
+      )
+      expect(pub.status).toBe(200)
+      expect(new Uint8Array(await pub.arrayBuffer())).toEqual(original)
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (had) U.fromBase64 = prev
+      else delete U.fromBase64
+    }
   })
 
   it('atob path: round-trip via manually base64-encoded row', async () => {

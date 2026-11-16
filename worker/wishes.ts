@@ -51,8 +51,8 @@ async function updateWish(
   id: number,
 ): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 4096)
-  const title = typeof body.title === 'string' ? body.title : ''
-  const wishBody = typeof body.body === 'string' ? body.body : ''
+  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  const wishBody = typeof body.body === 'string' ? body.body.trim() : ''
 
   if (title.length === 0 || title.length > 80) throw new HttpError('bad_request')
   if (wishBody.length === 0 || wishBody.length > 600) throw new HttpError('bad_request')

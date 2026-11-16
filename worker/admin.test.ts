@@ -1109,33 +1109,30 @@ describe('POST /api/admin/teachers/bulk — collision retry (Fix Group 1 W3)', (
     expect((await r.json() as { error: string }).error).toBe('unavailable')
   })
 
-  it('DB-level batch failure → all-or-nothing: zero teachers inserted', async () => {
-    // Force a DB-level failure (not a validation failure) in the batch:
-    // pre-seed both attempt tokens → batch throws UNIQUE → ROLLBACK.
-    const countBefore = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
-
+  it('DB-level batch failure → all-or-nothing: a row inserted earlier in the batch is rolled back', async () => {
+    // Item A gets a fresh token, item B collides with an existing row. If the batch were not atomic,
+    // A's teacher row (inserted before B's failing INSERT) would survive.
     const now = new Date().toISOString()
-    for (const tok of ['collision00000001', 'collision00000002']) {
-      await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
-        .bind(tok, 'Existing', '', now).run()
-      await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
-        .bind('', 'draft', now).run()
-    }
+    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+      .bind('collision00000001', 'Existing', '', now).run()
+    await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
+      .bind('', 'draft', now).run()
 
-    // 2 items; both attempts collide → 503 and nothing inserted beyond the seed rows
     vi.mocked(newToken)
-      .mockReturnValueOnce('collision00000001')
-      .mockReturnValueOnce('collision00000002')  // second item first attempt
-      .mockReturnValueOnce('collision00000001')  // retry attempt — still collides
-      .mockReturnValueOnce('collision00000002')
+      .mockReturnValueOnce('freshtokenaaaa01')   // A, attempt 1
+      .mockReturnValueOnce('collision00000001')  // B, attempt 1 (collides)
+      .mockReturnValueOnce('freshtokenaaaa01')   // A, retry
+      .mockReturnValueOnce('collision00000001')  // B, retry (collides again)
 
     const r = await handleAdmin(
       adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'A' }, { name: 'B' }] }),
       makeEnv(db),
     )
     expect(r.status).toBe(503)
-    const countAfter = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
-    // Only the pre-seeded 2 rows; none from the failed bulk
-    expect(countAfter).toBe(countBefore + 2)
+    const a = await db.prepare('SELECT id FROM teacher WHERE token = ?').bind('freshtokenaaaa01').first()
+    expect(a).toBeNull()
+    const named = await db.prepare("SELECT COUNT(*) AS c FROM teacher WHERE name IN ('A','B')").first<{ c: number }>()
+    expect(named!.c).toBe(0)
   })
 })
+

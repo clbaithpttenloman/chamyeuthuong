@@ -200,6 +200,27 @@ describe('PUT /api/admin/wishes/:id', () => {
     )
     expect(r.status).toBe(400)
   })
+
+  it('whitespace-only title or body on update → 400, and values are stored trimmed', async () => {
+    const created = await (
+      await handleWishes(wishReq('POST', '/api/admin/wishes', { title: 't', body: 'b' }), makeEnv(db), TEST_EMAIL)
+    ).json() as WishRow
+    const blankTitle = await handleWishes(
+      wishReq('PUT', `/api/admin/wishes/${created.id}`, { title: '   ', body: 'b' }), makeEnv(db), TEST_EMAIL,
+    )
+    expect(blankTitle.status).toBe(400)
+    const blankBody = await handleWishes(
+      wishReq('PUT', `/api/admin/wishes/${created.id}`, { title: 't', body: ' \n ' }), makeEnv(db), TEST_EMAIL,
+    )
+    expect(blankBody.status).toBe(400)
+    const ok = await handleWishes(
+      wishReq('PUT', `/api/admin/wishes/${created.id}`, { title: '  New  ', body: ' Body ' }), makeEnv(db), TEST_EMAIL,
+    )
+    expect(ok.status).toBe(200)
+    const row = await ok.json() as WishRow
+    expect(row.title).toBe('New')
+    expect(row.body).toBe('Body')
+  })
 })
 
 // ===================================================================
