@@ -14,9 +14,7 @@ Verified 2026-11-16 against Wrangler 4.157.0 (released 2026-11-03). Reference im
   Useful for checking if an operation succeeded: e.g., `INSERT ... WHERE NOT EXISTS ...` returns `changes === 1` if
   the INSERT happened, `0` if the WHERE condition blocked it. Tested and works in both local and remote D1.
   Source: https://developers.cloudflare.com/d1/worker-api/
-- D1 migrations: SQL files in `migrations/`, names sorted by number; `wrangler d1 migrations apply <database_name>
-  [--local|--remote]`. Applied names are tracked in the `d1_migrations` table. Prefer the database name over the
-  binding name. Source: https://developers.cloudflare.com/d1/reference/migrations/
+- **Schema**: The `teacher`, `card`, and `admin` tables are created by the `ensureSchema(db)` function in `worker/schema.ts` using idempotent `CREATE TABLE IF NOT EXISTS` statements. Each run is a no-op if the tables already exist. This avoids a migration step and keeps the schema as single source of truth in code. `ensureSchema` is called once per D1 binding per isolate and cached via a `WeakMap` so concurrent requests share one DDL batch. If DDL fails the cache entry is evicted and the next request retries. For any future column changes, a schema version table or a migration system would be needed — this shortcut applies only to immutable CREATE. Source: `worker/schema.ts`.
 - Foreign keys are enforced in D1 (`PRAGMA foreign_keys=on` by default). Source: https://developers.cloudflare.com/d1/sql-api/foreign-keys/
 - Rate limiting binding (`ratelimits` in wrangler.jsonc): `{ name, namespace_id, simple: { limit, period } }`; period is
   10 or 60 seconds; call `await env.X.limit({ key })` -> `{ success }`. Counts are per Cloudflare location. Same shape

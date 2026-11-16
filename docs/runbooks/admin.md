@@ -63,6 +63,36 @@ These steps are performed **once** in the Cloudflare dashboard (outside the repo
 6. **Access application CORS settings**
    - In the application settings, leave **CORS** and **Bypass OPTIONS** both **OFF** — the Worker handles CSRF protection via the `X-Requested-With` header
 
+### Automatic deploy (Cloudflare Git build, recommended)
+
+Same setup as `phamhuuthien`: connect the GitHub repo to a Worker in **Workers & Pages > Create > Import a repository** and use
+
+- Build command: `npm run build`
+- Deploy command: `npx wrangler deploy`
+
+`database_id` is already pinned in `wrangler.jsonc`, and the tables are created by the Worker on the first request, so there is no migration step and no extra API token permission.
+
+Configuration lives in the `vars` block of `wrangler.jsonc`. `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `BOOTSTRAP_EMAIL` are identifiers, not secrets:
+
+```jsonc
+"vars": {
+  "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com",
+  "ACCESS_AUD": "<application-audience-tag>",
+  "BOOTSTRAP_EMAIL": "admin@gmail.com"
+}
+```
+
+Order for the first time:
+
+1. Push the repo. The first Git build deploys without `vars`: public pages and `/api/card/*` work, and every `/api/admin/*` call returns 401 (fail closed).
+2. Create the Access application and the allow-list policy (see "First-time dashboard setup"). Copy the team domain and the AUD tag.
+3. Add the `vars` block above and push. Cloudflare deploys again.
+4. Open `/admin` right away and confirm the admin list shows the right person.
+
+`BOOTSTRAP_EMAIL` may stay in `vars`: it only lets that one address claim an **empty** admin table. Never put `ALLOW_FIRST_CLAIM` in `vars`. Use one place per key: do not also set the same key as a dashboard variable or a `wrangler secret`, because `vars` in `wrangler.jsonc` overwrite dashboard variables on deploy.
+
+The CLI steps below are the manual alternative when you deploy from a laptop.
+
 ### First Deploy
 
 #### 1. Create the allow-list Access policy (required before first deploy)
@@ -75,15 +105,9 @@ The Worker will dynamically create the first admin based on the claim variables 
 
 The database `cham-yeu-thuong` already exists and its ID (`9e58f935-fb6f-4c1f-be0b-21a9183ba483`) is pinned in `wrangler.jsonc`, so every deploy uses it. To use a different account or database, create one with `npx wrangler d1 create cham-yeu-thuong` and replace `database_id` in `wrangler.jsonc`.
 
-#### 3. Apply migrations
+Tables are created automatically on the first request to the Worker (by `ensureSchema` in `worker/schema.ts`). No manual migration step is needed.
 
-```bash
-wrangler d1 migrations apply cham-yeu-thuong --remote
-```
-
-This creates the `teacher`, `card`, and `admin` tables in production.
-
-#### 4. Set the two required secrets
+#### 3. Set the two required secrets
 
 Use the Wrangler CLI (`wrangler secret put`) to store secrets (kept out of git):
 
@@ -97,7 +121,7 @@ wrangler secret put ACCESS_AUD
 
 **Do not use `wrangler.jsonc` for secrets** — that file is version-controlled. Secrets are set **only via the CLI**.
 
-#### 5. Set ONE claim variable (via CLI) for first bootstrap
+#### 4. Set ONE claim variable (via CLI) for first bootstrap
 
 Choose **one** and set it with `wrangler secret put`:
 
@@ -123,7 +147,7 @@ After setting one of these, deploy:
 npx wrangler deploy
 ```
 
-#### 6. Verify first-admin bootstrap
+#### 5. Verify first-admin bootstrap
 
 1. Visit `/admin` on your deployed domain
 2. After Access login, you'll be redirected to the admin page
@@ -134,7 +158,7 @@ npx wrangler deploy
    - "admin: misconfigured" → neither claim variable was set correctly
    - "admin: bootstrap" → you successfully claimed admin (good!)
 
-#### 7. Remove the claim variable and redeploy
+#### 6. Remove the claim variable and redeploy
 
 ```bash
 # Remove the variable (choose whichever you set):

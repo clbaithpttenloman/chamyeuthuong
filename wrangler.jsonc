@@ -4,14 +4,15 @@
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
   // Admin auth uses Cloudflare Access JWT (Cf-Access-Jwt-Assertion header). No ADMIN_TOKEN.
-  // Required secrets (set via Wrangler CLI only; `wrangler secret put`): ACCESS_TEAM_DOMAIN, ACCESS_AUD.
+  // Required: ACCESS_TEAM_DOMAIN, ACCESS_AUD (identifiers, not secrets). Put them in a "vars" block here (see
+  // docs/runbooks/admin.md, "Automatic deploy") or set them with `wrangler secret put`. One place per key, never both.
+  // Example (add after the Access application exists):
+  //   "vars": { "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com", "ACCESS_AUD": "<aud>", "BOOTSTRAP_EMAIL": "admin@gmail.com" }
   // ACCESS_DEV_MODE must NOT be set in production — it is for local dev only (.dev.vars).
   //
-  // First-admin bootstrap (set ONE of the following via Wrangler CLI for the first deploy, then remove it):
-  //   wrangler secret put BOOTSTRAP_EMAIL    — only this exact address may claim the first-admin slot
-  //   wrangler secret put ALLOW_FIRST_CLAIM  — set to 1; any verified Access user may claim the first-admin slot
-  // After the first admin is confirmed in /admin, remove the variable and redeploy.
-  // Claim variables are NEVER left active; they are set only temporarily via CLI.
+  // First-admin bootstrap: BOOTSTRAP_EMAIL (in "vars" or as a secret) lets only that address claim an EMPTY admin table
+  // and may stay set. ALLOW_FIRST_CLAIM=1 lets ANY verified Access user claim: set it only temporarily via
+  // `wrangler secret put ALLOW_FIRST_CLAIM`, never in "vars", and delete it after the first admin is confirmed.
   //
   // workers_dev: If a custom domain is configured, add "workers_dev": false and redeploy so that
   // the workers.dev URL is disabled (unauthenticated requests still 401 at the Worker, but Access

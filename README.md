@@ -26,7 +26,7 @@ Home and About text are in `src/content/site.json`.
 - Admin API `/api/admin/*` — CRUD for teachers and cards, requires Cloudflare Access JWT verification
 - Rate limits: 60 requests per 60 s per IP for public cards, 30 attempts per 60 s per IP for admin (blunts brute force)
 
-**Database (`migrations/0001_init.sql`, `migrations/0002_admin.sql`):**
+**Database:** Tables are created automatically on the first request via `ensureSchema` in `worker/schema.ts` (idempotent `CREATE TABLE IF NOT EXISTS`).
 ```sql
 teacher (id, token, name, subject, created_at)
 card (teacher_id, message, status ∈ {draft, published}, updated_at)
@@ -129,12 +129,11 @@ This prints the values to copy into `.dev.vars` plus a `DEV_ACCESS_JWT`. The fir
 Then run both processes in separate terminals:
 
 ```bash
-# Terminal 1: apply migrations and start the Worker
-npm run db:migrate:local
+# Terminal 1: start the Worker
 npm run worker:dev
 ```
 
-The Worker listens on `http://localhost:8787`.
+The Worker listens on `http://localhost:8787`. Tables are created automatically on the first request.
 
 ```bash
 # Terminal 2: start Vite (proxies /api to localhost:8787, injects Cf-Access-Jwt-Assertion)
