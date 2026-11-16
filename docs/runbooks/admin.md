@@ -422,8 +422,8 @@ QR codes are generated client-side (no upload).
 ### Known Production Constraints
 
 - **IMAGE_IP_LIMIT**: 300 requests per 60 s per IP for `GET /api/image/:token`. This allows fast card loads (typically 2–4 images per card) while blunting scanners. With the 1-year browser cache, repeated viewers rarely re-fetch.
-- **CARD_IP_LIMIT**: 60 requests per 60 s per IP for `GET /api/card/:token`. School NAT = many viewers on one IP → 60/60 is generous to avoid hitting the limit on legitimate traffic.
-- **Cache API**: local `wrangler dev` is a stub; on workers.dev or custom domains, it actually caches
+- **CARD_IP_LIMIT**: 60 requests per 60 s per IP for `GET /api/card/:token`. Behind a school NAT all phones share one IP, so if more than about 60 people open thiệp within one minute from the school Wi-Fi, some get 429 ("try again"). Mobile data avoids it. Raise the limit in `wrangler.jsonc` if this happens on 20/11.
+- **Cache API**: it caches only on a custom domain. On `*.workers.dev` (and in `wrangler dev`) it does nothing, so every image request decodes from D1; check the image response time after the first deploy.
 - **Image decoding CPU**: a 288 KB decode takes ~10 ms on local runtime; free plan allows 10 ms per request; if this hits the limit, lower the image cap from 300 KB to 150–200 KB or use R2 (SHORTCUT: see `worker/images.ts`)
 - **D1 batch limits**: 100-item bulk create uses ~25 SQL statements; D1 free plan supports 100 per transaction, no issue
 - **Multi-admin rate sharing**: multiple admins behind one NAT (one IP) share the 60 requests per 60 s admin budget; a busy editing session may hit the limit
