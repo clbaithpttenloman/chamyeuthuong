@@ -93,3 +93,31 @@ export async function rotateTeacherToken(id: number): Promise<{ token: string }>
 export async function deleteTeacher(id: number): Promise<void> {
   await expectOk(await apiFetch(`/api/admin/teachers/${id}`, { method: 'DELETE' }))
 }
+
+// ── Admin management ─────────────────────────────────────────────────────────
+
+export type AdminRow = {
+  id: number
+  email: string
+  created_at: string
+  created_by: string
+}
+
+/** List all admins (requires admin JWT). */
+export async function listAdmins(): Promise<AdminRow[]> {
+  return (await expectOk(await apiFetch('/api/admin/admins'))).json() as Promise<AdminRow[]>
+}
+
+/** Add an admin by email. Throws ApiError 409 on duplicate, 400 on invalid email. */
+export async function addAdmin(email: string): Promise<AdminRow> {
+  return (await expectOk(await apiFetch('/api/admin/admins', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  }))).json() as Promise<AdminRow>
+}
+
+/** Remove an admin by id. Throws ApiError 409 if last admin, 404 if unknown. */
+export async function removeAdmin(id: number): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/admins/${id}`, { method: 'DELETE' }))
+}

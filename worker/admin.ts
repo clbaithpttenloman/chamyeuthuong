@@ -1,5 +1,6 @@
 import { error, json, readJson, HttpError } from './http.ts'
 import { requireAdmin } from './auth.ts'
+import { handleAdmins } from './admins.ts'
 import { newToken } from './token.ts'
 import type { JWTVerifyGetKey } from 'jose'
 import type { Env } from './types.ts'
@@ -133,8 +134,9 @@ async function deleteTeacher(env: Env, id: number): Promise<Response> {
  * deps.keys: inject a local JWKS resolver in tests (avoids network calls).
  */
 export async function handleAdmin(request: Request, env: Env, deps?: { keys: JWTVerifyGetKey }): Promise<Response> {
-  const deny = await requireAdmin(request, env, deps)
-  if (deny) return deny
+  const authResult = await requireAdmin(request, env, deps)
+  if (authResult instanceof Response) return authResult
+  const { email } = authResult
 
   const { pathname } = new URL(request.url)
   const { method } = request
@@ -142,8 +144,14 @@ export async function handleAdmin(request: Request, env: Env, deps?: { keys: JWT
   // ['api', 'admin', 'teachers']             — list / create
   // ['api', 'admin', 'teachers', ':id']      — update / delete
   // ['api', 'admin', 'teachers', ':id', 'rotate'] — rotate
+  // ['api', 'admin', 'admins']               — list / add
+  // ['api', 'admin', 'admins', ':id']        — remove
 
   try {
+    if (parts.length >= 3 && parts[2] === 'admins') {
+      return await handleAdmins(request, env, email)
+    }
+
     if (parts.length === 3 && parts[2] === 'teachers') {
       if (method === 'GET') return await listTeachers(env)
       if (method === 'POST') return await createTeacher(request, env)

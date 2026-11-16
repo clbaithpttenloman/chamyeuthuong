@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -17,19 +17,24 @@ export type D1 = {
 }
 
 /**
- * Node's built-in node:sqlite behind the D1 API shape, with migrations/0001_init.sql applied from
- * disk so tests run the real schema. state.fail makes every call throw (D1 outage simulation).
+ * Node's built-in node:sqlite behind the D1 API shape, with all migrations/*.sql applied from
+ * disk in sorted order so tests run the real schema. state.fail makes every call throw
+ * (D1 outage simulation). state.prepares counts db.prepare() calls (for atomicity assertions).
  */
 export function testDb() {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys = ON')
-  const sql = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'),
-    'utf-8',
-  )
-  sqlite.exec(sql)
 
-  const state = { writes: 0, reads: 0, fail: false }
+  const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '../migrations')
+  const migrationFiles = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+  for (const file of migrationFiles) {
+    const sql = readFileSync(join(migrationsDir, file), 'utf-8')
+    sqlite.exec(sql)
+  }
+
+  const state = { writes: 0, reads: 0, fail: false, prepares: 0 }
 
   const stmt = (sql: string, values: unknown[] = []): D1Stmt => {
     const exec = async <T>(fn: () => T): Promise<T> => {
@@ -61,7 +66,10 @@ export function testDb() {
   }
 
   const db: D1 = {
-    prepare: (sql) => stmt(sql),
+    prepare: (sql) => {
+      state.prepares++
+      return stmt(sql)
+    },
     batch: async (statements) => {
       if (state.fail) throw new Error('D1_ERROR: simulated failure')
       sqlite.exec('BEGIN')

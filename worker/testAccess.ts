@@ -5,6 +5,7 @@
  */
 import { generateKeyPair, SignJWT, exportJWK, createLocalJWKSet } from 'jose'
 import type { CryptoKey, LocalJWKSet } from 'jose'
+import { testDb, type D1 } from './testDb.ts'
 
 // ---- Constants ----
 
@@ -89,12 +90,15 @@ export async function validJwt(
 
 // ---- Env type and builder ----
 
+/** Env shape required by requireAdmin. ADMIN_EMAILS removed; DB-backed auth instead. */
 export type AccessEnv = {
   ACCESS_TEAM_DOMAIN: string
   ACCESS_AUD: string
-  ADMIN_EMAILS: string
   ACCESS_DEV_MODE?: string | undefined
   ADMIN_FAIL_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
+  DB: D1
+  BOOTSTRAP_EMAIL?: string | undefined
+  ALLOW_FIRST_CLAIM?: string | undefined
 }
 
 type AccessEnvOpts = {
@@ -102,24 +106,43 @@ type AccessEnvOpts = {
   teamDomain?: string
   /** Override ACCESS_AUD. Pass '' to simulate missing/empty. */
   aud?: string
-  /** Override ADMIN_EMAILS. Pass '' to simulate missing/empty. */
-  adminEmails?: string
   /** Set ACCESS_DEV_MODE. Pass '1' to enable dev mode. */
   devMode?: string
   /** Whether the rate-limit check succeeds (default true). */
   failLimit?: boolean
+  /** Provide a specific D1 instance. Defaults to a fresh empty testDb. */
+  db?: D1
+  /** Set BOOTSTRAP_EMAIL in env. Pass '' to simulate set-but-empty. */
+  bootstrapEmail?: string
+  /** Set ALLOW_FIRST_CLAIM in env. Pass '1' to enable open first-user claim. */
+  allowFirstClaim?: string
 }
 
 /**
  * Build a minimal env for direct requireAdmin tests.
- * Does NOT include DB, ASSETS, CARD_IP_LIMIT — add those when calling handleAdmin.
+ * Does NOT include ADMIN_EMAILS — auth is DB-backed.
+ * Does NOT include ASSETS or CARD_IP_LIMIT — add those when calling handleAdmin.
  */
 export function accessEnv(opts: AccessEnvOpts = {}): AccessEnv {
   return {
     ACCESS_TEAM_DOMAIN: opts.teamDomain !== undefined ? opts.teamDomain : TEST_TEAM_DOMAIN,
     ACCESS_AUD: opts.aud !== undefined ? opts.aud : TEST_AUD,
-    ADMIN_EMAILS: opts.adminEmails !== undefined ? opts.adminEmails : TEST_EMAIL,
     ACCESS_DEV_MODE: opts.devMode,
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: opts.failLimit ?? true }) },
+    DB: opts.db ?? testDb().db,
+    BOOTSTRAP_EMAIL: opts.bootstrapEmail,
+    ALLOW_FIRST_CLAIM: opts.allowFirstClaim,
   }
+}
+
+/**
+ * Seed an admin row for the given email (default TEST_EMAIL) in a D1-compatible DB.
+ * Use in beforeEach / test setup to simulate an already-registered admin.
+ */
+export async function seedAdmin(db: D1, email = TEST_EMAIL): Promise<void> {
+  const now = new Date().toISOString()
+  await db
+    .prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
+    .bind(email.toLowerCase().trim(), now, 'test-seed')
+    .run()
 }

@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import {
+  type AdminRow,
   type TeacherRow,
   ApiError,
+  addAdmin,
   createTeacher,
   deleteTeacher,
+  listAdmins,
   listTeachers,
+  removeAdmin,
   rotateTeacherToken,
   updateTeacher,
 } from '../api'
@@ -200,6 +204,13 @@ export default function Admin() {
   const [qrData, setQrData] = useState<{ teacher: TeacherRow; dataUrl: string } | null>(null)
   const [copiedId, setCopiedId] = useState<number | null>(null)
 
+  // Admin management state
+  const [admins, setAdmins] = useState<AdminRow[]>([])
+  const [adminsLoading, setAdminsLoading] = useState(false)
+  const [adminsError, setAdminsError] = useState<string | null>(null)
+  const [addingAdmin, setAddingAdmin] = useState(false)
+  const [adminEmailInput, setAdminEmailInput] = useState('')
+
   /** Returns true if the error was 401/403 and access-denied state was set. */
   const handleAccessError = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
@@ -223,9 +234,24 @@ export default function Admin() {
     }
   }, [handleAccessError])
 
+  const loadAdmins = useCallback(async () => {
+    setAdminsLoading(true)
+    try {
+      setAdmins(await listAdmins())
+    } catch (e) {
+      if (!handleAccessError(e)) {
+        setAdminsError(e instanceof Error ? e.message : 'Lỗi tải danh sách quản trị viên')
+      }
+    } finally {
+      setAdminsLoading(false)
+    }
+  }, [handleAccessError])
+
+  // Load teachers and admins together on first render (2 calls ≤ 3 limit)
   useEffect(() => {
     void loadTeachers()
-  }, [loadTeachers])
+    void loadAdmins()
+  }, [loadTeachers, loadAdmins])
 
   async function handleAdd(name: string, subject: string) {
     setError(null)
@@ -324,6 +350,44 @@ export default function Admin() {
       setTimeout(() => setCopiedId((x) => (x === t.id ? null : x)), 1500)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Lỗi sao chép URL')
+    }
+  }
+
+  async function handleAddAdmin(e: React.FormEvent) {
+    e.preventDefault()
+    setAdminsError(null)
+    try {
+      const created = await addAdmin(adminEmailInput)
+      setAdmins((as) => [...as, created])
+      setAddingAdmin(false)
+      setAdminEmailInput('')
+    } catch (err) {
+      if (!handleAccessError(err)) {
+        if (err instanceof ApiError && err.status === 409) {
+          setAdminsError('Email đã là quản trị viên')
+        } else if (err instanceof ApiError && err.status === 400) {
+          setAdminsError('Email không hợp lệ')
+        } else {
+          setAdminsError(err instanceof Error ? err.message : 'Lỗi thêm quản trị viên')
+        }
+      }
+    }
+  }
+
+  async function handleRemoveAdmin(a: AdminRow) {
+    if (!confirm(`Xóa quản trị viên "${a.email}"? Hành động này không thể hoàn tác.`)) return
+    setAdminsError(null)
+    try {
+      await removeAdmin(a.id)
+      setAdmins((as) => as.filter((x) => x.id !== a.id))
+    } catch (err) {
+      if (!handleAccessError(err)) {
+        if (err instanceof ApiError && err.status === 409) {
+          setAdminsError('Không thể xóa quản trị viên cuối cùng')
+        } else {
+          setAdminsError(err instanceof Error ? err.message : 'Lỗi xóa quản trị viên')
+        }
+      }
     }
   }
 
@@ -446,6 +510,81 @@ export default function Admin() {
           dataUrl={qrData.dataUrl}
           onClose={() => setQrData(null)}
         />
+      )}
+
+      {/* ── Quản trị viên ───────────────────────────────────────────────── */}
+      <div className="admin-subsection-header">
+        <h2>Quản trị viên</h2>
+        <button
+          onClick={() => { setAddingAdmin(true); setAdminsError(null) }}
+          disabled={addingAdmin}
+        >
+          + Thêm quản trị viên
+        </button>
+      </div>
+
+      {adminsError && <p className="admin-error" role="alert">{adminsError}</p>}
+
+      {addingAdmin && (
+        <form className="admin-form" onSubmit={(e) => { void handleAddAdmin(e) }}>
+          <h2>Thêm quản trị viên</h2>
+          <label>
+            Email <span aria-hidden="true">*</span>
+            <input
+              type="email"
+              value={adminEmailInput}
+              onChange={(e) => setAdminEmailInput(e.target.value)}
+              maxLength={254}
+              required
+              autoFocus
+            />
+          </label>
+          <div className="form-actions">
+            <button type="submit">Thêm</button>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => { setAddingAdmin(false); setAdminEmailInput(''); setAdminsError(null) }}
+            >
+              Hủy
+            </button>
+          </div>
+        </form>
+      )}
+
+      {adminsLoading && <p className="admin-loading">Đang tải...</p>}
+
+      {!adminsLoading && admins.length > 0 && (
+        <div className="table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Thêm bởi</th>
+                <th>Ngày thêm</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {admins.map((a) => (
+                <tr key={a.id}>
+                  <td>{a.email}</td>
+                  <td>{a.created_by}</td>
+                  <td>{new Date(a.created_at).toLocaleDateString('vi-VN')}</td>
+                  <td className="admin-actions">
+                    <button
+                      onClick={() => { void handleRemoveAdmin(a) }}
+                      className="btn-danger"
+                      aria-label={`Xóa quản trị viên ${a.email}`}
+                    >
+                      Xóa
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   )

@@ -36,10 +36,12 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
     ASSETS: { fetch: async () => new Response('asset') },
     ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
     ACCESS_AUD: TEST_AUD,
-    ADMIN_EMAILS: TEST_EMAIL,
+    // ADMIN_EMAILS removed — auth is now DB-backed (plan § Decision: DB-backed admin list)
     ACCESS_DEV_MODE: undefined as string | undefined,
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
+    BOOTSTRAP_EMAIL: undefined as string | undefined,
+    ALLOW_FIRST_CLAIM: undefined as string | undefined,
   }
 }
 
@@ -65,10 +67,15 @@ function adminReq(method: string, path: string, body?: unknown, ip = '1.2.3.4') 
 let db: D1
 let tokenSeq = 0
 
-beforeEach(() => {
+beforeEach(async () => {
   ;({ db } = testDb())
   tokenSeq = 0
   vi.mocked(newToken).mockImplementation(() => `gn${String(tokenSeq++).padStart(14, '0')}`)
+  // Seed the JWT fixture email as admin so requireAdmin passes after DB-backed auth lands.
+  // Until Group 2 lands, requireAdmin still reads ADMIN_EMAILS (which is now gone) → returns 401.
+  const now = new Date().toISOString()
+  await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
+    .bind(TEST_EMAIL, now, 'test-seed').run()
 })
 
 // ---- Teacher list ----
@@ -510,5 +517,43 @@ describe('worker routing', () => {
     expect(r.status).toBe(503)
     expect(r.headers.get('Cache-Control')).toBe('no-store')
     expect(await r.json()).toEqual({ error: 'unavailable' })
+  })
+})
+
+// ---- Admins API routing (unauthenticated → 401) ----
+
+describe('admin admins routing — auth required (via handleAdmin)', () => {
+  it('GET /api/admin/admins without JWT → 401', async () => {
+    const r = await handleAdmin(
+      new Request('https://x/api/admin/admins', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+      deps,
+    )
+    expect(r.status).toBe(401)
+  })
+
+  it('POST /api/admin/admins without JWT → 401', async () => {
+    const r = await handleAdmin(
+      new Request('https://x/api/admin/admins', {
+        method: 'POST',
+        headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'x@x.com' }),
+      }),
+      makeEnv(db),
+      deps,
+    )
+    expect(r.status).toBe(401)
+  })
+
+  it('DELETE /api/admin/admins/1 without JWT → 401', async () => {
+    const r = await handleAdmin(
+      new Request('https://x/api/admin/admins/1', {
+        method: 'DELETE',
+        headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+      }),
+      makeEnv(db),
+      deps,
+    )
+    expect(r.status).toBe(401)
   })
 })

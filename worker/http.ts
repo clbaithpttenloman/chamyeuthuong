@@ -1,4 +1,13 @@
-export type ErrorCode = 'bad_request' | 'unauthorized' | 'forbidden' | 'not_found' | 'too_long' | 'rate_limited' | 'method' | 'unavailable'
+export type ErrorCode =
+  | 'bad_request'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'too_long'
+  | 'rate_limited'
+  | 'method'
+  | 'unavailable'
+  | 'conflict'
 
 const STATUS: Record<ErrorCode, number> = {
   bad_request: 400,
@@ -9,6 +18,7 @@ const STATUS: Record<ErrorCode, number> = {
   method: 405,
   rate_limited: 429,
   unavailable: 503,
+  conflict: 409,
 }
 
 /** Security headers required on every /api/* response (plan: Threat Model). */

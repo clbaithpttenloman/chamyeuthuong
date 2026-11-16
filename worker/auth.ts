@@ -24,7 +24,6 @@ function getRemoteJwks(certsUrl: URL): RemoteJWKSet {
 type ValidatedConfig = {
   issuer: string
   certsUrl: URL
-  allowedEmails: Set<string>
   aud: string
 }
 
@@ -34,11 +33,10 @@ type ValidatedConfig = {
  * Never logs env values — fixed strings only.
  */
 function parseConfig(
-  env: Pick<Env, 'ACCESS_TEAM_DOMAIN' | 'ACCESS_AUD' | 'ADMIN_EMAILS' | 'ACCESS_DEV_MODE'>,
+  env: Pick<Env, 'ACCESS_TEAM_DOMAIN' | 'ACCESS_AUD' | 'ACCESS_DEV_MODE'>,
 ): ValidatedConfig | null {
   const rawDomain = env.ACCESS_TEAM_DOMAIN ?? ''
   const aud = env.ACCESS_AUD ?? ''
-  const rawEmails = env.ADMIN_EMAILS ?? ''
   const devMode = env.ACCESS_DEV_MODE === '1'
 
   // Single failure path: log fixed string and return null.
@@ -47,8 +45,8 @@ function parseConfig(
     return null
   }
 
-  // All three required strings must be non-empty before URL parsing.
-  if (!rawDomain || !aud || !rawEmails) return fail()
+  // Both required strings must be non-empty before URL parsing.
+  if (!rawDomain || !aud) return fail()
 
   // No trailing slash in configured string — iss must equal url.origin exactly.
   if (rawDomain.endsWith('/')) return fail()
@@ -75,34 +73,27 @@ function parseConfig(
     if (url.protocol !== 'https:' || !url.hostname.endsWith('.cloudflareaccess.com')) return fail()
   }
 
-  // Parse and validate ADMIN_EMAILS: split by comma, trim, lowercase, drop empty entries.
-  const allowedEmails = new Set(
-    rawEmails.split(',').map(e => e.trim().toLowerCase()).filter(e => e.length > 0),
-  )
-  if (allowedEmails.size === 0) return fail()
-
-  // Issuer must equal the URL origin (plan Amendment W1).
   const issuer = url.origin
   const certsUrl = new URL('/cdn-cgi/access/certs', issuer)
 
-  return { issuer, certsUrl, allowedEmails, aud }
+  return { issuer, certsUrl, aud }
 }
 
 /**
- * Guards every /api/admin/* request using a Cloudflare Access JWT.
+ * Guards every /api/admin/* request using a Cloudflare Access JWT + DB admin table.
  *
- * Returns `undefined` when the request may proceed, or a Response on any failure.
+ * Returns `{ email }` when the request may proceed, or a Response on any failure.
  * Order: (1) rate limit → (2) config → (3) JWT header → (4) alg/kid pre-check →
- *        (5) jwtVerify → (6) email → (7) CSRF.
+ *        (5) jwtVerify → (6) email claim shape (≤254) → (7) CSRF → (8) DB.
  *
  * deps.keys: inject a local JWKS resolver in tests (avoids network calls).
  * Production: builds RemoteJWKSet once per team domain and reuses it.
  */
 export async function requireAdmin(
   request: Request,
-  env: Pick<Env, 'ACCESS_TEAM_DOMAIN' | 'ACCESS_AUD' | 'ADMIN_EMAILS' | 'ACCESS_DEV_MODE' | 'ADMIN_FAIL_LIMIT'>,
+  env: Pick<Env, 'ACCESS_TEAM_DOMAIN' | 'ACCESS_AUD' | 'ACCESS_DEV_MODE' | 'ADMIN_FAIL_LIMIT' | 'DB' | 'BOOTSTRAP_EMAIL' | 'ALLOW_FIRST_CLAIM'>,
   deps?: { keys: JWTVerifyGetKey },
-): Promise<Response | undefined> {
+): Promise<{ email: string } | Response> {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
 
   // 1. Rate limit — always checked first; prevents JWT work on flooded IPs.
@@ -157,20 +148,74 @@ export async function requireAdmin(
     return error('unauthorized')
   }
 
-  // 6. Email claim: must be a present string in the allow-list.
+  // 6. Email claim shape: must be a string, trimmed+lowercased, length ≤ 254 (before DB).
   const rawEmail = payload['email']
   if (typeof rawEmail !== 'string') return error('unauthorized')
   const email = rawEmail.trim().toLowerCase()
-  if (!config.allowedEmails.has(email)) return error('unauthorized')
+  if (email.length === 0 || email.length > 254) return error('unauthorized')
 
   // 7. CSRF checks (after successful JWT auth):
-  //    - Sec-Fetch-Site: cross-site → 403 for every method (browser cannot add this cross-site
-  //      without a preflight that the Worker never answers).
-  //    - Non-GET without X-Requested-With: fetch → 403 (plan Amendment W5).
+  //    - Sec-Fetch-Site: cross-site → 403 for every method.
+  //    - Non-GET without X-Requested-With: fetch → 403.
   if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return error('forbidden')
   if (request.method !== 'GET' && request.headers.get('X-Requested-With') !== 'fetch') {
     return error('forbidden')
   }
 
-  return undefined
+  // 8. DB lookup: single query checks caller membership AND whether the table has any admins.
+  //    This avoids a second round-trip and keeps bootstrap-path prepares at exactly 1 SELECT + 1 INSERT.
+  const check = await env.DB.prepare(
+    'SELECT (SELECT COUNT(*) FROM admin WHERE email = ?) AS is_caller,' +
+    ' (SELECT COUNT(*) FROM admin) AS total_admins',
+  ).bind(email).first<{ is_caller: number; total_admins: number }>()
+
+  if ((check?.is_caller ?? 0) > 0) return { email }
+
+  // Caller is not an admin. If the table already has admins (just not this caller), deny silently.
+  if ((check?.total_admins ?? 0) > 0) return error('unauthorized')
+
+  // ---- Bootstrap path: table is empty ----
+
+  // Bootstrap write requires X-Requested-With: fetch on every method (including GET).
+  // Standard CSRF (above) only guards non-GET; this guard covers GET specifically for bootstrap.
+  if (request.headers.get('X-Requested-With') !== 'fetch') return error('forbidden')
+
+  // Gate evaluation (W5): BOOTSTRAP_EMAIL present (even empty string) takes precedence
+  // over ALLOW_FIRST_CLAIM. Only if BOOTSTRAP_EMAIL is undefined does ALLOW_FIRST_CLAIM apply.
+  const rawBootstrapEmail = env.BOOTSTRAP_EMAIL
+  if (rawBootstrapEmail !== undefined) {
+    // BOOTSTRAP_EMAIL is set; normalise and compare. Empty or mismatch → 401.
+    const bootstrapEmail = rawBootstrapEmail.trim().toLowerCase()
+    if (!bootstrapEmail || bootstrapEmail !== email) return error('unauthorized')
+    // Match: proceed to INSERT.
+  } else if (env.ALLOW_FIRST_CLAIM !== '1') {
+    // Neither BOOTSTRAP_EMAIL nor ALLOW_FIRST_CLAIM configured for empty table.
+    console.error('admin: misconfigured')
+    return error('unauthorized')
+  }
+  // else: BOOTSTRAP_EMAIL undefined AND ALLOW_FIRST_CLAIM === '1' → open claim, proceed.
+
+  // Bootstrap INSERT: exactly one prepare() call, atomic WHERE NOT EXISTS.
+  // If two simultaneous first requests arrive, only one INSERT wins (D1/SQLite serialises writes).
+  const now = new Date().toISOString()
+  const result = await env.DB
+    .prepare(
+      "INSERT INTO admin (email, created_at, created_by) SELECT ?, ?, 'bootstrap' WHERE NOT EXISTS (SELECT 1 FROM admin)",
+    )
+    .bind(email, now)
+    .run()
+
+  if (result.meta.changes === 1) {
+    // This caller inserted the first admin row.
+    console.error('admin: bootstrap')
+    return { email }
+  }
+
+  // changes === 0: someone else won the race (admin table is now non-empty).
+  // Re-SELECT to check if the winner used this same email (same user, two parallel requests).
+  const reCheck = await env.DB.prepare('SELECT 1 FROM admin WHERE email = ?').bind(email).first()
+  if (reCheck) return { email }
+
+  // A different user won the first-admin slot; this caller is not an admin.
+  return error('unauthorized')
 }

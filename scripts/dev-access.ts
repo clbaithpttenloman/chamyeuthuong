@@ -44,7 +44,7 @@ const jwt = await new SignJWT({ email: EMAIL })
 console.log('# Paste into .dev.vars (never commit this file):')
 console.log(`ACCESS_TEAM_DOMAIN=${DOMAIN}`)
 console.log(`ACCESS_AUD=${AUD}`)
-console.log(`ADMIN_EMAILS=${EMAIL}`)
+console.log(`ALLOW_FIRST_CLAIM=1  # first local request (with a valid JWT) becomes admin`)
 console.log(`ACCESS_DEV_MODE=1`)
 console.log('')
 // Print the JWT separately — export it in your shell, do NOT put it in .dev.vars

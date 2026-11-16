@@ -20,8 +20,11 @@ export type Env = {
   ASSETS: { fetch(request: Request): Promise<Response> }
   ACCESS_TEAM_DOMAIN: string
   ACCESS_AUD: string
-  ADMIN_EMAILS: string
   ACCESS_DEV_MODE?: string
   CARD_IP_LIMIT: RateLimit
   ADMIN_FAIL_LIMIT: RateLimit
+  /** Set to a specific email to restrict who can claim the first-admin bootstrap. */
+  BOOTSTRAP_EMAIL?: string
+  /** Set to '1' (only when BOOTSTRAP_EMAIL is unset) to allow any verified user to claim the first admin slot. */
+  ALLOW_FIRST_CLAIM?: string
 }

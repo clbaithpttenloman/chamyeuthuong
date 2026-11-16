@@ -92,3 +92,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .admin-qr h2 { margin: 0; font-size: 1.1rem; }
 .admin-qr img { display: block; }
 .qr-url { font-size: 0.78rem; color: #78716c; word-break: break-all; text-align: center; margin: 0; }
+
+.admin-subsection-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin: 2.5rem 0 1rem; }
+.admin-subsection-header h2 { margin: 0; }

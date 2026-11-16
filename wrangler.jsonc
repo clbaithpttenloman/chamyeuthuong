@@ -4,8 +4,14 @@
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
   // Admin auth uses Cloudflare Access JWT (Cf-Access-Jwt-Assertion header). No ADMIN_TOKEN.
-  // Required secrets: ACCESS_TEAM_DOMAIN, ACCESS_AUD, ADMIN_EMAILS (set via `wrangler secret put`).
+  // Required secrets (set via `wrangler secret put`): ACCESS_TEAM_DOMAIN, ACCESS_AUD.
   // ACCESS_DEV_MODE must NOT be set in production — it is for local dev only (.dev.vars).
+  //
+  // First-admin bootstrap (set ONE of the following for the first deploy, then remove it):
+  //   BOOTSTRAP_EMAIL=you@example.com  — only this exact address may claim the first-admin slot
+  //   ALLOW_FIRST_CLAIM=1              — any verified Access user may claim the first-admin slot
+  // After the first admin is confirmed in /admin, remove the variable and redeploy.
+  // ALLOW_FIRST_CLAIM is NEVER left active; it is set only temporarily via `wrangler secret put`.
   //
   // workers_dev: If a custom domain is configured, add "workers_dev": false and redeploy so that
   // the workers.dev URL is disabled (unauthenticated requests still 401 at the Worker, but Access
