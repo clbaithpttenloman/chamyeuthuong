@@ -28,7 +28,8 @@
   ],
   // Per-IP rate limits. Counts are approximate and per Cloudflare location.
   // CARD_IP_LIMIT: blunts token scanners (school NAT shares one IP → 60 generous).
-  // ADMIN_FAIL_LIMIT: bounds admin token guessing speed.
+  // ADMIN_FAIL_LIMIT: guards /api/admin/* per source IP (all requests count, not just failures).
+  //   Consequence: multiple admins behind one NAT share the 30/60 s budget — see decisions.md.
   "ratelimits": [
     { "name": "CARD_IP_LIMIT",    "namespace_id": "2001", "simple": { "limit": 60, "period": 60 } },
     { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "2002", "simple": { "limit": 30, "period": 60 } }

@@ -1,4 +1,3 @@
-// @vitest-environment node
 /**
  * Test helpers for Cloudflare Access JWT authentication.
  * Provides key-pair generation, JWT signing, local JWKS resolvers, and env builders
@@ -51,7 +50,6 @@ export async function twoKeyJwks(): Promise<LocalJWKSet> {
 
 export type SignOpts = {
   kid?: string       // default: 'k1' (or 'k2' when useK2 is true)
-  alg?: string       // default: 'RS256'
   noIat?: boolean    // skip setIssuedAt()
   noExp?: boolean    // skip setExpirationTime()
   useK2?: boolean    // sign with kp2 private key (useful for wrong-key tests)
@@ -68,9 +66,8 @@ export async function signJwt(
 ): Promise<string> {
   const { privateKey } = opts.useK2 ? await kp2() : await kp1()
   const kid = opts.kid ?? (opts.useK2 ? 'k2' : 'k1')
-  const alg = opts.alg ?? 'RS256'
 
-  let builder = new SignJWT(claims).setProtectedHeader({ alg, kid })
+  let builder = new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid })
   if (!opts.noIat && !('iat' in claims)) builder = builder.setIssuedAt()
   if (!opts.noExp && !('exp' in claims)) builder = builder.setExpirationTime('1h')
   return builder.sign(privateKey)

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { SignJWT } from 'jose'
+import type { JWTVerifyGetKey } from 'jose'
 import { requireAdmin } from './auth.ts'
 import {
   signJwt, validJwt, localJwks, twoKeyJwks, accessEnv,
@@ -210,31 +211,34 @@ describe('requireAdmin — alg checks (before key resolver)', () => {
 describe('requireAdmin — misconfiguration → 401 + console.error', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('empty ACCESS_AUD → 401 and logs admin: misconfigured', async () => {
+  it('empty ACCESS_AUD → 401 and logs admin: misconfigured exactly once', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jwt = await validJwt()
     const r = await requireAdmin(makeReq(jwt), accessEnv({ aud: '' }), { keys: await localJwks() })
     expect(r?.status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('empty ADMIN_EMAILS → 401 and logs admin: misconfigured', async () => {
+  it('empty ADMIN_EMAILS → 401 and logs admin: misconfigured exactly once', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jwt = await validJwt()
     const r = await requireAdmin(makeReq(jwt), accessEnv({ adminEmails: '' }), { keys: await localJwks() })
     expect(r?.status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('empty ACCESS_TEAM_DOMAIN → 401 and logs admin: misconfigured', async () => {
+  it('empty ACCESS_TEAM_DOMAIN → 401 and logs admin: misconfigured exactly once', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jwt = await validJwt()
     const r = await requireAdmin(makeReq(jwt), accessEnv({ teamDomain: '' }), { keys: await localJwks() })
     expect(r?.status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('non-https ACCESS_TEAM_DOMAIN (without dev mode) → 401 misconfigured', async () => {
+  it('non-https ACCESS_TEAM_DOMAIN (without dev mode) → 401 misconfigured exactly once', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jwt = await validJwt()
     const r = await requireAdmin(
@@ -244,9 +248,10 @@ describe('requireAdmin — misconfiguration → 401 + console.error', () => {
     )
     expect(r?.status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('ACCESS_TEAM_DOMAIN without .cloudflareaccess.com suffix → 401 misconfigured', async () => {
+  it('ACCESS_TEAM_DOMAIN without .cloudflareaccess.com suffix → 401 misconfigured exactly once', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jwt = await validJwt({ iss: 'https://evil.com' })
     const r = await requireAdmin(
@@ -256,14 +261,55 @@ describe('requireAdmin — misconfiguration → 401 + console.error', () => {
     )
     expect(r?.status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
-  it('ADMIN_EMAILS with only empty entries (all commas/spaces) → 401 misconfigured', async () => {
+  it('ADMIN_EMAILS with only empty entries (all commas/spaces) → 401 misconfigured exactly once', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const jwt = await validJwt()
     const r = await requireAdmin(makeReq(jwt), accessEnv({ adminEmails: ' , , ' }), { keys: await localJwks() })
     expect(r?.status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('ACCESS_TEAM_DOMAIN with trailing slash → 401 misconfigured exactly once', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jwt = await validJwt()
+    const r = await requireAdmin(
+      makeReq(jwt),
+      accessEnv({ teamDomain: 'https://test.cloudflareaccess.com/' }),
+      { keys: await localJwks() },
+    )
+    expect(r?.status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('ACCESS_TEAM_DOMAIN with userinfo (user:pass) → 401 misconfigured exactly once', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jwt = await validJwt()
+    const r = await requireAdmin(
+      makeReq(jwt),
+      accessEnv({ teamDomain: 'https://user:pass@test.cloudflareaccess.com' }),
+      { keys: await localJwks() },
+    )
+    expect(r?.status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('ACCESS_TEAM_DOMAIN with non-root pathname → 401 misconfigured exactly once', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jwt = await validJwt()
+    const r = await requireAdmin(
+      makeReq(jwt),
+      accessEnv({ teamDomain: 'https://test.cloudflareaccess.com/subpath' }),
+      { keys: await localJwks() },
+    )
+    expect(r?.status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -427,6 +473,26 @@ describe('requireAdmin — error response shape', () => {
     const r = await requireAdmin(makeReq(jwt, { method: 'POST', noXrw: true }), accessEnv(), { keys: await localJwks() })
     const body = await r?.json() as { error?: string }
     expect(body?.error).toBe('forbidden')
+  })
+})
+
+// ---- Key resolver error (JWKS fetch failure) ----
+
+describe('requireAdmin — key resolver error', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('key resolver throws → 401 and logs admin: jwks_error once (not e.message)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jwt = await validJwt()
+    const throwingResolver: JWTVerifyGetKey = vi.fn().mockRejectedValue(
+      new Error('simulated JWKS fetch failure'),
+    )
+    const r = await requireAdmin(makeReq(jwt), accessEnv(), { keys: throwingResolver })
+    expect(r?.status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: jwks_error')
+    expect(spy).toHaveBeenCalledTimes(1)
+    // The error message itself must not appear in any log call
+    expect(spy.mock.calls[0]?.[0]).toBe('admin: jwks_error')
   })
 })
 

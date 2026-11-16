@@ -38,7 +38,8 @@ function AccessDenied() {
   return (
     <section className="admin-access-denied">
       <h1>Không có quyền truy cập</h1>
-      <p>Phiên đăng nhập đã hết hạn hoặc bạn không có quyền vào trang này.</p>
+      <p>Tài khoản của bạn chưa được cấp quyền quản trị.</p>
+      <p className="admin-access-denied-hint">Phiên đăng nhập đã hết hạn hoặc bạn không có quyền vào trang này.</p>
       <a href="/cdn-cgi/access/logout">Đăng xuất và đăng nhập lại</a>
     </section>
   )

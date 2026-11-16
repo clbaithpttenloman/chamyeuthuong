@@ -41,61 +41,45 @@ function parseConfig(
   const rawEmails = env.ADMIN_EMAILS ?? ''
   const devMode = env.ACCESS_DEV_MODE === '1'
 
-  // All three required strings must be non-empty before URL parsing.
-  if (!rawDomain || !aud || !rawEmails) {
+  // Single failure path: log fixed string and return null.
+  function fail(): null {
     console.error('admin: misconfigured')
     return null
   }
 
+  // All three required strings must be non-empty before URL parsing.
+  if (!rawDomain || !aud || !rawEmails) return fail()
+
   // No trailing slash in configured string — iss must equal url.origin exactly.
-  if (rawDomain.endsWith('/')) {
-    console.error('admin: misconfigured')
-    return null
-  }
+  if (rawDomain.endsWith('/')) return fail()
 
   let url: URL
   try {
     url = new URL(rawDomain)
   } catch {
-    console.error('admin: misconfigured')
-    return null
+    return fail()
   }
 
   // No username or password in the URL.
-  if (url.username || url.password) {
-    console.error('admin: misconfigured')
-    return null
-  }
+  if (url.username || url.password) return fail()
 
   // Pathname must be exactly '/'.
-  if (url.pathname !== '/') {
-    console.error('admin: misconfigured')
-    return null
-  }
+  if (url.pathname !== '/') return fail()
 
   if (devMode) {
     // Dev mode (ACCESS_DEV_MODE === '1'): only http://127.0.0.1:<port> is allowed.
     // The hostname must be exactly '127.0.0.1' — prevents http://127.0.0.1.evil.com bypass.
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') {
-      console.error('admin: misconfigured')
-      return null
-    }
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return fail()
   } else {
     // Production: must be https://<subdomain>.cloudflareaccess.com.
-    if (url.protocol !== 'https:' || !url.hostname.endsWith('.cloudflareaccess.com')) {
-      console.error('admin: misconfigured')
-      return null
-    }
+    if (url.protocol !== 'https:' || !url.hostname.endsWith('.cloudflareaccess.com')) return fail()
   }
 
   // Parse and validate ADMIN_EMAILS: split by comma, trim, lowercase, drop empty entries.
   const allowedEmails = new Set(
     rawEmails.split(',').map(e => e.trim().toLowerCase()).filter(e => e.length > 0),
   )
-  if (allowedEmails.size === 0) {
-    console.error('admin: misconfigured')
-    return null
-  }
+  if (allowedEmails.size === 0) return fail()
 
   // Issuer must equal the URL origin (plan Amendment W1).
   const issuer = url.origin
@@ -146,10 +130,20 @@ export async function requireAdmin(
   }
 
   // 5. Full JWT verification: signature, issuer, audience, exp, iat.
-  const keys: JWTVerifyGetKey = deps?.keys ?? getRemoteJwks(config.certsUrl)
+  const rawKeys: JWTVerifyGetKey = deps?.keys ?? getRemoteJwks(config.certsUrl)
+  // Wrap the key resolver to distinguish JWKS-fetch failures from JWT-claim failures.
+  let keyFetchFailed = false
+  const keyResolver: JWTVerifyGetKey = async (header, input) => {
+    try {
+      return await rawKeys(header, input)
+    } catch (e) {
+      keyFetchFailed = true
+      throw e
+    }
+  }
   let payload: Record<string, unknown>
   try {
-    const result = await jwtVerify(token, keys, {
+    const result = await jwtVerify(token, keyResolver, {
       algorithms: ['RS256'],
       issuer: config.issuer,
       audience: config.aud,
@@ -159,6 +153,7 @@ export async function requireAdmin(
     payload = result.payload as Record<string, unknown>
   } catch {
     // Log only a fixed string — never jose error messages (may contain JWT fragments).
+    if (keyFetchFailed) console.error('admin: jwks_error')
     return error('unauthorized')
   }
 

@@ -20,9 +20,7 @@ type TeacherRow = {
 }
 
 // ---- Shared auth fixture ----
-// In Group 2, handleAdmin will accept deps? and forward them to requireAdmin.
 // The deps object avoids network calls to real CF Access JWKS in tests.
-// In Group 1 (pre-implementation) this arg is silently ignored but sets up Group 2 correctly.
 
 let _validJwt = ''
 let deps: { keys: LocalJWKSet }
@@ -406,16 +404,31 @@ describe('CSRF guard (via handleAdmin)', () => {
     expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(403)
   })
 
-  it('OPTIONS /api/admin/teachers has no Access-Control-* headers', async () => {
+  it('OPTIONS /api/admin/teachers has no Access-Control-* headers and returns 403', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
       headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4' },
       // No X-Requested-With → CSRF check → 403
     })
     const r = await handleAdmin(req, makeEnv(db), deps)
+    expect(r.status).toBe(403)
     expect(r.headers.get('Access-Control-Allow-Origin')).toBeNull()
     expect(r.headers.get('Access-Control-Allow-Methods')).toBeNull()
     expect(r.headers.get('Access-Control-Allow-Headers')).toBeNull()
+  })
+
+  it('OPTIONS with X-Requested-With: fetch → 405 (past CSRF, rejected by method guard)', async () => {
+    const req = new Request('https://x/api/admin/teachers', {
+      method: 'OPTIONS',
+      headers: {
+        'Cf-Access-Jwt-Assertion': _validJwt,
+        'CF-Connecting-IP': '1.2.3.4',
+        'X-Requested-With': 'fetch',
+      },
+    })
+    const r = await handleAdmin(req, makeEnv(db), deps)
+    expect(r.status).toBe(405)
+    expect((await r.json() as { error: string }).error).toBe('method')
   })
 })
 
