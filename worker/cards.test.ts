@@ -119,3 +119,55 @@ describe('security headers', () => {
     expect(r.headers.get('X-Robots-Tag')).toBe('noindex')
   })
 })
+
+// ---- New: empty database (ensureSchema integration) ----
+
+describe('empty database (no tables) — ensureSchema integration', () => {
+  it('well-formed unknown token on a table-less DB returns 404 (not 503)', async () => {
+    // handleCard must call ensureSchema before the SELECT so that a fresh DB returns
+    // 404 (card not found) rather than propagating a "no such table" error.
+    const { db } = testDb({ schema: false })
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
+  })
+})
+
+// ---- New: zero DB statements (prepares + DDL) for early exits ----
+
+describe('zero DB statements including DDL for early exits', () => {
+  it('rate-limited request issues zero prepares and zero DDL', async () => {
+    const { db, state } = testDb()
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db, { cardIpLimit: false }),
+    )
+    expect(r.status).toBe(429)
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+
+  it('malformed token issues zero prepares and zero DDL', async () => {
+    const { db, state } = testDb()
+    const r = await handleCard(
+      new Request('https://x/api/card/BAD!!', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+
+  it('wrong method issues zero prepares and zero DDL', async () => {
+    const { db, state } = testDb()
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { method: 'POST', headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(405)
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+})

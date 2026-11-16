@@ -1,8 +1,6 @@
 // @vitest-environment node
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { SCHEMA } from './schema.ts'
 
 /** Minimal D1 binding types (no @cloudflare/workers-types). Matches worker/types.ts. */
 export type D1Stmt = {
@@ -17,24 +15,32 @@ export type D1 = {
 }
 
 /**
- * Node's built-in node:sqlite behind the D1 API shape, with all migrations/*.sql applied from
- * disk in sorted order so tests run the real schema. state.fail makes every call throw
- * (D1 outage simulation). state.prepares counts db.prepare() calls (for atomicity assertions).
+ * Node's built-in node:sqlite behind the D1 API shape.
+ *
+ * Schema source: SCHEMA from worker/schema.ts (single source of truth for all DDL).
+ * Pass { schema: false } to get a fully empty database (useful for testing ensureSchema itself
+ * or early-exit paths that must leave the DB untouched).
+ *
+ * state.fail   — when true, every batch and stmt op throws (D1 outage simulation).
+ * state.ddl    — counts db.prepare() calls whose sql is a member of SCHEMA.
+ * state.prepares — counts db.prepare() calls for all other (non-DDL) sql strings.
+ *
+ * The batch is genuinely transactional: BEGIN before the first run(), COMMIT on success,
+ * ROLLBACK on any error.
  */
-export function testDb() {
+export function testDb(opts: { schema?: false } = {}) {
   const sqlite = new DatabaseSync(':memory:')
   sqlite.exec('PRAGMA foreign_keys = ON')
 
-  const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '../migrations')
-  const migrationFiles = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-  for (const file of migrationFiles) {
-    const sql = readFileSync(join(migrationsDir, file), 'utf-8')
-    sqlite.exec(sql)
+  // Apply schema via sqlite.exec() directly so the initialisation is invisible to state
+  // tracking (state.ddl / state.prepares start at 0 for the caller's assertions).
+  if (opts.schema !== false) {
+    for (const sql of SCHEMA) {
+      sqlite.exec(sql)
+    }
   }
 
-  const state = { writes: 0, reads: 0, fail: false, prepares: 0 }
+  const state = { writes: 0, reads: 0, fail: false, prepares: 0, ddl: 0 }
 
   const stmt = (sql: string, values: unknown[] = []): D1Stmt => {
     const exec = async <T>(fn: () => T): Promise<T> => {
@@ -67,7 +73,13 @@ export function testDb() {
 
   const db: D1 = {
     prepare: (sql) => {
-      state.prepares++
+      // DDL statements (members of SCHEMA) are counted separately so atomicity tests that
+      // count non-DDL prepare() calls remain stable across ensureSchema integration.
+      if (SCHEMA.includes(sql)) {
+        state.ddl++
+      } else {
+        state.prepares++
+      }
       return stmt(sql)
     },
     batch: async (statements) => {

@@ -1,5 +1,6 @@
 import { error, json } from './http.ts'
 import { isToken } from './token.ts'
+import { ensureSchema } from './schema.ts'
 import type { Env } from './types.ts'
 
 type PublishedCard = { name: string; subject: string; message: string }
@@ -22,6 +23,8 @@ export async function handleCard(request: Request, env: Pick<Env, 'DB' | 'CARD_I
 
   // Malformed token returns 404 (not 400) — no information leak about format (plan § Threat Model)
   if (!isToken(token)) return error('not_found')
+
+  await ensureSchema(env.DB)
 
   const row = await env.DB.prepare(
     'SELECT t.name, t.subject, c.message FROM teacher t ' +

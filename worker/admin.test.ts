@@ -589,36 +589,6 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(0)
   })
-
-  it('missing admin table (migration 0002 not applied) → 503 unavailable, no grant', async () => {
-    const { DatabaseSync } = await import('node:sqlite')
-    const { readFileSync } = await import('node:fs')
-    const { join, dirname } = await import('node:path')
-    const { fileURLToPath } = await import('node:url')
-    const sqlite = new DatabaseSync(':memory:')
-    const sql0001 = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'),
-      'utf-8',
-    )
-    sqlite.exec(sql0001)
-    // D1-compatible shim — only migration 0001; no admin table present.
-    const noTableDb = {
-      prepare: (sql: string) => ({
-        bind: (..._v: unknown[]) => noTableDb.prepare(sql),
-        run: async () => {
-          const r = sqlite.prepare(sql).run()
-          return { success: true, meta: { changes: Number(r.changes) } }
-        },
-        first: async <T>() => (sqlite.prepare(sql).get() as T | undefined) ?? null,
-        all: async <T>() => ({ results: sqlite.prepare(sql).all() as T[] }),
-      }),
-      batch: async (stmts: Array<{ run(): Promise<unknown> }>) => Promise.all(stmts.map((s) => s.run())),
-    }
-    const env = { ...makeEnv(noTableDb as never), ALLOW_FIRST_CLAIM: '1' as string | undefined }
-    const r = await safeHandleAdmin(adminReq('GET', '/api/admin/teachers', undefined, '5.6.7.8'), env)
-    expect(r.status).toBe(503)
-    expect(await r.json()).toEqual({ error: 'unavailable' })
-  })
 })
 
 // ---- Fix Group 1: W4 — router-level /api/admin/admins* (authenticated) ----

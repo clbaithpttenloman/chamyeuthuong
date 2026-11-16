@@ -1,6 +1,7 @@
 import { jwtVerify, createRemoteJWKSet, decodeProtectedHeader } from 'jose'
 import type { JWTVerifyGetKey, RemoteJWKSet } from 'jose'
 import { error } from './http.ts'
+import { ensureSchema } from './schema.ts'
 import type { Env } from './types.ts'
 
 // Module-level cache: one RemoteJWKSet per JWKS URL, reused across requests within the isolate.
@@ -164,6 +165,7 @@ export async function requireAdmin(
 
   // 8. DB lookup: single query checks caller membership AND whether the table has any admins.
   //    This avoids a second round-trip and keeps bootstrap-path prepares at exactly 1 SELECT + 1 INSERT.
+  await ensureSchema(env.DB)
   const check = await env.DB.prepare(
     'SELECT (SELECT COUNT(*) FROM admin WHERE email = ?) AS is_caller,' +
     ' (SELECT COUNT(*) FROM admin) AS total_admins',

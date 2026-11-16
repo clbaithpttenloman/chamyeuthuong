@@ -171,6 +171,7 @@ describe('requireAdmin — JWT rejection', () => {
     const r = await requireAdmin(makeReq(jwt), accessEnv({ db }), { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 })
 
@@ -396,6 +397,7 @@ describe('requireAdmin — rate limiting', () => {
     const { db, state } = testDb()
     await requireAdmin(makeReq(jwt), accessEnv({ failLimit: false, db }), { keys: await localJwks() })
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 })
 
@@ -482,6 +484,7 @@ describe('requireAdmin — CSRF checks', () => {
       { keys: await localJwks() },
     )
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 
   it('cross-site GET → zero DB prepares (Sec-Fetch-Site checked before DB)', async () => {
@@ -495,6 +498,7 @@ describe('requireAdmin — CSRF checks', () => {
       { keys: await localJwks() },
     )
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 })
 
@@ -734,32 +738,16 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     expect(count?.c).toBe(0)
   })
 
-  it('missing admin table (0002 not applied) → requireAdmin rejects, no grant', async () => {
-    // Create a DB with ONLY 0001 (no admin table)
-    const { DatabaseSync } = await import('node:sqlite')
-    const { readFileSync } = await import('node:fs')
-    const { join, dirname } = await import('node:path')
-    const { fileURLToPath } = await import('node:url')
-    const sqlite = new DatabaseSync(':memory:')
-    const sql0001 = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'),
-      'utf-8',
-    )
-    sqlite.exec(sql0001)
-    // Wrap in a D1-compatible shim
-    const noTableDb = {
-      prepare: (sql: string) => ({
-        bind: (..._v: unknown[]) => noTableDb.prepare(sql),
-        run: async () => { const r = sqlite.prepare(sql).run(); return { success: true, meta: { changes: Number(r.changes) } } },
-        first: async <T>() => (sqlite.prepare(sql).get() as T | undefined) ?? null,
-        all: async <T>() => ({ results: sqlite.prepare(sql).all() as T[] }),
-      }),
-      batch: async (stmts: Array<{ run(): Promise<unknown> }>) => Promise.all(stmts.map((s) => s.run())),
-    }
+  it('DDL failure on first request → requireAdmin rejects, no admin row inserted, no grant', async () => {
+    // state.fail = true from start: ensureSchema batch throws → requireAdmin propagates the error.
+    // index.ts catches it and returns 503 "unavailable". No row is inserted, no grant issued.
+    const { db, state } = testDb({ schema: false })
+    state.fail = true
     const jwt = await validJwt()
     await expect(
-      requireAdmin(makeReq(jwt, { xrw: true }), { ...accessEnv({ allowFirstClaim: '1' }), DB: noTableDb as never }, { keys: await localJwks() })
+      requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: '1' }), { keys: await localJwks() })
     ).rejects.toThrow()
+    // Tables were never created; no row could have been inserted; no grant was issued.
   })
 })
 
@@ -843,6 +831,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
     const { db, state } = testDb()
     await requireAdmin(makeReq('garbage.jwt.value'), accessEnv({ db, bootstrapEmail: TEST_EMAIL }), { keys: await localJwks() })
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 })
 
@@ -921,6 +910,7 @@ describe('requireAdmin — zero DB prepares before email shape check', () => {
     const jwt = await validJwt({ email: 123 })
     await requireAdmin(makeReq(jwt), accessEnv({ db }), { keys: await localJwks() })
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
   })
 
   it('missing email claim → zero DB prepares', async () => {
@@ -928,5 +918,100 @@ describe('requireAdmin — zero DB prepares before email shape check', () => {
     const jwt = await signJwt({ iss: TEST_TEAM_DOMAIN, aud: TEST_AUD })
     await requireAdmin(makeReq(jwt), accessEnv({ db }), { keys: await localJwks() })
     expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+})
+
+// ---- New: ensureSchema integration (Group 1 — these tests require worker/schema.ts) ----
+
+describe('requireAdmin — empty DB: admin bootstrap (ensureSchema integration)', () => {
+  it('ALLOW_FIRST_CLAIM=1 on a table-less DB bootstraps successfully (ensureSchema creates tables first)', async () => {
+    // testDb({ schema: false }): no tables yet.
+    // After Group 2: requireAdmin calls ensureSchema, which creates all tables, then proceeds.
+    const { db, state } = testDb({ schema: false })
+    const jwt = await validJwt()
+    const r = await requireAdmin(
+      makeReq(jwt, { xrw: true }),
+      accessEnv({ db, allowFirstClaim: '1' }),
+      { keys: await localJwks() },
+    )
+    expect(r).toEqual({ email: TEST_EMAIL })
+    expect(state.ddl).toBeGreaterThan(0) // DDL was run to create the tables
+  })
+
+  it('second admin request on the same DB issues no DDL (WeakMap cache hit)', async () => {
+    // First call: ensureSchema runs (caches promise in WeakMap keyed on db).
+    // Second call with the same db: cache hit, no new DDL prepares.
+    const { db, state } = testDb({ schema: false })
+    const jwt = await validJwt()
+    // First call — bootstrap (empty table, ALLOW_FIRST_CLAIM=1)
+    await requireAdmin(
+      makeReq(jwt, { xrw: true }),
+      accessEnv({ db, allowFirstClaim: '1' }),
+      { keys: await localJwks() },
+    )
+    const ddlAfterFirst = state.ddl
+    // Second call — admin now exists in table
+    await requireAdmin(
+      makeReq(jwt),
+      accessEnv({ db }),
+      { keys: await localJwks() },
+    )
+    expect(state.ddl).toBe(ddlAfterFirst) // no new DDL on the second request
+  })
+
+  it('two concurrent first-claim requests on empty DB → exactly one admin row', async () => {
+    // Both calls share one ensureSchema promise (cache), then race for the first INSERT.
+    const { db } = testDb({ schema: false })
+    const env = accessEnv({ db, allowFirstClaim: '1' })
+    const keys = await localJwks()
+    const jwt1 = await validJwt({ email: TEST_EMAIL })
+    const jwt2 = await validJwt({ email: 'other@example.com' })
+    const [r1, r2] = await Promise.all([
+      requireAdmin(makeReq(jwt1, { xrw: true }), env, { keys }),
+      requireAdmin(makeReq(jwt2, { xrw: true }), env, { keys }),
+    ])
+    const statuses = [r1, r2]
+      .map((r) => (r instanceof Response ? r.status : 200))
+      .sort()
+    expect(statuses).toEqual([200, 401])
+    const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
+    expect(count?.c).toBe(1)
+  })
+})
+
+describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
+  it('DDL failure → requireAdmin rejects (503 path), no admin row inserted, no grant', async () => {
+    // state.fail = true from start: ensureSchema batch throws → requireAdmin propagates.
+    const { db, state } = testDb({ schema: false })
+    state.fail = true
+    const jwt = await validJwt()
+    await expect(
+      requireAdmin(
+        makeReq(jwt, { xrw: true }),
+        accessEnv({ db, allowFirstClaim: '1' }),
+        { keys: await localJwks() },
+      )
+    ).rejects.toThrow()
+    // Tables were never created; no row could have been inserted; no grant issued.
+    state.fail = false
+    // We cannot query the admin table (never created) — the rejection alone is the assertion.
+  })
+
+  it('DDL failure issues DDL prepares but zero non-DDL prepares', async () => {
+    // ensureSchema calls db.prepare() for each SCHEMA entry (state.ddl increments),
+    // then db.batch() throws (state.fail). No SELECT or INSERT is reached (state.prepares stays 0).
+    const { db, state } = testDb({ schema: false })
+    state.fail = true
+    const jwt = await validJwt()
+    await expect(
+      requireAdmin(
+        makeReq(jwt, { xrw: true }),
+        accessEnv({ db, allowFirstClaim: '1' }),
+        { keys: await localJwks() },
+      )
+    ).rejects.toThrow()
+    expect(state.prepares).toBe(0) // no SELECT or INSERT reached
+    expect(state.ddl).toBeGreaterThan(0) // ensureSchema prepared the DDL statements
   })
 })
