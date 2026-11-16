@@ -1,21 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import {
   type AdminRow,
   type TeacherRow,
   ApiError,
   addAdmin,
-  clearIdToken,
+  clearAdminEmail,
   createTeacher,
   deleteTeacher,
+  getAdminEmail,
   listAdmins,
   listTeachers,
   removeAdmin,
   rotateTeacherToken,
-  setIdToken,
+  setAdminEmail,
   updateTeacher,
 } from '../api'
-import { type GisCredentialResponse, loadGis } from '../gis'
 
 /** Inject <meta name="robots" content="noindex"> while this component is mounted. */
 function useNoIndex() {
@@ -39,69 +39,47 @@ function emptyDraft(t?: TeacherRow): EditDraft {
   }
 }
 
-// ── Auth states ──────────────────────────────────────────────────────────────
-// signedOut  — no token; show GIS sign-in button
-// signedIn   — has token; show admin interface
-// expired    — had token, got 401; show session-expired message + sign-in button
-// denied     — got 403; not an admin; show permanent access-denied message
+// ── Email input form ──────────────────────────────────────────────────────────
 
-type AuthState = 'signedOut' | 'signedIn' | 'expired' | 'denied'
-
-// ── Sign-in section ──────────────────────────────────────────────────────────
-
-function SignInSection({
-  clientId,
-  btnRef,
-  expired,
-  gisLoadFailed,
-  onRetryGis,
+function EmailInputForm({
+  error,
+  onSubmit,
 }: {
-  clientId: string | undefined
-  btnRef: React.RefObject<HTMLDivElement | null>
-  expired: boolean
-  gisLoadFailed: boolean
-  onRetryGis: () => void
+  error: string | null
+  onSubmit: (email: string) => void
 }) {
-  if (!clientId) {
-    return (
-      <section className="admin-signin">
-        <h1>Đăng nhập quản trị</h1>
-        <p className="admin-signin-error">
-          Chưa cấu hình Google Client ID (<code>VITE_GOOGLE_CLIENT_ID</code>).
-          Vui lòng liên hệ quản trị viên hệ thống.
-        </p>
-      </section>
-    )
-  }
+  const [email, setEmail] = useState('')
   return (
     <section className="admin-signin">
-      <h1>Đăng nhập quản trị</h1>
-      {expired && (
-        <p className="admin-session-expired" role="alert">
-          Đăng nhập lại; nếu vẫn lỗi, tài khoản chưa có quyền quản trị.
-        </p>
-      )}
-      {gisLoadFailed && (
+      <h1>Nhập email quản trị</h1>
+      {error && (
         <p className="admin-signin-error" role="alert">
-          Không tải được Google Sign-In.{' '}
-          <button className="btn-link" onClick={onRetryGis}>Thử lại</button>
+          {error}
         </p>
       )}
-      {!gisLoadFailed && <div ref={btnRef} className="admin-signin-btn" aria-label="Đăng nhập bằng Google" />}
-    </section>
-  )
-}
-
-// ── Access denied ────────────────────────────────────────────────────────────
-
-function AccessDenied() {
-  return (
-    <section className="admin-access-denied">
-      <h1>Không có quyền truy cập</h1>
-      <p>Tài khoản của bạn chưa được cấp quyền quản trị.</p>
-      <p className="admin-access-denied-hint">
-        Hãy liên hệ quản trị viên để được thêm vào danh sách.
-      </p>
+      <form
+        className="admin-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          onSubmit(email.trim().toLowerCase())
+        }}
+      >
+        <label>
+          Email <span aria-hidden="true">*</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            maxLength={254}
+            required
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
+          />
+        </label>
+        <div className="form-actions">
+          <button type="submit">Đăng nhập</button>
+        </div>
+      </form>
     </section>
   )
 }
@@ -252,9 +230,12 @@ function QrSection({
 export default function Admin() {
   useNoIndex()
 
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+  // ── Admin email (sessionStorage key `adminEmail`) ─────────────────────────
+  const [adminEmail, setAdminEmailState] = useState<string | null>(
+    () => getAdminEmail()
+  )
+  const [emailError, setEmailError] = useState<string | null>(null)
 
-  const [authState, setAuthState] = useState<AuthState>('signedOut')
   const [teachers, setTeachers] = useState<TeacherRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -270,52 +251,22 @@ export default function Admin() {
   const [addingAdmin, setAddingAdmin] = useState(false)
   const [adminEmailInput, setAdminEmailInput] = useState('')
 
-  // Ref for the GIS button container
-  const googleBtnRef = useRef<HTMLDivElement | null>(null)
-
-  // GIS load-failure state; reset to false triggers a retry (loadGis resets its cache on error).
-  const [gisLoadFailed, setGisLoadFailed] = useState(false)
-
-  // ── GIS initialisation ───────────────────────────────────────────────────
-  // Load the script and render the button when the sign-in section is shown.
-  // A cancel flag prevents state updates after effect cleanup.
-  // clientId is a build-time constant so it is safe to omit from deps.
-  useEffect(() => {
-    if (authState !== 'signedOut' && authState !== 'expired') return
-    if (!clientId) return
-    // After a load failure wait for the user to press the retry button (it clears this flag).
-    if (gisLoadFailed) return
-
-    let cancelled = false
-
-    void loadGis()
-      .then(() => {
-        if (cancelled) return
-        const btn = googleBtnRef.current
-        if (!btn) return
-        window.google!.accounts.id.initialize({
-          client_id: clientId,
-          callback: (response: GisCredentialResponse) => {
-            setIdToken(response.credential)
-            setAuthState('signedIn')
-          },
-        })
-        window.google!.accounts.id.renderButton(btn, { theme: 'outline', size: 'large' })
-      })
-      .catch(() => {
-        if (cancelled) return
-        setGisLoadFailed(true)
-      })
-
-    return () => { cancelled = true }
-  }, [authState, gisLoadFailed]) // eslint-disable-line react-hooks/exhaustive-deps
-
   // ── Error handler ────────────────────────────────────────────────────────
   /** Returns true when the error was an auth error (caller should not set generic error). */
   const handleAccessError = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError) {
-      if (e.status === 401) { setAuthState('expired'); return true }
-      if (e.status === 403) { clearIdToken(); setAuthState('denied'); return true }
+      if (e.status === 401) {
+        // api.ts already cleared sessionStorage via clearAdminEmail(); sync local state
+        setAdminEmailState(null)
+        setEmailError('Email này chưa có quyền quản trị')
+        setTeachers([])
+        setAdmins([])
+        return true
+      }
+      if (e.status === 403) {
+        setError('Yêu cầu bị từ chối.')
+        return true
+      }
     }
     return false
   }, [])
@@ -348,19 +299,26 @@ export default function Admin() {
     }
   }, [handleAccessError])
 
-  // Load teachers and admins once signed in
+  // Load teachers and admins once email is set
   useEffect(() => {
-    if (authState === 'signedIn') {
+    if (adminEmail) {
       void loadTeachers()
       void loadAdmins()
     }
-  }, [authState, loadTeachers, loadAdmins])
+  }, [adminEmail, loadTeachers, loadAdmins])
 
-  // ── Sign-out ─────────────────────────────────────────────────────────────
+  // ── Email form submit ────────────────────────────────────────────────────
+  function handleEmailSubmit(email: string) {
+    setAdminEmail(email)       // persist to sessionStorage
+    setAdminEmailState(email)  // update React state → triggers load effect
+    setEmailError(null)
+  }
+
+  // ── Sign-out / change email ──────────────────────────────────────────────
   function handleSignOut() {
-    clearIdToken()
-    window.google?.accounts.id.disableAutoSelect()
-    setAuthState('signedOut')
+    clearAdminEmail()
+    setAdminEmailState(null)
+    setEmailError(null)
     setTeachers([])
     setAdmins([])
     setError(null)
@@ -516,21 +474,11 @@ export default function Admin() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  if (authState === 'signedOut' || authState === 'expired') {
-    return (
-      <SignInSection
-        clientId={clientId}
-        btnRef={googleBtnRef}
-        expired={authState === 'expired'}
-        gisLoadFailed={gisLoadFailed}
-        onRetryGis={() => setGisLoadFailed(false)}
-      />
-    )
+  if (!adminEmail) {
+    return <EmailInputForm error={emailError} onSubmit={handleEmailSubmit} />
   }
 
-  if (authState === 'denied') return <AccessDenied />
-
-  // authState === 'signedIn'
+  // Email is set → show admin interface
   return (
     <section className="admin-page">
       <div className="admin-header">
@@ -542,7 +490,7 @@ export default function Admin() {
           >
             + Thêm giáo viên
           </button>
-          <button onClick={handleSignOut} className="btn-ghost">Đăng xuất</button>
+          <button onClick={handleSignOut} className="btn-ghost">Đổi email</button>
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 import { error, json, readJson, HttpError } from './http.ts'
+import { normalizeEmail } from './email.ts'
 import type { Env } from './types.ts'
 
 type AdminRow = {
@@ -14,9 +15,6 @@ export function parseId(s: string): number | null {
   const id = parseInt(s, 10)
   return id >= 1 ? id : null
 }
-
-/** Email regex from plan: local@domain.tld, no whitespace or @ in any part. */
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 async function listAdmins(env: Pick<Env, 'DB'>): Promise<Response> {
   const { results } = await env.DB.prepare(
@@ -35,9 +33,8 @@ async function addAdmin(
   const rawEmail = typeof body.email === 'string' ? body.email : null
   if (rawEmail === null) throw new HttpError('bad_request')
 
-  const email = rawEmail.trim().toLowerCase()
-  if (email.length === 0 || email.length > 254) throw new HttpError('bad_request')
-  if (!EMAIL_RE.test(email)) throw new HttpError('bad_request')
+  const email = normalizeEmail(rawEmail)
+  if (email === null) throw new HttpError('bad_request')
 
   const now = new Date().toISOString()
 

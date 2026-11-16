@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { handleAdmins } from './admins.ts'
 import { testDb, type D1 } from './testDb.ts'
-import { TEST_EMAIL, TEST_CLIENT_ID } from './testGoogle.ts'
+import { TEST_EMAIL } from './testAuth.ts'
 
 type AdminRow = {
   id: number
@@ -22,17 +22,7 @@ type AdminRow = {
 const CALLER = TEST_EMAIL
 
 function makeEnv(db: D1) {
-  return {
-    DB: db,
-    ASSETS: { fetch: async () => new Response('asset') },
-    GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
-    AUTH_DEV_MODE: undefined as string | undefined,
-    AUTH_DEV_JWKS_URL: undefined as string | undefined,
-    CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
-    ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
-    BOOTSTRAP_EMAIL: undefined as string | undefined,
-    ALLOW_FIRST_CLAIM: undefined as string | undefined,
-  }
+  return { DB: db }
 }
 
 /** Build a request to the admins API. Adds X-Requested-With for non-GET. */

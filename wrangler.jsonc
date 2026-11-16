@@ -3,18 +3,20 @@
   "compatibility_date": "2026-11-01",
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
-  // Admin auth uses Google Sign-In ID tokens (Authorization: Bearer). No ADMIN_TOKEN.
-  // Required public value: GOOGLE_CLIENT_ID (ends with .apps.googleusercontent.com). Set it in "vars" here (see
-  // docs/runbooks/admin.md) or with `wrangler secret put`. Never commit the client secret — there is none.
-  // Commented example (replace with your real OAuth client ID):
-  //   "vars": { "GOOGLE_CLIENT_ID": "123456789-abc.apps.googleusercontent.com", "BOOTSTRAP_EMAIL": "admin@gmail.com" }
+  // Admin auth uses a typed email sent as X-Admin-Email on every /api/admin/* request.
+  // The email is checked against the D1 admin list; identity is not cryptographically verified (accepted risk R1).
+  // See docs/runbooks/admin.md for the SSO restore procedure and first-deploy instructions.
   //
-  // First-admin bootstrap: BOOTSTRAP_EMAIL (in "vars" or as a secret) lets only that address claim an EMPTY admin table
-  // and may stay set. ALLOW_FIRST_CLAIM=1 lets ANY verified Google user claim: set it only temporarily via
-  // `wrangler secret put ALLOW_FIRST_CLAIM`, never in "vars", and delete it after the first admin is confirmed.
+  // First-admin bootstrap:
+  //   BOOTSTRAP_EMAIL (in "vars" or as a secret) lets only that exact address claim an EMPTY admin table.
+  //   It may stay set permanently; it is inert once the table is non-empty.
+  //   Example: "vars": { "BOOTSTRAP_EMAIL": "admin@example.com" }
   //
-  // Local dev: AUTH_DEV_MODE=1 and AUTH_DEV_JWKS_URL=http://127.0.0.1:<port>/certs go in .dev.vars only.
-  // Never set AUTH_DEV_MODE in production — it must stay absent from this file.
+  //   ALLOW_FIRST_CLAIM=1 lets ANY user claim the first admin slot.
+  //   Set it only temporarily via `wrangler secret put ALLOW_FIRST_CLAIM`, never in "vars".
+  //   Delete it after the first admin is confirmed.
+  //
+  // Local dev: add ALLOW_FIRST_CLAIM=1 or BOOTSTRAP_EMAIL to .dev.vars (never commit .dev.vars).
   //
   // The Worker runs only for /api/* (card and admin endpoints); every other path is a static asset from dist/.
   "main": "worker/index.ts",

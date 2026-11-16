@@ -1,5 +1,5 @@
 // Typed fetch client for the backend API.
-// Admin routes require a Google ID token (Authorization: Bearer <token>).
+// Admin routes require an admin email (X-Admin-Email: <email>).
 // Every /api/admin/* request also includes X-Requested-With: fetch as
 // CSRF defence in depth.
 
@@ -28,36 +28,41 @@ export class ApiError extends Error {
   }
 }
 
-// ── In-memory token store ─────────────────────────────────────────────────
+// ── sessionStorage email helpers ─────────────────────────────────────────
 
-/** The Google ID token for admin API calls. Never written to any storage. */
-let _idToken: string | null = null
+const EMAIL_KEY = 'adminEmail'
 
-/** Store the credential from the GIS callback. Called by Admin.tsx. */
-export function setIdToken(token: string): void {
-  _idToken = token
+/** Read the stored admin email, or null if not set. */
+export function getAdminEmail(): string | null {
+  return sessionStorage.getItem(EMAIL_KEY)
 }
 
-/** Clear the token (sign-out or 401 response). Called by Admin.tsx and expectOk. */
-export function clearIdToken(): void {
-  _idToken = null
+/** Store the admin email (trim and lower-case before calling). Called by Admin.tsx on form submit. */
+export function setAdminEmail(email: string): void {
+  sessionStorage.setItem(EMAIL_KEY, email)
+}
+
+/** Clear the stored email (sign-out or 401 response). Called by Admin.tsx and expectOk. */
+export function clearAdminEmail(): void {
+  sessionStorage.removeItem(EMAIL_KEY)
 }
 
 // ── Core fetch helpers ────────────────────────────────────────────────────
 
-/** All admin API calls go through here; Bearer + CSRF headers always present. */
+/** All admin API calls go through here; X-Admin-Email + CSRF headers always present. */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
     ...(init.headers as Record<string, string>),
     'X-Requested-With': 'fetch',
   }
-  if (_idToken) headers['Authorization'] = `Bearer ${_idToken}`
+  const email = getAdminEmail()
+  if (email) headers['X-Admin-Email'] = email
   return fetch(path, { ...init, headers })
 }
 
 async function expectOk(res: Response): Promise<Response> {
   if (!res.ok) {
-    if (res.status === 401) clearIdToken()
+    if (res.status === 401) clearAdminEmail()
     let code = 'unknown'
     try {
       const body = await res.json() as { error?: string }
@@ -76,7 +81,7 @@ export async function getCard(token: string): Promise<CardData | null> {
   return res.json() as Promise<CardData>
 }
 
-/** List all teachers (requires Google ID token). */
+/** List all teachers (requires admin email). */
 export async function listTeachers(): Promise<TeacherRow[]> {
   return (await expectOk(await apiFetch('/api/admin/teachers'))).json() as Promise<TeacherRow[]>
 }
@@ -123,7 +128,7 @@ export type AdminRow = {
   created_by: string
 }
 
-/** List all admins (requires Google ID token). */
+/** List all admins (requires admin email). */
 export async function listAdmins(): Promise<AdminRow[]> {
   return (await expectOk(await apiFetch('/api/admin/admins'))).json() as Promise<AdminRow[]>
 }

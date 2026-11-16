@@ -8,7 +8,6 @@
   },
   "scripts": {
     "dev": "vite",
-    "dev:google": "node scripts/dev-google.ts",
     "build": "tsc --noEmit && vite build && node scripts/check-headers.ts",
     "preview": "vite preview",
     "test": "vitest run",
@@ -16,7 +15,6 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "jose": "6.2.16",
     "qrcode": "1.5.4",
     "react": "19.3.1",
     "react-dom": "19.3.1",

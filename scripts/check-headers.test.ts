@@ -1,16 +1,16 @@
 /**
  * scripts/check-headers.test.ts — unit tests for the check-headers validator.
  *
- * Key focus: the rejection of bare https://accounts.google.com and wildcard
- * sources in GIS-related CSP directives.
+ * Key focus: the strict CSP (no Google origins), the rejection of any
+ * accounts.google.com occurrence, and wildcard rejection in key directives.
  */
 import { describe, expect, it } from 'vitest'
 import { checkHeaders } from './check-headers.ts'
 
-// ── Valid baseline ────────────────────────────────────────────────────────────
+// ── Valid baseline (strict CSP — no Google origins) ───────────────────────────
 
 const VALID = `/*
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; frame-src https://accounts.google.com/gsi/; connect-src 'self' https://accounts.google.com/gsi/; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors 'none'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
@@ -23,7 +23,7 @@ const VALID = `/*
 `
 
 describe('checkHeaders', () => {
-  it('passes with the full valid headers', () => {
+  it('passes with the full strict valid headers', () => {
     expect(checkHeaders(VALID)).toEqual([])
   })
 
@@ -41,75 +41,53 @@ describe('checkHeaders', () => {
     expect(errors.some((e) => e.includes('Referrer-Policy'))).toBe(true)
   })
 
-  // ── Bare https://accounts.google.com rejection ────────────────────────────
-
-  it('rejects bare https://accounts.google.com in script-src', () => {
-    // Replace the specific /gsi/client path with the bare domain
-    const content = VALID.replace(
-      'https://accounts.google.com/gsi/client',
-      'https://accounts.google.com',
-    )
+  it('reports missing X-Content-Type-Options', () => {
+    const content = VALID.replace('X-Content-Type-Options: nosniff\n', '')
     const errors = checkHeaders(content)
-    // Must flag the forbidden bare domain
-    expect(errors.some((e) => e.includes('bare'))).toBe(true)
+    expect(errors.some((e) => e.includes('X-Content-Type-Options'))).toBe(true)
   })
 
-  it('rejects bare https://accounts.google.com in frame-src', () => {
-    const content = VALID.replace(
-      'frame-src https://accounts.google.com/gsi/',
-      'frame-src https://accounts.google.com',
-    )
+  it('reports missing X-Frame-Options', () => {
+    const content = VALID.replace('X-Frame-Options: DENY\n', '')
     const errors = checkHeaders(content)
-    expect(errors.some((e) => e.includes('bare'))).toBe(true)
+    expect(errors.some((e) => e.includes('X-Frame-Options'))).toBe(true)
   })
 
-  it('rejects bare https://accounts.google.com in connect-src', () => {
-    const content = VALID.replace(
-      'connect-src \'self\' https://accounts.google.com/gsi/',
-      'connect-src \'self\' https://accounts.google.com',
-    )
+  // ── accounts.google.com rejection ────────────────────────────────────────
+
+  it('rejects bare accounts.google.com', () => {
+    const content = VALID + '  script-src https://accounts.google.com\n'
     const errors = checkHeaders(content)
-    expect(errors.some((e) => e.includes('bare'))).toBe(true)
+    expect(errors.some((e) => e.includes('accounts.google.com'))).toBe(true)
   })
 
-  it('still accepts https://accounts.google.com/gsi/client (path present)', () => {
-    // The valid headers already have the full path; ensure no false positive
-    expect(checkHeaders(VALID)).toEqual([])
+  it('rejects accounts.google.com with gsi path', () => {
+    const content = VALID + '  script-src https://accounts.google.com/gsi/client\n'
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('accounts.google.com'))).toBe(true)
+  })
+
+  it('rejects accounts.google.com in frame-src', () => {
+    const content = VALID + '  frame-src https://accounts.google.com/gsi/\n'
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('accounts.google.com'))).toBe(true)
   })
 
   // ── Wildcard rejection ────────────────────────────────────────────────────
 
-  it('rejects wildcard * in script-src', () => {
-    const content = VALID.replace(
-      "script-src 'self' https://accounts.google.com/gsi/client",
-      "script-src * https://accounts.google.com/gsi/client",
-    )
-    const errors = checkHeaders(content)
-    expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
-  })
-
-  it('rejects wildcard * in frame-src', () => {
-    const content = VALID.replace(
-      'frame-src https://accounts.google.com/gsi/',
-      'frame-src *',
-    )
-    const errors = checkHeaders(content)
-    expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
-  })
-
-  it('rejects wildcard * in connect-src', () => {
-    const content = VALID.replace(
-      "connect-src 'self' https://accounts.google.com/gsi/",
-      "connect-src *",
-    )
-    const errors = checkHeaders(content)
-    expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
-  })
-
   it('rejects wildcard * in style-src', () => {
     const content = VALID.replace(
-      "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
-      "style-src *",
+      "style-src 'self' 'unsafe-inline'",
+      'style-src *',
+    )
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
+  })
+
+  it('rejects wildcard * in an injected script-src directive', () => {
+    const content = VALID.replace(
+      "default-src 'self'",
+      "default-src 'self'; script-src *",
     )
     const errors = checkHeaders(content)
     expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
