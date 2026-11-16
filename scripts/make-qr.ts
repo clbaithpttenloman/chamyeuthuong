@@ -1,7 +1,9 @@
 // Writes one QR PNG per card to qr/<id>.png. Usage: SITE_URL=https://example.workers.dev npm run qr
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import QRCode from 'qrcode'
-import { cards } from '../src/cards.ts'
+import type { Card } from '../src/cards.ts'
+
+const cards: Card[] = JSON.parse(readFileSync('src/content/cards.json', 'utf8'))
 
 const base = process.env.SITE_URL?.replace(/\/$/, '')
 if (!base) {
