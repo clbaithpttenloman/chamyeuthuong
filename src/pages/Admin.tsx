@@ -283,6 +283,8 @@ export default function Admin() {
   useEffect(() => {
     if (authState !== 'signedOut' && authState !== 'expired') return
     if (!clientId) return
+    // After a load failure wait for the user to press the retry button (it clears this flag).
+    if (gisLoadFailed) return
 
     let cancelled = false
 
