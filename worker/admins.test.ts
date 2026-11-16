@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { handleAdmins } from './admins.ts'
 import { testDb, type D1 } from './testDb.ts'
-import { TEST_EMAIL, TEST_CLIENT_ID } from './testAccess.ts'
+import { TEST_EMAIL, TEST_CLIENT_ID } from './testGoogle.ts'
 
 type AdminRow = {
   id: number

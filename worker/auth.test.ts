@@ -2,11 +2,11 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { SignJWT } from 'jose'
 import type { JWTVerifyGetKey } from 'jose'
-import { requireAdmin } from './auth.ts'
+import { requireAdmin, parseConfig } from './auth.ts'
 import {
   signJwt, validJwt, localJwks, twoKeyJwks, googleEnv, seedAdmin,
   TEST_CLIENT_ID, TEST_EMAIL, TEST_EMAIL_WORKSPACE, TEST_HD,
-} from './testAccess.ts'
+} from './testGoogle.ts'
 import { testDb } from './testDb.ts'
 import type { D1 } from './testDb.ts'
 
@@ -144,9 +144,16 @@ describe('requireAdmin — both iss spellings accepted', () => {
 // ============================================================
 
 describe('requireAdmin — email rules (email_verified)', () => {
+  // Seed TEST_EMAIL as admin so the 401 comes from the email_verified guard, not the bootstrap path.
+  let db: D1
+  beforeEach(async () => {
+    ;({ db } = testDb())
+    await seedAdmin(db, TEST_EMAIL)
+  })
+
   it('email_verified: false → 401', async () => {
     const jwt = await validJwt({ email_verified: false })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 
@@ -157,13 +164,13 @@ describe('requireAdmin — email rules (email_verified)', () => {
       email: TEST_EMAIL,
       // email_verified intentionally absent
     })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 
   it('email_verified = "true" (string, not boolean) → 401', async () => {
     const jwt = await validJwt({ email_verified: 'true' })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 })
@@ -171,26 +178,50 @@ describe('requireAdmin — email rules (email_verified)', () => {
 describe('requireAdmin — email rules (Gmail suffix and hd)', () => {
   it('non-Gmail address without hd → 401', async () => {
     // @example.com is not @gmail.com and no hd claim
+    // Seed the same email so rejection is from the email-domain guard, not the bootstrap path.
+    const { db } = testDb()
+    await seedAdmin(db, 'admin@example.com')
     const jwt = await validJwt({ email: 'admin@example.com' })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 
   it('@gmail.com.evil.com → 401 (not an exact @gmail.com suffix)', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, 'admin@gmail.com.evil.com')
     const jwt = await validJwt({ email: 'admin@gmail.com.evil.com' })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 
   it('@notgmail.com → 401 (does not end with @gmail.com)', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, 'admin@notgmail.com')
     const jwt = await validJwt({ email: 'admin@notgmail.com' })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 
-  it('@googlemail.com → 401 (googlemail.com explicitly rejected)', async () => {
-    const jwt = await validJwt({ email: 'admin@googlemail.com' })
-    const r = await requireAdmin(makeReq(jwt), googleEnv(),  { keys: await localJwks() })
+  it('@googlemail.com with hd: "googlemail.com" → 401 (googlemail.com explicitly rejected even when hd matches)', async () => {
+    // hd matching domain does not rescue googlemail.com — the explicit googlemail.com block fires first.
+    const { db } = testDb()
+    await seedAdmin(db, 'admin@googlemail.com')
+    const jwt = await validJwt({ email: 'admin@googlemail.com', hd: 'googlemail.com' })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
+    expect((r as Response).status).toBe(401)
+  })
+
+  it('gmail address with hd present but mismatched → 401 (hd must match even for @gmail.com)', async () => {
+    // Workspace-issued token for a @gmail.com address: hd='workspace.example.com' ≠ 'gmail.com'.
+    // The hd mismatch must reject even though the domain is otherwise valid Gmail.
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    const jwt = await validJwt({
+      email: TEST_EMAIL,         // admin@gmail.com
+      email_verified: true,
+      hd: TEST_HD,               // workspace.example.com — mismatches gmail.com
+    })
+    const r = await requireAdmin(makeReq(jwt), googleEnv({ db }),  { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 })
@@ -260,9 +291,40 @@ describe('requireAdmin — JWT rejection', () => {
     expect((r as Response).status).toBe(401)
   })
 
-  it('Bearer value > 4 KB → 401 (capped before decode)', async () => {
-    const bigValue = 'x'.repeat(4097)
-    const r = await requireAdmin(makeReq(bigValue), googleEnv(),  { keys: await localJwks() })
+  it('Bearer value > 4 KB (structurally valid padded JWT) → 401 without calling resolver', async () => {
+    // Uses a real RS256 JWT with a large payload so only the cap (not header decode) causes the 401.
+    const spy = vi.fn() as unknown as JWTVerifyGetKey
+    const longJwt = await validJwt({ p: 'a'.repeat(3500) })
+    expect(longJwt.length).toBeGreaterThan(4096)
+    const r = await requireAdmin(makeReq(longJwt), googleEnv(), { keys: spy })
+    expect((r as Response).status).toBe(401)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('Bearer exactly 4096 chars → cap allows it (resolver is called)', async () => {
+    // The cap is `> 4096`, so a 4096-char token must pass the cap and reach the resolver.
+    const spy = vi.fn().mockRejectedValue(new Error('key not found')) as unknown as JWTVerifyGetKey
+    const base = await validJwt()
+    const parts = base.split('.')
+    const extra = 4096 - base.length
+    // Pad the signature part to reach exactly 4096. This invalidates the sig but preserves the header.
+    const padded = extra > 0
+      ? `${parts[0]!}.${parts[1]!}.${parts[2]!}${'x'.repeat(extra)}`
+      : base.substring(0, 4093) + 'xxx'
+    expect(padded.length).toBe(4096)
+    const r = await requireAdmin(makeReq(padded), googleEnv(), { keys: spy })
+    expect((r as Response).status).toBe(401) // fails but NOT due to the cap
+    expect(spy).toHaveBeenCalled()           // resolver was reached; cap did not block
+  })
+
+  it('token without aud claim → 401 (aud required)', async () => {
+    const jwt = await signJwt({
+      iss: 'https://accounts.google.com',
+      email: TEST_EMAIL,
+      email_verified: true,
+      // aud intentionally absent
+    })
+    const r = await requireAdmin(makeReq(jwt), googleEnv(), { keys: await localJwks() })
     expect((r as Response).status).toBe(401)
   })
 
@@ -572,38 +634,35 @@ describe('requireAdmin — AUTH_DEV_MODE', () => {
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
   })
 
-  it('AUTH_DEV_MODE="2" (non-"1") — URL is ignored, no misconfigured logged for URL', async () => {
-    // With AUTH_DEV_MODE !== '1', the JWKS URL is not honored; auth proceeds normally.
-    // 401 may be logged for other reasons (config, token) but NOT for the URL.
+  it('AUTH_DEV_MODE="2" (non-"1") — invalid JWKS URL is ignored, token verified normally', async () => {
+    // With AUTH_DEV_MODE !== '1', auth.ts must NOT validate or use AUTH_DEV_JWKS_URL.
+    // A meaningful assertion: token succeeds and no misconfigured is logged for the URL.
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
     const jwt = await validJwt()
-    await requireAdmin(
+    const r = await requireAdmin(
       makeReq(jwt),
-      googleEnv({ devMode: '2', devJwksUrl: 'http://127.0.0.1:1234/certs' }), 
+      googleEnv({ devMode: '2', devJwksUrl: 'invalid://bad-url', db }),
       { keys: await localJwks() },
     )
-    // The URL is ignored, so no misconfigured for the URL.
-    // This test asserts the URL itself cannot trigger misconfigured when AUTH_DEV_MODE != '1'.
-    const urlMisconfiguredCount = spy.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && c[0] === 'admin: misconfigured',
-    ).length
-    // 0 — config OK, dev URL ignored, token verified via deps.keys.
-    expect(typeof urlMisconfiguredCount).toBe('number')
+    expect(r).toEqual({ email: TEST_EMAIL })
+    expect(spy).not.toHaveBeenCalledWith('admin: misconfigured')
   })
 
-  it('AUTH_DEV_MODE unset with AUTH_DEV_JWKS_URL set → URL ignored (dev mode not active)', async () => {
+  it('AUTH_DEV_MODE unset — JWKS URL present but ignored, token verified normally', async () => {
+    // Without AUTH_DEV_MODE, auth.ts must NOT validate or honor AUTH_DEV_JWKS_URL.
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
     const jwt = await validJwt()
-    await requireAdmin(
+    const r = await requireAdmin(
       makeReq(jwt),
-      googleEnv({ devJwksUrl: 'http://127.0.0.1:1234/certs' /* devMode absent */ }), 
+      googleEnv({ devJwksUrl: 'http://10.0.0.1:1234/non-loopback', db }),
       { keys: await localJwks() },
     )
-    // After Group 2: no misconfigured logged for the URL (URL ignored when no dev mode).
-    const urlMisconfiguredCount = spy.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && c[0] === 'admin: misconfigured',
-    ).length
-    expect(typeof urlMisconfiguredCount).toBe('number')
+    expect(r).toEqual({ email: TEST_EMAIL })
+    expect(spy).not.toHaveBeenCalledWith('admin: misconfigured')
   })
 })
 
@@ -1304,5 +1363,21 @@ describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
     ).rejects.toThrow()
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBeGreaterThan(0)
+  })
+})
+
+// ============================================================
+// parseConfig — production JWKS URL
+// ============================================================
+
+describe('parseConfig — production JWKS URL', () => {
+  it('valid GOOGLE_CLIENT_ID with no dev mode → production Google JWKS URL', () => {
+    const config = parseConfig({
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      AUTH_DEV_MODE: undefined,
+      AUTH_DEV_JWKS_URL: undefined,
+    })
+    expect(config).not.toBeNull()
+    expect(config!.certsUrl.href).toBe('https://www.googleapis.com/oauth2/v3/certs')
   })
 })

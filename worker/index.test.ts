@@ -12,7 +12,7 @@ vi.mock('./admin.ts', () => ({
 }))
 
 import worker from './index.ts'
-import { TEST_CLIENT_ID } from './testAccess.ts'
+import { TEST_CLIENT_ID } from './testGoogle.ts'
 import { testDb } from './testDb.ts'
 
 const VALID_TOKEN = 'abc123def456gh78'

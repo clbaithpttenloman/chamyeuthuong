@@ -32,7 +32,7 @@ type ValidatedConfig = {
  * Returns config on success, or null and logs `admin: misconfigured` on failure.
  * Never logs env values — fixed strings only.
  */
-function parseConfig(
+export function parseConfig(
   env: Pick<Env, 'GOOGLE_CLIENT_ID' | 'AUTH_DEV_MODE' | 'AUTH_DEV_JWKS_URL'>,
 ): ValidatedConfig | null {
   function fail(): null {
@@ -163,14 +163,21 @@ export async function requireAdmin(
 
   // 6e. Google is authoritative only for @gmail.com (exact suffix) or for Workspace (hd set
   //     and email domain equals hd). googlemail.com is explicitly rejected regardless of hd.
+  //     Amendment: if hd is present, the email domain must equal hd — this applies even to
+  //     @gmail.com addresses (a Workspace-issued token with hd set must match the hd domain).
   const atIdx = email.lastIndexOf('@')
   const domain = email.slice(atIdx + 1)
   if (domain === 'googlemail.com') return error('unauthorized')
 
   const isGmail = domain === 'gmail.com'
   const hd = payload['hd']
-  const isWorkspace = typeof hd === 'string' && hd.length > 0 && domain === hd.toLowerCase()
-  if (!isGmail && !isWorkspace) return error('unauthorized')
+  const hdStr = typeof hd === 'string' && hd.length > 0 ? hd.toLowerCase() : null
+
+  // If hd is present, the email domain must match hd (applies even to @gmail.com).
+  if (hdStr !== null && domain !== hdStr) return error('unauthorized')
+
+  // Without hd: only @gmail.com is accepted (Workspace requires hd claim to be set).
+  if (!isGmail && hdStr === null) return error('unauthorized')
 
   // 7. CSRF checks (after successful JWT auth):
   //    - Sec-Fetch-Site: cross-site → 403 for every method.

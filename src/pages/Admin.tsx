@@ -15,13 +15,7 @@ import {
   setIdToken,
   updateTeacher,
 } from '../api'
-import {
-  type GisCredentialResponse,
-  gisDisableAutoSelect,
-  gisInitialize,
-  gisRenderButton,
-  loadGis,
-} from '../gis'
+import { type GisCredentialResponse, loadGis } from '../gis'
 
 /** Inject <meta name="robots" content="noindex"> while this component is mounted. */
 function useNoIndex() {
@@ -59,10 +53,14 @@ function SignInSection({
   clientId,
   btnRef,
   expired,
+  gisLoadFailed,
+  onRetryGis,
 }: {
   clientId: string | undefined
   btnRef: React.RefObject<HTMLDivElement | null>
   expired: boolean
+  gisLoadFailed: boolean
+  onRetryGis: () => void
 }) {
   if (!clientId) {
     return (
@@ -80,10 +78,16 @@ function SignInSection({
       <h1>Đăng nhập quản trị</h1>
       {expired && (
         <p className="admin-session-expired" role="alert">
-          Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại.
+          Đăng nhập lại; nếu vẫn lỗi, tài khoản chưa có quyền quản trị.
         </p>
       )}
-      <div ref={btnRef} className="admin-signin-btn" aria-label="Đăng nhập bằng Google" />
+      {gisLoadFailed && (
+        <p className="admin-signin-error" role="alert">
+          Không tải được Google Sign-In.{' '}
+          <button className="btn-link" onClick={onRetryGis}>Thử lại</button>
+        </p>
+      )}
+      {!gisLoadFailed && <div ref={btnRef} className="admin-signin-btn" aria-label="Đăng nhập bằng Google" />}
     </section>
   )
 }
@@ -269,34 +273,47 @@ export default function Admin() {
   // Ref for the GIS button container
   const googleBtnRef = useRef<HTMLDivElement | null>(null)
 
+  // GIS load-failure state; reset to false triggers a retry (loadGis resets its cache on error).
+  const [gisLoadFailed, setGisLoadFailed] = useState(false)
+
   // ── GIS initialisation ───────────────────────────────────────────────────
-  // Load the script and render the button whenever the sign-in section is shown.
+  // Load the script and render the button when the sign-in section is shown.
+  // A cancel flag prevents state updates after effect cleanup.
   // clientId is a build-time constant so it is safe to omit from deps.
   useEffect(() => {
     if (authState !== 'signedOut' && authState !== 'expired') return
     if (!clientId) return
 
-    void loadGis().then(() => {
-      const btn = googleBtnRef.current
-      if (!btn) return
-      gisInitialize({
-        client_id: clientId,
-        callback: (response: GisCredentialResponse) => {
-          setIdToken(response.credential)
-          setAuthState('signedIn')
-        },
-        auto_select: true,
+    let cancelled = false
+
+    void loadGis()
+      .then(() => {
+        if (cancelled) return
+        const btn = googleBtnRef.current
+        if (!btn) return
+        window.google!.accounts.id.initialize({
+          client_id: clientId,
+          callback: (response: GisCredentialResponse) => {
+            setIdToken(response.credential)
+            setAuthState('signedIn')
+          },
+        })
+        window.google!.accounts.id.renderButton(btn, { theme: 'outline', size: 'large' })
       })
-      gisRenderButton(btn, { theme: 'outline', size: 'large' })
-    })
-  }, [authState]) // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => {
+        if (cancelled) return
+        setGisLoadFailed(true)
+      })
+
+    return () => { cancelled = true }
+  }, [authState, gisLoadFailed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Error handler ────────────────────────────────────────────────────────
   /** Returns true when the error was an auth error (caller should not set generic error). */
   const handleAccessError = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError) {
       if (e.status === 401) { setAuthState('expired'); return true }
-      if (e.status === 403) { setAuthState('denied'); return true }
+      if (e.status === 403) { clearIdToken(); setAuthState('denied'); return true }
     }
     return false
   }, [])
@@ -340,7 +357,7 @@ export default function Admin() {
   // ── Sign-out ─────────────────────────────────────────────────────────────
   function handleSignOut() {
     clearIdToken()
-    gisDisableAutoSelect()
+    window.google?.accounts.id.disableAutoSelect()
     setAuthState('signedOut')
     setTeachers([])
     setAdmins([])
@@ -503,6 +520,8 @@ export default function Admin() {
         clientId={clientId}
         btnRef={googleBtnRef}
         expired={authState === 'expired'}
+        gisLoadFailed={gisLoadFailed}
+        onRetryGis={() => setGisLoadFailed(false)}
       />
     )
   }

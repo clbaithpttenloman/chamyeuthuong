@@ -14,7 +14,7 @@ import { testDb, type D1 } from './testDb.ts'
 import {
   validJwt, localJwks,
   TEST_CLIENT_ID, TEST_EMAIL,
-} from './testAccess.ts'
+} from './testGoogle.ts'
 import type { LocalJWKSet } from 'jose'
 
 type TeacherRow = {
@@ -23,7 +23,7 @@ type TeacherRow = {
 }
 
 // ---- Shared auth fixture ----
-// The deps object avoids network calls to real CF Access JWKS in tests.
+// The deps object avoids network calls to real Google JWKS in tests.
 
 let _validJwt = ''
 let deps: { keys: LocalJWKSet }

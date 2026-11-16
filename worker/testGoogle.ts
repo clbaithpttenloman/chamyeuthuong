@@ -106,8 +106,8 @@ export async function validJwt(
 // ---- Env type and builder (Google auth interface) ----
 
 /**
- * Env shape required by the future worker/auth.ts (Google Sign-In).
- * Note: ACCESS_* fields are absent — the future auth.ts uses GOOGLE_CLIENT_ID instead.
+ * Env shape required by worker/auth.ts (Google Sign-In).
+ * Note: ACCESS_* fields are absent — auth.ts uses GOOGLE_CLIENT_ID.
  */
 export type GoogleEnv = {
   GOOGLE_CLIENT_ID: string
