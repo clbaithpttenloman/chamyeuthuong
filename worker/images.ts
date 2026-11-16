@@ -344,7 +344,9 @@ export async function handlePublicImage(
   if (!success) return error('rate_limited')
 
   // 2. Token validation — no DB for malformed tokens
-  const token = new URL(request.url).pathname.split('/')[3] ?? ''
+  // Exactly /api/image/<token>: extra segments would otherwise alias the same image under many URLs.
+  const segments = new URL(request.url).pathname.split('/')
+  const token = segments.length === 4 ? segments[3] ?? '' : ''
   if (!isToken(token)) return error('not_found')
 
   // 3. Cache API check (before ensureSchema; cache hit skips DB entirely)

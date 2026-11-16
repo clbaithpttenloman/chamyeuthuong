@@ -716,6 +716,17 @@ describe('GET /api/image/:token — public image', () => {
     expect(state.ddl).toBe(0)
   })
 
+  it('extra path segments after a valid-shaped token → 404 with zero DB statements', async () => {
+    const { db: freshDb, state } = testDb()
+    const r = await handlePublicImage(
+      new Request('https://x/api/image/abcdefghijklmnop/extra', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(freshDb),
+    )
+    expect(r.status).toBe(404)
+    expect(state.prepares).toBe(0)
+    expect(state.ddl).toBe(0)
+  })
+
   it('valid token with matching image → byte-exact round trip', async () => {
     const original = makeJPEG(10, 10)
     const b64 = Buffer.from(original).toString('base64')
