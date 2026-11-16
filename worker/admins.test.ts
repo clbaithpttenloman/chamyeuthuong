@@ -5,7 +5,7 @@
  * Routes:   GET  /api/admin/admins          → list
  *           POST /api/admin/admins           → add
  *           DELETE /api/admin/admins/:id     → remove
- * Auth is handled upstream by requireAdmin; callerEmail is the verified caller.
+ * Auth is handled upstream by requireAdmin; callerEmail is the authenticated caller.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { handleAdmins } from './admins.ts'

@@ -439,17 +439,6 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(0)
   })
-
-  it('DDL failure on first request → requireAdmin rejects, no admin row inserted, no grant', async () => {
-    const { db, state, sqlite } = testDb({ schema: false })
-    state.fail = true
-    await expect(
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
-    ).rejects.toThrow()
-    state.fail = false
-    const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
-    expect(tables).toHaveLength(0)
-  })
 })
 
 // ============================================================

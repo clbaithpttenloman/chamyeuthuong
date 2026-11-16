@@ -39,6 +39,26 @@ function emptyDraft(t?: TeacherRow): EditDraft {
   }
 }
 
+/**
+ * Client-side email format check that mirrors the server's normalizeEmail rules.
+ * Rejects non-ASCII, requires at least two domain labels, and validates label structure.
+ */
+function isValidEmailFormat(raw: string): boolean {
+  const trimmed = raw.trim()
+  // ASCII only (before toLowerCase so Kelvin sign U+212A is caught)
+  if (!/^[\x00-\x7F]*$/.test(trimmed)) return false
+  const email = trimmed.toLowerCase()
+  if (!email || email.length > 254) return false
+  const atIdx = email.indexOf('@')
+  if (atIdx <= 0 || atIdx !== email.lastIndexOf('@')) return false
+  const local = email.slice(0, atIdx)
+  const domain = email.slice(atIdx + 1)
+  if (!/^[a-z0-9._%+\-]+$/.test(local)) return false
+  const labels = domain.split('.')
+  if (labels.length < 2) return false
+  return labels.every((l) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(l))
+}
+
 // ── Email input form ──────────────────────────────────────────────────────────
 
 function EmailInputForm({
@@ -72,7 +92,6 @@ function EmailInputForm({
             onChange={(e) => setEmail(e.target.value)}
             maxLength={254}
             required
-            // eslint-disable-next-line jsx-a11y/no-autofocus
             autoFocus
           />
         </label>
@@ -235,9 +254,11 @@ export default function Admin() {
     () => getAdminEmail()
   )
   const [emailError, setEmailError] = useState<string | null>(null)
-
+  // verified: true only after the first listTeachers() call succeeds;
+  // checking: true while that first call is in-flight.
+  const [verified, setVerified] = useState(false)
+  const [checking, setChecking] = useState(false)
   const [teachers, setTeachers] = useState<TeacherRow[]>([])
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [editTeacher, setEditTeacher] = useState<TeacherRow | null>(null)
@@ -258,6 +279,8 @@ export default function Admin() {
       if (e.status === 401) {
         // api.ts already cleared sessionStorage via clearAdminEmail(); sync local state
         setAdminEmailState(null)
+        setVerified(false)
+        setChecking(false)
         setEmailError('Email này chưa có quyền quản trị')
         setTeachers([])
         setAdmins([])
@@ -271,21 +294,7 @@ export default function Admin() {
     return false
   }, [])
 
-  // ── Data loaders ─────────────────────────────────────────────────────────
-  const loadTeachers = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      setTeachers(await listTeachers())
-    } catch (e) {
-      if (!handleAccessError(e)) {
-        setError(e instanceof Error ? e.message : 'Lỗi không xác định')
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [handleAccessError])
-
+  // ── Data loaders (used for explicit refreshes after verification) ─────────
   const loadAdmins = useCallback(async () => {
     setAdminsLoading(true)
     try {
@@ -299,18 +308,44 @@ export default function Admin() {
     }
   }, [handleAccessError])
 
-  // Load teachers and admins once email is set
+  // ── Verification effect ───────────────────────────────────────────────────
+  // When an email is set (from the form or from sessionStorage on mount), confirm it
+  // is accepted by the API before showing the admin shell. The shell is only shown
+  // after the first listTeachers() call succeeds (verified = true).
   useEffect(() => {
-    if (adminEmail) {
-      void loadTeachers()
-      void loadAdmins()
-    }
-  }, [adminEmail, loadTeachers, loadAdmins])
+    if (!adminEmail || verified) return
+    let cancelled = false
+    setChecking(true)
+    setEmailError(null)
+    listTeachers()
+      .then((ts) => {
+        if (cancelled) return
+        setTeachers(ts)
+        setVerified(true)
+        void loadAdmins()
+      })
+      .catch((e) => {
+        if (cancelled) return
+        clearAdminEmail()
+        setAdminEmailState(null)
+        if (e instanceof ApiError && e.status === 401) {
+          setEmailError('Email này chưa có quyền quản trị')
+        } else {
+          setEmailError(e instanceof Error ? e.message : 'Lỗi kết nối, thử lại')
+        }
+      })
+      .finally(() => { if (!cancelled) setChecking(false) })
+    return () => { cancelled = true }
+  }, [adminEmail, verified, loadAdmins])
 
   // ── Email form submit ────────────────────────────────────────────────────
   function handleEmailSubmit(email: string) {
+    if (!isValidEmailFormat(email)) {
+      setEmailError('Email không hợp lệ')
+      return
+    }
     setAdminEmail(email)       // persist to sessionStorage
-    setAdminEmailState(email)  // update React state → triggers load effect
+    setAdminEmailState(email)  // update React state → triggers verification effect
     setEmailError(null)
   }
 
@@ -318,6 +353,8 @@ export default function Admin() {
   function handleSignOut() {
     clearAdminEmail()
     setAdminEmailState(null)
+    setVerified(false)
+    setChecking(false)
     setEmailError(null)
     setTeachers([])
     setAdmins([])
@@ -474,11 +511,18 @@ export default function Admin() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  if (!adminEmail) {
+  if (!adminEmail || !verified) {
+    if (checking) {
+      return (
+        <section className="admin-signin">
+          <p>Đang kiểm tra…</p>
+        </section>
+      )
+    }
     return <EmailInputForm error={emailError} onSubmit={handleEmailSubmit} />
   }
 
-  // Email is set → show admin interface
+  // Email accepted by API → show admin interface
   return (
     <section className="admin-page">
       <div className="admin-header">
@@ -503,9 +547,7 @@ export default function Admin() {
         />
       )}
 
-      {loading && <p className="admin-loading">Đang tải...</p>}
-
-      {!loading && !adding && teachers.length === 0 && (
+      {!adding && teachers.length === 0 && (
         <p className="admin-empty">Chưa có giáo viên nào. Nhấn &ldquo;+ Thêm giáo viên&rdquo; để bắt đầu.</p>
       )}
 

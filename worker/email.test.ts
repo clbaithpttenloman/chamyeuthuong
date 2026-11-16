@@ -1,8 +1,6 @@
 // @vitest-environment node
 /**
  * Unit tests for normalizeEmail (worker/email.ts).
- * This file imports from ./email.ts which does not exist in Group 1 → all tests fail with an
- * import error.  They pass once Group 2 creates the file.
  */
 import { describe, it, expect } from 'vitest'
 import { normalizeEmail } from './email.ts'
@@ -123,5 +121,49 @@ describe('normalizeEmail — valid emails', () => {
   it('already-normalized email is returned unchanged', () => {
     const e = 'user@example.org'
     expect(normalizeEmail(e)).toBe(e)
+  })
+})
+
+// ---- ASCII check must happen before lower-casing ----
+
+describe('normalizeEmail — Kelvin sign U+212A (ASCII before lowercase)', () => {
+  it('Kelvin sign U+212A before @ → null (non-ASCII even though toLowerCase gives k)', () => {
+    expect(normalizeEmail('\u212A@example.com')).toBeNull()
+  })
+
+  it('Kelvin sign U+212A with surrounding whitespace → null', () => {
+    expect(normalizeEmail('  \u212A@example.com  ')).toBeNull()
+  })
+})
+
+// ---- Domain label validation ----
+
+describe('normalizeEmail — domain label validation', () => {
+  it('a@b..com (consecutive dots → empty label) → null', () => {
+    expect(normalizeEmail('a@b..com')).toBeNull()
+  })
+
+  it('a@.b.com (domain starts with dot → empty first label) → null', () => {
+    expect(normalizeEmail('a@.b.com')).toBeNull()
+  })
+
+  it('a@x.- (TLD is a bare dash) → null', () => {
+    expect(normalizeEmail('a@x.-')).toBeNull()
+  })
+
+  it('a@-x.com (domain label starts with dash) → null', () => {
+    expect(normalizeEmail('a@-x.com')).toBeNull()
+  })
+
+  it('a@x.com- (TLD ends with dash) → null', () => {
+    expect(normalizeEmail('a@x.com-')).toBeNull()
+  })
+
+  it('normal multi-label domain still accepted', () => {
+    expect(normalizeEmail('a@sub.example.com')).toBe('a@sub.example.com')
+  })
+
+  it('valid two-label domain still accepted', () => {
+    expect(normalizeEmail('x@foo.io')).toBe('x@foo.io')
   })
 })

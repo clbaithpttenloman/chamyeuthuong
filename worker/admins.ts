@@ -79,7 +79,7 @@ async function removeAdmin(env: Pick<Env, 'DB'>, id: number): Promise<Response> 
 
 /**
  * Handles all /api/admin/admins* requests.
- * Auth has already been verified by requireAdmin upstream; callerEmail is the verified identity.
+ * Auth has already been checked by requireAdmin upstream; callerEmail is the authenticated identity.
  *
  * Routes:
  *   GET    /api/admin/admins          → list admins
