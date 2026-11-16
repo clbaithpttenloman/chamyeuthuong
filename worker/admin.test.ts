@@ -1,6 +1,5 @@
 // @vitest-environment node
-// vi.mock is hoisted before imports; it replaces ./token.ts for this file so admin.ts
-// can import newToken without the real file existing, and so we can control token values.
+// vi.mock is hoisted before imports; it replaces ./token.ts so we can control token values in tests.
 import { vi, describe, it, expect, beforeEach } from 'vitest'
 
 vi.mock('./token.ts', () => ({
@@ -121,6 +120,18 @@ describe('POST /api/admin/teachers', () => {
     expect(r.status).toBe(400)
   })
 
+  it('null body → 400 bad_request', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', null), makeEnv(db))
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_request' })
+  })
+
+  it('array body → 400 bad_request', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', []), makeEnv(db))
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_request' })
+  })
+
   it('body > 4 KB without Content-Length is rejected with 413', async () => {
     // Stream 5 KB so there is no Content-Length header
     const stream = new ReadableStream({
@@ -175,7 +186,7 @@ describe('POST /api/admin/teachers', () => {
 
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Unlucky' }), makeEnv(db))
     expect(r.status).toBe(503)
-    expect((await r.json() as { error: string }).error).toBe('unavailable')
+    expect(await r.json()).toEqual({ error: 'unavailable' })
   })
 })
 
@@ -256,12 +267,36 @@ describe('PUT /api/admin/teachers/:id', () => {
       expect(r.status, `expected 400 for id="${bad}"`).toBe(400)
     }
   })
+
+  it('null body → 400 bad_request', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, null), makeEnv(db))
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_request' })
+  })
+
+  it('array body → 400 bad_request', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, []), makeEnv(db))
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_request' })
+  })
+
+  it('publish with empty (trimmed) message → 400 bad_request', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: '   ', status: 'published' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect(await r.json()).toEqual({ error: 'bad_request' })
+  })
 })
 
 // ---- Rotate token ----
 
 describe('POST /api/admin/teachers/:id/rotate', () => {
-  it('issues a new token; the old token is no longer valid for /api/card/:token', async () => {
+  it('replaces token; old token no longer exists in DB', async () => {
     const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Rotate Me' }), makeEnv(db))).json() as TeacherRow
     // Publish so the card is accessible
     await handleAdmin(
@@ -387,6 +422,6 @@ describe('worker routing', () => {
     const r = await worker.fetch(adminReq('GET', '/api/admin/teachers'), broken)
     expect(r.status).toBe(503)
     expect(r.headers.get('Cache-Control')).toBe('no-store')
-    expect((await r.json() as { error: string }).error).toBe('unavailable')
+    expect(await r.json()).toEqual({ error: 'unavailable' })
   })
 })

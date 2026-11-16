@@ -13,6 +13,11 @@ type TeacherRow = {
   status: string
 }
 
+/** Reusable SELECT prefix for all teacher+card joins. */
+const TEACHER_SELECT =
+  'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status ' +
+  'FROM teacher t JOIN card c ON c.teacher_id = t.id'
+
 /** Validates `:id` path segment: 1–9 digits, value ≥ 1. */
 function parseId(s: string): number | null {
   if (!/^\d{1,9}$/.test(s)) return null
@@ -23,10 +28,7 @@ function parseId(s: string): number | null {
 /** Fetches a teacher + card row joined by id. */
 async function fetchTeacher(db: Env['DB'], id: number): Promise<TeacherRow | null> {
   return db
-    .prepare(
-      'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status ' +
-        'FROM teacher t JOIN card c ON c.teacher_id = t.id WHERE t.id = ?',
-    )
+    .prepare(`${TEACHER_SELECT} WHERE t.id = ?`)
     .bind(id)
     .first<TeacherRow>()
 }
@@ -35,8 +37,7 @@ async function fetchTeacher(db: Env['DB'], id: number): Promise<TeacherRow | nul
 
 async function listTeachers(env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(
-    'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status ' +
-      'FROM teacher t JOIN card c ON c.teacher_id = t.id ORDER BY t.id',
+    `${TEACHER_SELECT} ORDER BY t.id`,
   ).all<TeacherRow>()
   return json(results)
 }
@@ -64,10 +65,7 @@ async function createTeacher(request: Request, env: Env): Promise<Response> {
       env.DB.prepare("INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), '', 'draft', ?)").bind(now),
     ])
 
-    const row = await env.DB.prepare(
-      'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status ' +
-        'FROM teacher t JOIN card c ON c.teacher_id = t.id WHERE t.token = ?',
-    )
+    const row = await env.DB.prepare(`${TEACHER_SELECT} WHERE t.token = ?`)
       .bind(tok)
       .first<TeacherRow>()
     return json(row)
@@ -91,6 +89,7 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   if (subject.length > 80) throw new HttpError('bad_request')
   if (message.length > 600) throw new HttpError('bad_request')
   if (status !== 'draft' && status !== 'published') throw new HttpError('bad_request')
+  if (status === 'published' && message.length === 0) throw new HttpError('bad_request')
 
   const now = new Date().toISOString()
   const results = await env.DB.batch([
@@ -135,7 +134,8 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
   const deny = await requireAdmin(request, env)
   if (deny) return deny
 
-  const { pathname, method } = Object.assign(new URL(request.url), { method: request.method })
+  const { pathname } = new URL(request.url)
+  const { method } = request
   const parts = pathname.split('/').filter(Boolean)
   // ['api', 'admin', 'teachers']             — list / create
   // ['api', 'admin', 'teachers', ':id']      — update / delete

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { type CardData, getCard } from '../api'
+import { type CardData, ApiError, getCard } from '../api'
 import site from '../content/site.json'
 
 type State =
   | { status: 'loading' }
   | { status: 'found'; card: CardData }
   | { status: 'notfound' }
+  | { status: 'error' }
 
 export default function CardPage() {
   const { id } = useParams<{ id: string }>()
@@ -20,8 +21,8 @@ export default function CardPage() {
     setState({ status: 'loading' })
     void getCard(id).then((card) => {
       setState(card ? { status: 'found', card } : { status: 'notfound' })
-    }).catch(() => {
-      setState({ status: 'notfound' })
+    }).catch((e) => {
+      setState(e instanceof ApiError ? { status: 'error' } : { status: 'notfound' })
     })
   }, [id])
 
@@ -31,6 +32,10 @@ export default function CardPage() {
 
   if (state.status === 'notfound') {
     return <p className="notfound">Không tìm thấy thiệp. Hãy quét lại mã QR.</p>
+  }
+
+  if (state.status === 'error') {
+    return <p className="notfound">Có lỗi xảy ra. Vui lòng thử lại sau.</p>
   }
 
   const { card } = state

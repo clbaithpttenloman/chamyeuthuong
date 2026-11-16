@@ -66,8 +66,11 @@ export async function readJson<T>(request: Request, limit: number): Promise<T> {
   }
 
   try {
-    return JSON.parse(new TextDecoder().decode(all)) as T
-  } catch {
+    const parsed = JSON.parse(new TextDecoder().decode(all))
+    if (parsed === null || Array.isArray(parsed)) throw new HttpError('bad_request')
+    return parsed as T
+  } catch (e) {
+    if (e instanceof HttpError) throw e
     throw new HttpError('bad_request')
   }
 }

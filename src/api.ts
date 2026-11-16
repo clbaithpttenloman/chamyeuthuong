@@ -10,7 +10,6 @@ export type TeacherRow = {
   message: string
   status: 'draft' | 'published'
   created_at: string
-  updated_at?: string
 }
 
 export type CardData = {

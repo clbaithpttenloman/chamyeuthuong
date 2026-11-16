@@ -37,11 +37,12 @@ function emptyDraft(t?: TeacherRow): EditDraft {
 
 // ── Login form ──────────────────────────────────────────────────────────────
 
-function LoginForm({ onLogin }: { onLogin: (tok: string) => void }) {
+function LoginForm({ onLogin, wrongToken }: { onLogin: (tok: string) => void; wrongToken?: boolean }) {
   const [input, setInput] = useState('')
   return (
     <section className="admin-login">
       <h1>Quản trị</h1>
+      {wrongToken && <p className="admin-error" role="alert">Token sai. Vui lòng thử lại.</p>}
       <form
         onSubmit={(e) => {
           e.preventDefault()
@@ -215,6 +216,7 @@ export default function Admin() {
   const [teachers, setTeachers] = useState<TeacherRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [wrongToken, setWrongToken] = useState(false)
   const [adding, setAdding] = useState(false)
   const [editTeacher, setEditTeacher] = useState<TeacherRow | null>(null)
   const [qrData, setQrData] = useState<{ teacher: TeacherRow; dataUrl: string } | null>(null)
@@ -224,6 +226,7 @@ export default function Admin() {
   const handle401 = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError && e.status === 401) {
       setAuthToken(null)
+      setWrongToken(true)
       return true
     }
     return false
@@ -251,6 +254,7 @@ export default function Admin() {
   function handleLogin(tok: string) {
     setToken(tok)
     setAuthToken(tok)
+    setWrongToken(false)
   }
 
   function handleLogout() {
@@ -301,7 +305,13 @@ export default function Admin() {
       setTeachers((ts) => ts.map((x) => (x.id === updated.id ? updated : x)))
       if (editTeacher?.id === updated.id) setEditTeacher(updated)
     } catch (e) {
-      if (!handle401(e)) setError(e instanceof Error ? e.message : 'Lỗi cập nhật trạng thái')
+      if (!handle401(e)) {
+        if (e instanceof ApiError && e.status === 400 && t.status === 'draft') {
+          setError(`Không thể phát hành "${t.name}": lời chúc không được để trống`)
+        } else {
+          setError(e instanceof Error ? e.message : 'Lỗi cập nhật trạng thái')
+        }
+      }
     }
   }
 
@@ -336,19 +346,27 @@ export default function Admin() {
   }
 
   async function handleShowQr(t: TeacherRow) {
-    const url = `${location.origin}/t/${t.token}`
-    const dataUrl = await QRCode.toDataURL(url, { margin: 2, width: 256 })
-    setQrData({ teacher: t, dataUrl })
-    setEditTeacher(null)
+    try {
+      const url = `${location.origin}/t/${t.token}`
+      const dataUrl = await QRCode.toDataURL(url, { margin: 2, width: 256 })
+      setQrData({ teacher: t, dataUrl })
+      setEditTeacher(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Lỗi tạo mã QR')
+    }
   }
 
   async function handleCopyUrl(t: TeacherRow) {
-    await navigator.clipboard.writeText(`${location.origin}/t/${t.token}`)
-    setCopiedId(t.id)
-    setTimeout(() => setCopiedId((x) => (x === t.id ? null : x)), 1500)
+    try {
+      await navigator.clipboard.writeText(`${location.origin}/t/${t.token}`)
+      setCopiedId(t.id)
+      setTimeout(() => setCopiedId((x) => (x === t.id ? null : x)), 1500)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Lỗi sao chép URL')
+    }
   }
 
-  if (!authToken) return <LoginForm onLogin={handleLogin} />
+  if (!authToken) return <LoginForm onLogin={handleLogin} wrongToken={wrongToken} />
 
   return (
     <section className="admin-page">
