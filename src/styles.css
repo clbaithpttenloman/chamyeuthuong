@@ -1,0 +1,9 @@
+body { margin: 0; font-family: system-ui, sans-serif; color: #1f2937; background: #fff1f2; line-height: 1.6; }
+.bar { display: flex; justify-content: space-between; padding: 1rem 1.5rem; background: #e11d48; }
+.bar a { color: #fff; text-decoration: none; font-weight: 600; }
+main { max-width: 42rem; margin: 2rem auto; padding: 0 1.5rem; }
+footer { text-align: center; padding: 2rem; color: #6b7280; }
+.tag { color: #e11d48; font-weight: 600; }
+.card { background: #fff; padding: 2rem; border-radius: 1rem; box-shadow: 0 4px 20px rgb(0 0 0 / 0.08); }
+.card .msg { font-size: 1.2rem; }
+.card .from { text-align: right; font-style: italic; }
