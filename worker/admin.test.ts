@@ -584,7 +584,10 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
     const r = await safeHandleAdmin(adminReq('GET', '/api/admin/teachers'), env)
     expect(r.status).toBe(503)
     expect(await r.json()).toEqual({ error: 'unavailable' })
-    // Cannot re-query DB while state.fail — no_row is implied (bootstrap INSERT never ran).
+    // Reset fail so we can verify no row was inserted (bootstrap INSERT never ran).
+    state.fail = false
+    const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
+    expect(count?.c).toBe(0)
   })
 
   it('missing admin table (migration 0002 not applied) → 503 unavailable, no grant', async () => {

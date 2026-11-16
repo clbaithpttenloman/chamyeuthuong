@@ -721,24 +721,20 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     expect(state.prepares).toBe(2)
   })
 
-  it('DB error during bootstrap → 503 and no row inserted', async () => {
+  it('DB error during bootstrap → requireAdmin rejects, no row inserted', async () => {
     const { db, state } = testDb()
     state.fail = true
     const jwt = await validJwt()
-    // Expect the handler to either return 503 or throw; index.ts catches throws as 503
-    let r: unknown
-    try {
-      r = await requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: '1' }), { keys: await localJwks() })
-    } catch {
-      r = null
-    }
-    // Either returns a 503 Response or throws — both are valid fail-closed behavior
-    if (r !== null) {
-      expect((r as Response).status).toBe(503)
-    }
+    await expect(
+      requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: '1' }), { keys: await localJwks() })
+    ).rejects.toThrow()
+    // Reset fail so we can verify no row was inserted.
+    state.fail = false
+    const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
+    expect(count?.c).toBe(0)
   })
 
-  it('missing admin table (0002 not applied) → 503 and no grant', async () => {
+  it('missing admin table (0002 not applied) → requireAdmin rejects, no grant', async () => {
     // Create a DB with ONLY 0001 (no admin table)
     const { DatabaseSync } = await import('node:sqlite')
     const { readFileSync } = await import('node:fs')
@@ -761,15 +757,9 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
       batch: async (stmts: Array<{ run(): Promise<unknown> }>) => Promise.all(stmts.map((s) => s.run())),
     }
     const jwt = await validJwt()
-    let r: unknown
-    try {
-      r = await requireAdmin(makeReq(jwt, { xrw: true }), { ...accessEnv({ allowFirstClaim: '1' }), DB: noTableDb as never }, { keys: await localJwks() })
-    } catch {
-      r = null
-    }
-    if (r !== null) {
-      expect((r as Response).status).toBe(503)
-    }
+    await expect(
+      requireAdmin(makeReq(jwt, { xrw: true }), { ...accessEnv({ allowFirstClaim: '1' }), DB: noTableDb as never }, { keys: await localJwks() })
+    ).rejects.toThrow()
   })
 })
 
