@@ -4,19 +4,16 @@
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
   // Admin auth uses a typed email sent as X-Admin-Email on every /api/admin/* request.
-  // The email is checked against the D1 admin list; identity is not cryptographically verified (accepted risk R1).
-  // See docs/runbooks/admin.md for the SSO restore procedure and first-deploy instructions.
+  // The email is checked against the D1 admin list; identity is not verified (accepted risk R1, see docs/runbooks/admin.md).
   //
   // First-admin bootstrap:
   //   BOOTSTRAP_EMAIL (in "vars" or as a secret) lets only that exact address claim an EMPTY admin table.
-  //   It may stay set permanently; it is inert once the table is non-empty.
-  //   Example: "vars": { "BOOTSTRAP_EMAIL": "admin@example.com" }
+  //   It may stay set; it is inert once the table is non-empty.
   //
-  //   ALLOW_FIRST_CLAIM=1 lets ANY user claim the first admin slot.
-  //   Set it only temporarily via `wrangler secret put ALLOW_FIRST_CLAIM`, never in "vars".
-  //   Delete it after the first admin is confirmed.
+  //   ALLOW_FIRST_CLAIM=1 lets ANY email claim the first admin slot (temporary only, delete after).
+  //   Set only via `wrangler secret put`, never in "vars".
   //
-  // Local dev: add ALLOW_FIRST_CLAIM=1 or BOOTSTRAP_EMAIL to .dev.vars (never commit .dev.vars).
+  // Local dev: add to .dev.vars (never commit). See docs/runbooks/admin.md.
   //
   // The Worker runs only for /api/* (card and admin endpoints); every other path is a static asset from dist/.
   "main": "worker/index.ts",

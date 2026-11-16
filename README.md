@@ -13,7 +13,7 @@ Website gửi lời chúc cho thầy cô (Vite + React + TypeScript, Cloudflare 
 | `/` | Home — shared welcome for all teachers |
 | `/t/:token` | Card page — individual teacher's wish, fetched from the API |
 | `/ve-clb-ai` | About — club introduction and project timeline |
-| `/admin` | Admin dashboard — manage teachers and cards (requires Google Sign-In) |
+| `/admin` | Admin dashboard — manage teachers and cards (requires typed email verification) |
 
 Home and About text are in `src/content/site.json`.
 
@@ -23,8 +23,8 @@ Home and About text are in `src/content/site.json`.
 
 **Worker (`worker/`) + D1:**
 - Public API `GET /api/card/:token` — returns `{ name, subject, message }` for a published card
-- Admin API `/api/admin/*` — CRUD for teachers and cards, requires Google ID token verification (Authorization: Bearer header)
-- Rate limits: 60 requests per 60 s per IP for public cards, 30 attempts per 60 s per IP for admin (blunts brute force)
+- Admin API `/api/admin/*` — CRUD for teachers and cards, requires an admin email sent in `X-Admin-Email` header, checked against the D1 admin list
+- Rate limits: 60 requests per 60 s per IP for public cards, 30 requests per 60 s per IP for admin (blunts brute force)
 
 **Database:** Tables are created automatically on the first request via `ensureSchema` in `worker/schema.ts` (idempotent `CREATE TABLE IF NOT EXISTS`).
 ```sql
@@ -35,7 +35,7 @@ admin (id, email, created_at, created_by)
 
 Each teacher has one card. The `token` is the public QR secret (16 random chars, rotatable).
 
-Admins are stored in D1; on first deploy, the first person to log in becomes the admin (via bootstrap claim).
+Admins are stored in D1; on first deploy, the first person to type a bootstrap email becomes the admin.
 
 ## API
 
@@ -45,7 +45,7 @@ Admins are stored in D1; on first deploy, the first person to log in becomes the
 |----------|--------|------|----------|
 | `/api/card/:token` | GET | none | `{ name, subject, message }` or 404 |
 
-### Admin (requires Google ID token: Authorization: Bearer)
+### Admin (requires admin email: X-Admin-Email header)
 
 **Teachers:**
 
@@ -70,8 +70,8 @@ Admins are stored in D1; on first deploy, the first person to log in becomes the
 | Status | Code | Reason |
 |--------|------|--------|
 | 400 | `bad_request` | Invalid or missing fields |
-| 401 | `unauthorized` | Not authenticated or not an admin |
-| 403 | `forbidden` | Cross-site or missing `X-Requested-With` header |
+| 401 | `unauthorized` | Missing, invalid, or unknown email |
+| 403 | `forbidden` | Cross-site or missing `X-Requested-With: fetch` header |
 | 404 | `not_found` | Teacher/admin ID not found |
 | 409 | `conflict` | Duplicate email (add admin) or last admin (remove admin) |
 | 414 | `too_long` | Request body too large |
@@ -81,7 +81,7 @@ Admins are stored in D1; on first deploy, the first person to log in becomes the
 
 ### Admin page
 
-Access `/admin` in the browser after signing in with Google. Once authenticated, the dashboard shows:
+Access `/admin` in the browser. A form asks for the admin's email. Once typed and verified by the API, the dashboard shows:
 
 **Teachers:**
 
@@ -97,10 +97,10 @@ Access `/admin` in the browser after signing in with Google. Once authenticated,
 **Admins:**
 
 - **List admins**: shows all admins, their email, when they joined, and who added them
-- **Add admin**: enter an email address and click **Thêm** (add); email is normalized (trimmed, lowercased); new admin appears immediately
+- **Add admin**: enter an email address and click **Thêm** (add); email is normalised (trimmed, lowercased); new admin appears immediately
 - **Remove admin**: click **Xóa** next to an admin name to remove them (blocked for the last admin)
 
-To sign out, click the "Đăng xuất" button.
+To change email or sign out, click **Đổi email** — the stored email is cleared and the form appears again.
 
 ## Local development
 
@@ -112,40 +112,28 @@ npm install
 
 Create `.dev.vars` (gitignored):
 ```
-GOOGLE_CLIENT_ID=<generated-by-dev-google>
-AUTH_DEV_MODE=1
-AUTH_DEV_JWKS_URL=http://127.0.0.1:8788/certs
-ALLOW_FIRST_CLAIM=1
+BOOTSTRAP_EMAIL=you@example.com
 ```
 
-Run the Google Sign-In mock in one terminal:
+Run the Worker in one terminal:
 ```bash
-# Terminal 0: local Google JWKS generator + token signer
-npm run dev:google
-```
-
-This prints the values to copy into `.dev.vars` plus a `DEV_GOOGLE_TOKEN`. The first local request with a valid token becomes the admin (ALLOW_FIRST_CLAIM=1). Copy the `.dev.vars` lines, then open a new terminal.
-
-Then run both processes in separate terminals:
-
-```bash
-# Terminal 1: start the Worker
 npm run worker:dev
 ```
 
 The Worker listens on `http://localhost:8787`. Tables are created automatically on the first request.
 
+Run Vite in another terminal:
 ```bash
-# Terminal 2: start Vite (proxies /api to localhost:8787)
 npm run dev
 ```
 
-Visit `http://localhost:5173`. The real Google Sign-In button works if you've added `http://localhost:5173` as an authorized origin in the OAuth client settings and set `VITE_GOOGLE_CLIENT_ID` in a `.env` file (same as the `GOOGLE_CLIENT_ID` in `.dev.vars`).
+Visit `http://localhost:5173/admin` and type the email from `.dev.vars`. The first email to log in becomes the admin.
 
-For token-free curl smoke tests, use the `DEV_GOOGLE_TOKEN` printed by `npm run dev:google`:
+For curl smoke tests:
 ```bash
-export DEV_GOOGLE_TOKEN=<value>
-curl -H "Authorization: Bearer $DEV_GOOGLE_TOKEN" http://localhost:8787/api/admin/teachers
+curl -H "X-Admin-Email: you@example.com" \
+     -H "X-Requested-With: fetch" \
+     http://localhost:8787/api/admin/teachers
 ```
 
 ### Testing
