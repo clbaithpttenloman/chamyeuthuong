@@ -4,16 +4,38 @@
   "organization": "CLB AI - THPT Tên Lơ Man",
   "date": "20/11/2026",
   "home": {
+    "kicker": "Ngày Nhà giáo Việt Nam 20/11/2026",
     "heading": "Gửi thầy cô muôn vàn lời tri ân",
-    "body": "Nhân ngày Nhà giáo Việt Nam 20/11, các em học sinh CLB AI xin gửi đến toàn thể thầy cô lời chúc chân thành nhất."
+    "body": "Các em học sinh CLB AI xin gửi đến toàn thể thầy cô lời chúc chân thành nhất. Công nghệ giúp chúng em tìm ra con chữ, còn tình cảm là điều làm nên ý nghĩa.",
+    "wishesHeading": "Lời chúc từ chúng em",
+    "wishes": [
+      { "title": "Sức khỏe", "text": "Chúc thầy cô luôn dồi dào sức khỏe để tiếp tục dẫn lối cho nhiều thế hệ học trò." },
+      { "title": "Hạnh phúc", "text": "Chúc thầy cô có thật nhiều niềm vui trong công việc và trong gia đình." },
+      { "title": "Biết ơn", "text": "Cảm ơn thầy cô đã kiên nhẫn giảng bài, lắng nghe và tin tưởng chúng em." }
+    ],
+    "qrNote": "Mỗi thầy cô có một tấm thiệp riêng. Hãy quét mã QR đi kèm để mở thiệp của mình."
   },
   "about": {
     "heading": "CLB AI - THPT Tên Lơ Man",
     "intro": "Chúng em là những học sinh yêu thích trí tuệ nhân tạo. Dự án này là món quà dành tặng thầy cô.",
+    "stats": [
+      { "value": "00", "label": "thành viên" },
+      { "value": "00", "label": "thầy cô nhận thiệp" },
+      { "value": "00", "label": "tuần thực hiện" }
+    ],
+    "stepsHeading": "Quá trình thực hiện",
     "steps": [
-      { "title": "Ý tưởng", "text": "Dùng AI để viết lời chúc, để tình cảm của chúng em làm nên ý nghĩa." },
-      { "title": "Thực hiện", "text": "Thiết kế website, soạn lời chúc cho từng thầy cô, tạo mã QR riêng." },
-      { "title": "Trao gửi", "text": "Mỗi thầy cô nhận một thiệp riêng qua mã QR vào ngày 20/11/2026." }
+      { "when": "Tuần 1", "title": "Ý tưởng", "text": "Dùng AI để viết lời chúc, để tình cảm của chúng em làm nên ý nghĩa." },
+      { "when": "Tuần 2", "title": "Thu thập", "text": "Hỏi thông tin và kỷ niệm về từng thầy cô để lời chúc thật riêng." },
+      { "when": "Tuần 3", "title": "Thực hiện", "text": "Thiết kế website, soạn lời chúc, chỉnh lại bằng tay, tạo mã QR riêng." },
+      { "when": "20/11", "title": "Trao gửi", "text": "Mỗi thầy cô nhận một thiệp riêng qua mã QR." }
+    ],
+    "membersHeading": "Thành viên CLB",
+    "members": [
+      { "name": "Họ và tên", "role": "Chủ nhiệm CLB" },
+      { "name": "Họ và tên", "role": "Thiết kế" },
+      { "name": "Họ và tên", "role": "Lập trình" },
+      { "name": "Họ và tên", "role": "Nội dung" }
     ]
   }
 }
