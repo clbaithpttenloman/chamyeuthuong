@@ -36,7 +36,7 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
     ASSETS: { fetch: async () => new Response('asset') },
     ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
     ACCESS_AUD: TEST_AUD,
-    // ADMIN_EMAILS removed — auth is now DB-backed (plan § Decision: DB-backed admin list)
+    // ASSETS, CARD_IP_LIMIT, etc. are present to satisfy the full Env type.
     ACCESS_DEV_MODE: undefined as string | undefined,
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
@@ -71,8 +71,7 @@ beforeEach(async () => {
   ;({ db } = testDb())
   tokenSeq = 0
   vi.mocked(newToken).mockImplementation(() => `gn${String(tokenSeq++).padStart(14, '0')}`)
-  // Seed the JWT fixture email as admin so requireAdmin passes after DB-backed auth lands.
-  // Until Group 2 lands, requireAdmin still reads ADMIN_EMAILS (which is now gone) → returns 401.
+  // Seed the JWT fixture email as admin so requireAdmin passes.
   const now = new Date().toISOString()
   await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
     .bind(TEST_EMAIL, now, 'test-seed').run()
@@ -555,5 +554,112 @@ describe('admin admins routing — auth required (via handleAdmin)', () => {
       deps,
     )
     expect(r.status).toBe(401)
+  })
+})
+
+// ---- Fix Group 1: W2 — handler-level 503 for DB failures (via handleAdmin + safety wrapper) ----
+//
+// worker.fetch cannot inject `deps` for JWT verification, so these tests use handleAdmin
+// directly with deps — matching how index.ts wraps it (try/catch → 503).
+
+/** Replicates the index.ts error boundary: propagated throws become 503 {error:'unavailable'}. */
+async function safeHandleAdmin(req: Request, env: ReturnType<typeof makeEnv>): Promise<Response> {
+  try {
+    return await handleAdmin(req, env, deps)
+  } catch {
+    return new Response(JSON.stringify({ error: 'unavailable' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    })
+  }
+}
+
+describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors index.ts)', () => {
+  it('DB state.fail on first request → 503 unavailable, no row inserted, no grant', async () => {
+    const { db, state } = testDb()
+    // state.fail = true means first DB execute (combined SELECT in requireAdmin) will throw.
+    // JWT verification succeeds via deps (local JWKS), so the DB call is reached.
+    state.fail = true
+    const env = { ...makeEnv(db), ALLOW_FIRST_CLAIM: '1' as string | undefined }
+    const r = await safeHandleAdmin(adminReq('GET', '/api/admin/teachers'), env)
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'unavailable' })
+    // Cannot re-query DB while state.fail — no_row is implied (bootstrap INSERT never ran).
+  })
+
+  it('missing admin table (migration 0002 not applied) → 503 unavailable, no grant', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const sqlite = new DatabaseSync(':memory:')
+    const sql0001 = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../migrations/0001_init.sql'),
+      'utf-8',
+    )
+    sqlite.exec(sql0001)
+    // D1-compatible shim — only migration 0001; no admin table present.
+    const noTableDb = {
+      prepare: (sql: string) => ({
+        bind: (..._v: unknown[]) => noTableDb.prepare(sql),
+        run: async () => {
+          const r = sqlite.prepare(sql).run()
+          return { success: true, meta: { changes: Number(r.changes) } }
+        },
+        first: async <T>() => (sqlite.prepare(sql).get() as T | undefined) ?? null,
+        all: async <T>() => ({ results: sqlite.prepare(sql).all() as T[] }),
+      }),
+      batch: async (stmts: Array<{ run(): Promise<unknown> }>) => Promise.all(stmts.map((s) => s.run())),
+    }
+    const env = { ...makeEnv(noTableDb as never), ALLOW_FIRST_CLAIM: '1' as string | undefined }
+    const r = await safeHandleAdmin(adminReq('GET', '/api/admin/teachers', undefined, '5.6.7.8'), env)
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'unavailable' })
+  })
+})
+
+// ---- Fix Group 1: W4 — router-level /api/admin/admins* (authenticated) ----
+
+describe('admin admins routing — authenticated (via handleAdmin)', () => {
+  it('GET /api/admin/admins → 200 JSON array (lists admins after auth)', async () => {
+    const r = await handleAdmin(adminReq('GET', '/api/admin/admins'), makeEnv(db), deps)
+    expect(r.status).toBe(200)
+    const body = await r.json() as unknown[]
+    // db has TEST_EMAIL seeded in beforeEach
+    expect(Array.isArray(body)).toBe(true)
+    expect(body.length).toBe(1)
+  })
+
+  it('POST /api/admin/admins without X-Requested-With → 403 (CSRF guard)', async () => {
+    const req = new Request('https://x/api/admin/admins', {
+      method: 'POST',
+      headers: {
+        'Cf-Access-Jwt-Assertion': _validJwt,
+        'CF-Connecting-IP': '1.2.3.4',
+        'Content-Type': 'application/json',
+        // No X-Requested-With
+      },
+      body: JSON.stringify({ email: 'x@test.com' }),
+    })
+    const r = await handleAdmin(req, makeEnv(db), deps)
+    expect(r.status).toBe(403)
+  })
+
+  it('POST /api/admin/admins (authenticated) → 200 with created_by = TEST_EMAIL', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/admins', { email: 'second@example.com' }),
+      makeEnv(db),
+      deps,
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { email: string; created_by: string }
+    expect(body.email).toBe('second@example.com')
+    expect(body.created_by).toBe(TEST_EMAIL)
+  })
+
+  it('/api/admin/admins/1/x → 404 not_found (unknown sub-path)', async () => {
+    const r = await handleAdmin(adminReq('GET', '/api/admin/admins/1/x'), makeEnv(db), deps)
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
   })
 })

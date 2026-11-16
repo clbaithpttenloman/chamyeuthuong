@@ -1,6 +1,6 @@
 import { error, json, readJson, HttpError } from './http.ts'
 import { requireAdmin } from './auth.ts'
-import { handleAdmins } from './admins.ts'
+import { handleAdmins, parseId } from './admins.ts'
 import { newToken } from './token.ts'
 import type { JWTVerifyGetKey } from 'jose'
 import type { Env } from './types.ts'
@@ -19,13 +19,6 @@ type TeacherRow = {
 const TEACHER_SELECT =
   'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status ' +
   'FROM teacher t JOIN card c ON c.teacher_id = t.id'
-
-/** Validates `:id` path segment: 1–9 digits, value ≥ 1. */
-function parseId(s: string): number | null {
-  if (!/^\d{1,9}$/.test(s)) return null
-  const id = parseInt(s, 10)
-  return id >= 1 ? id : null
-}
 
 /** Fetches a teacher + card row joined by id. */
 async function fetchTeacher(db: Env['DB'], id: number): Promise<TeacherRow | null> {

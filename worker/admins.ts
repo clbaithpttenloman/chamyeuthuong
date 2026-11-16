@@ -8,8 +8,8 @@ type AdminRow = {
   created_by: string
 }
 
-/** Validates `:id` path segment: 1–9 digits, value ≥ 1. */
-function parseId(s: string): number | null {
+/** Validates `:id` path segment: 1–9 digits, value ≥ 1. Shared with admin.ts. */
+export function parseId(s: string): number | null {
   if (!/^\d{1,9}$/.test(s)) return null
   const id = parseInt(s, 10)
   return id >= 1 ? id : null
@@ -41,9 +41,9 @@ async function addAdmin(
 
   const now = new Date().toISOString()
 
-  // INSERT OR IGNORE silently skips UNIQUE violations; changes === 0 means duplicate.
+  // INSERT ... ON CONFLICT(email) DO NOTHING skips UNIQUE violations; changes === 0 means duplicate.
   const result = await env.DB
-    .prepare('INSERT OR IGNORE INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
+    .prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING')
     .bind(email, now, callerEmail)
     .run()
 
@@ -55,6 +55,7 @@ async function addAdmin(
     .prepare('SELECT id, email, created_at, created_by FROM admin WHERE email = ?')
     .bind(email)
     .first<AdminRow>()
+  if (!row) throw new HttpError('conflict')
   return json(row)
 }
 
@@ -113,7 +114,8 @@ export async function handleAdmins(
       return error('method')
     }
 
-    return error('method')
+    // Unrecognised path shape (e.g. /api/admin/admins/:id/subpath) — not found, not method error.
+    return error('not_found')
   } catch (e) {
     if (e instanceof HttpError) return error(e.code)
     throw e // unexpected — let index.ts return 503

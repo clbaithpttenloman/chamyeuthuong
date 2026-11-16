@@ -90,7 +90,7 @@ export async function validJwt(
 
 // ---- Env type and builder ----
 
-/** Env shape required by requireAdmin. ADMIN_EMAILS removed; DB-backed auth instead. */
+/** Env shape required by requireAdmin. */
 export type AccessEnv = {
   ACCESS_TEAM_DOMAIN: string
   ACCESS_AUD: string
@@ -120,7 +120,6 @@ type AccessEnvOpts = {
 
 /**
  * Build a minimal env for direct requireAdmin tests.
- * Does NOT include ADMIN_EMAILS — auth is DB-backed.
  * Does NOT include ASSETS or CARD_IP_LIMIT — add those when calling handleAdmin.
  */
 export function accessEnv(opts: AccessEnvOpts = {}): AccessEnv {

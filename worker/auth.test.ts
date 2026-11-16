@@ -855,3 +855,88 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
     expect(state.prepares).toBe(0)
   })
 })
+
+// ---- Fix Group 1: W3 — ALLOW_FIRST_CLAIM exact '1' gate (non-'1' values) ----
+
+describe('requireAdmin — ALLOW_FIRST_CLAIM non-"1" values → 401 + misconfigured', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('ALLOW_FIRST_CLAIM="0" → 401, admin: misconfigured, no row inserted', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = testDb()
+    const jwt = await validJwt()
+    const r = await requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: '0' }), { keys: await localJwks() })
+    expect((r as Response).status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
+    expect(count?.c).toBe(0)
+  })
+
+  it('ALLOW_FIRST_CLAIM="true" → 401, admin: misconfigured, no row inserted', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = testDb()
+    const jwt = await validJwt()
+    const r = await requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: 'true' }), { keys: await localJwks() })
+    expect((r as Response).status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
+    expect(count?.c).toBe(0)
+  })
+
+  it('ALLOW_FIRST_CLAIM="" → 401, admin: misconfigured, no row inserted', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { db } = testDb()
+    const jwt = await validJwt()
+    const r = await requireAdmin(makeReq(jwt, { xrw: true }), accessEnv({ db, allowFirstClaim: '' }), { keys: await localJwks() })
+    expect((r as Response).status).toBe(401)
+    expect(spy).toHaveBeenCalledWith('admin: misconfigured')
+    const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
+    expect(count?.c).toBe(0)
+  })
+})
+
+// ---- Fix Group 1: Suggestion — padded BOOTSTRAP_EMAIL ----
+
+describe('requireAdmin — BOOTSTRAP_EMAIL padding', () => {
+  it('BOOTSTRAP_EMAIL padded with spaces is trimmed and matches caller email', async () => {
+    const { db } = testDb()
+    const jwt = await validJwt()  // email = TEST_EMAIL
+    const r = await requireAdmin(
+      makeReq(jwt, { xrw: true }),
+      accessEnv({ db, bootstrapEmail: `  ${TEST_EMAIL}  ` }),
+      { keys: await localJwks() },
+    )
+    expect(r).toEqual({ email: TEST_EMAIL })
+    const row = await db.prepare('SELECT created_by FROM admin WHERE email = ?').bind(TEST_EMAIL).first<{ created_by: string }>()
+    expect(row?.created_by).toBe('bootstrap')
+  })
+
+  it('BOOTSTRAP_EMAIL padded uppercase + spaces matches caller (trim + lowercase)', async () => {
+    const { db } = testDb()
+    const jwt = await validJwt()
+    const r = await requireAdmin(
+      makeReq(jwt, { xrw: true }),
+      accessEnv({ db, bootstrapEmail: `  ${TEST_EMAIL.toUpperCase()}  ` }),
+      { keys: await localJwks() },
+    )
+    expect(r).toEqual({ email: TEST_EMAIL })
+  })
+})
+
+// ---- Fix Group 1: Suggestion — zero DB prepares for non-string / missing email ----
+
+describe('requireAdmin — zero DB prepares before email shape check', () => {
+  it('non-string email claim (number) → zero DB prepares', async () => {
+    const { db, state } = testDb()
+    const jwt = await validJwt({ email: 123 })
+    await requireAdmin(makeReq(jwt), accessEnv({ db }), { keys: await localJwks() })
+    expect(state.prepares).toBe(0)
+  })
+
+  it('missing email claim → zero DB prepares', async () => {
+    const { db, state } = testDb()
+    const jwt = await signJwt({ iss: TEST_TEAM_DOMAIN, aud: TEST_AUD })
+    await requireAdmin(makeReq(jwt), accessEnv({ db }), { keys: await localJwks() })
+    expect(state.prepares).toBe(0)
+  })
+})
