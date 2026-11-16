@@ -3,13 +3,10 @@ import QRCode from 'qrcode'
 import {
   type TeacherRow,
   ApiError,
-  clearToken,
   createTeacher,
   deleteTeacher,
-  getToken,
   listTeachers,
   rotateTeacherToken,
-  setToken,
   updateTeacher,
 } from '../api'
 
@@ -35,33 +32,14 @@ function emptyDraft(t?: TeacherRow): EditDraft {
   }
 }
 
-// ── Login form ──────────────────────────────────────────────────────────────
+// ── Access denied ────────────────────────────────────────────────────────────
 
-function LoginForm({ onLogin, wrongToken }: { onLogin: (tok: string) => void; wrongToken?: boolean }) {
-  const [input, setInput] = useState('')
+function AccessDenied() {
   return (
-    <section className="admin-login">
-      <h1>Quản trị</h1>
-      {wrongToken && <p className="admin-error" role="alert">Token sai. Vui lòng thử lại.</p>}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          const v = input.trim()
-          if (v) onLogin(v)
-        }}
-      >
-        <label htmlFor="admin-token">Mật khẩu quản trị</label>
-        <input
-          id="admin-token"
-          type="password"
-          autoComplete="current-password"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Nhập mật khẩu..."
-          required
-        />
-        <button type="submit">Đăng nhập</button>
-      </form>
+    <section className="admin-access-denied">
+      <h1>Không có quyền truy cập</h1>
+      <p>Phiên đăng nhập đã hết hạn hoặc bạn không có quyền vào trang này.</p>
+      <a href="/cdn-cgi/access/logout">Đăng xuất và đăng nhập lại</a>
     </section>
   )
 }
@@ -212,21 +190,19 @@ function QrSection({
 export default function Admin() {
   useNoIndex()
 
-  const [authToken, setAuthToken] = useState<string | null>(() => getToken())
+  const [accessDenied, setAccessDenied] = useState(false)
   const [teachers, setTeachers] = useState<TeacherRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [wrongToken, setWrongToken] = useState(false)
   const [adding, setAdding] = useState(false)
   const [editTeacher, setEditTeacher] = useState<TeacherRow | null>(null)
   const [qrData, setQrData] = useState<{ teacher: TeacherRow; dataUrl: string } | null>(null)
   const [copiedId, setCopiedId] = useState<number | null>(null)
 
-  /** Returns true if the error was 401 and the token was cleared. */
-  const handle401 = useCallback((e: unknown): boolean => {
-    if (e instanceof ApiError && e.status === 401) {
-      setAuthToken(null)
-      setWrongToken(true)
+  /** Returns true if the error was 401/403 and access-denied state was set. */
+  const handleAccessError = useCallback((e: unknown): boolean => {
+    if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+      setAccessDenied(true)
       return true
     }
     return false
@@ -238,33 +214,17 @@ export default function Admin() {
     try {
       setTeachers(await listTeachers())
     } catch (e) {
-      if (!handle401(e)) {
+      if (!handleAccessError(e)) {
         setError(e instanceof Error ? e.message : 'Lỗi không xác định')
       }
     } finally {
       setLoading(false)
     }
-  }, [handle401])
+  }, [handleAccessError])
 
   useEffect(() => {
-    if (!authToken) return
     void loadTeachers()
-  }, [authToken, loadTeachers])
-
-  function handleLogin(tok: string) {
-    setToken(tok)
-    setAuthToken(tok)
-    setWrongToken(false)
-  }
-
-  function handleLogout() {
-    clearToken()
-    setAuthToken(null)
-    setTeachers([])
-    setAdding(false)
-    setEditTeacher(null)
-    setQrData(null)
-  }
+  }, [loadTeachers])
 
   async function handleAdd(name: string, subject: string) {
     setError(null)
@@ -273,7 +233,7 @@ export default function Admin() {
       setTeachers((ts) => [...ts, created])
       setAdding(false)
     } catch (e) {
-      if (!handle401(e)) setError(e instanceof Error ? e.message : 'Lỗi thêm giáo viên')
+      if (!handleAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi thêm giáo viên')
     }
   }
 
@@ -289,7 +249,7 @@ export default function Admin() {
       }
       setEditTeacher(null)
     } catch (e) {
-      if (!handle401(e)) setError(e instanceof Error ? e.message : 'Lỗi cập nhật')
+      if (!handleAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi cập nhật')
     }
   }
 
@@ -305,7 +265,7 @@ export default function Admin() {
       setTeachers((ts) => ts.map((x) => (x.id === updated.id ? updated : x)))
       if (editTeacher?.id === updated.id) setEditTeacher(updated)
     } catch (e) {
-      if (!handle401(e)) {
+      if (!handleAccessError(e)) {
         if (e instanceof ApiError && e.status === 400 && t.status === 'draft') {
           setError(`Không thể phát hành "${t.name}": lời chúc không được để trống`)
         } else {
@@ -324,7 +284,7 @@ export default function Admin() {
       if (editTeacher?.id === t.id) setEditTeacher(null)
       if (qrData?.teacher.id === t.id) setQrData(null)
     } catch (e) {
-      if (!handle401(e)) setError(e instanceof Error ? e.message : 'Lỗi xóa giáo viên')
+      if (!handleAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi xóa giáo viên')
     }
   }
 
@@ -341,7 +301,7 @@ export default function Admin() {
         setQrData({ teacher: updated, dataUrl: await QRCode.toDataURL(url, { margin: 2, width: 256 }) })
       }
     } catch (e) {
-      if (!handle401(e)) setError(e instanceof Error ? e.message : 'Lỗi đổi mã')
+      if (!handleAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi đổi mã')
     }
   }
 
@@ -366,7 +326,7 @@ export default function Admin() {
     }
   }
 
-  if (!authToken) return <LoginForm onLogin={handleLogin} wrongToken={wrongToken} />
+  if (accessDenied) return <AccessDenied />
 
   return (
     <section className="admin-page">
@@ -379,7 +339,7 @@ export default function Admin() {
           >
             + Thêm giáo viên
           </button>
-          <button onClick={handleLogout} className="btn-ghost">Đăng xuất</button>
+          <a href="/cdn-cgi/access/logout" className="btn-ghost">Đăng xuất</a>
         </div>
       </div>
 

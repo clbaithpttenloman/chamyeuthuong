@@ -24,3 +24,45 @@ Verified 2026-11-16 against Wrangler 4.157.0 (released 2026-11-03). Reference im
   XOR-accumulate loop. Source: https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
 - `crypto.getRandomValues(new Uint8Array(n))` is available in Workers and Node for token generation.
 - Tests: `node:sqlite` `DatabaseSync(':memory:')` wrapped in the D1 shape (see `../phamhuuthien/worker/testDb.ts`).
+
+## Cloudflare Access JWT validation (verified 2026-11-16)
+
+- Access adds the signed JWT to each request that passes it as the `Cf-Access-Jwt-Assertion` header (also the
+  `CF_Authorization` cookie; the header is the one to validate). Public keys: `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`
+  (JWKS `keys[]`, RS256; rotated every 6 weeks, old key valid 7 more days; match by `kid`, do not hard-code keys).
+  Validate signature, `iss` = `https://<team>.cloudflareaccess.com` and `aud` = the application's AUD tag.
+  Source: https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/
+- `ctx.access` is NOT available here: a Worker with Static Assets runs behind a router Worker that does not pass
+  `ctx.access` to the user Worker. So the Worker validates the JWT itself.
+  Source: https://developers.cloudflare.com/workers/configuration/cloudflare-access/
+- Library: `jose` 6.2.16 (released 2026-11-08). Confirmed against `node_modules/jose/dist/types/` (2026-11-16).
+  ```ts
+  import { jwtVerify, createRemoteJWKSet, createLocalJWKSet, decodeProtectedHeader,
+           generateKeyPair, exportJWK, SignJWT } from 'jose'
+  import type { JWTVerifyGetKey, LocalJWKSet } from 'jose'
+
+  // Verify (all option names confirmed):
+  jwtVerify(token, keysOrFn, {
+    algorithms: ['RS256'],
+    issuer: string,
+    audience: string,
+    requiredClaims: ['exp', 'iat'],  // string[]
+    clockTolerance: 30,              // number (seconds) or string
+  })
+
+  // Remote JWKS (option names confirmed):
+  createRemoteJWKSet(new URL(certsUrl), {
+    cooldownDuration: 30_000,   // ms between refetch attempts on unknown kid
+    timeoutDuration: 3_000,     // ms HTTP timeout
+    cacheMaxAge: 600_000,       // ms max cache lifetime
+  })
+
+  // Synchronous protected-header decode (no signature check):
+  decodeProtectedHeader(token: string): { alg?: string; kid?: string; [k: string]: unknown }
+
+  // Test helpers — generateKeyPair returns { privateKey: CryptoKey, publicKey: CryptoKey }
+  // createLocalJWKSet({ keys: [{ ...jwk, kid: 'k1' }] }) returns LocalJWKSet (callable as JWTVerifyGetKey)
+  ```
+  `payload.email` is the claim used to match against `ADMIN_EMAILS`.
+- Hostname/path protection: a self-hosted Access application on the hostname and paths (`/admin*`, `/api/admin/*`)
+  protects only those URLs. A `workers.dev` hostname needs its own application or must be disabled.

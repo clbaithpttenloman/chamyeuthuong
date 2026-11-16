@@ -1,6 +1,6 @@
 // @vitest-environment node
 // vi.mock is hoisted before imports; it replaces ./token.ts so we can control token values in tests.
-import { vi, describe, it, expect, beforeEach } from 'vitest'
+import { vi, describe, it, expect, beforeEach, beforeAll } from 'vitest'
 
 vi.mock('./token.ts', () => ({
   newToken: vi.fn(() => 'generatedtoken1234'),
@@ -11,30 +11,51 @@ import { handleAdmin } from './admin.ts'
 import worker from './index.ts'
 import { newToken } from './token.ts'
 import { testDb, type D1 } from './testDb.ts'
-
-/** Must be ≥ 32 chars (plan: shorter → 401). */
-const ADMIN_TOKEN = 'this-is-a-valid-32-char-admin-to'
+import { validJwt, localJwks, TEST_TEAM_DOMAIN, TEST_AUD, TEST_EMAIL } from './testAccess.ts'
+import type { LocalJWKSet } from 'jose'
 
 type TeacherRow = {
   id: number; token: string; name: string; subject: string
   created_at: string; message: string; status: string
 }
 
-function makeEnv(db: D1, opts: { adminToken?: string; adminFailLimit?: boolean } = {}) {
+// ---- Shared auth fixture ----
+// In Group 2, handleAdmin will accept deps? and forward them to requireAdmin.
+// The deps object avoids network calls to real CF Access JWKS in tests.
+// In Group 1 (pre-implementation) this arg is silently ignored but sets up Group 2 correctly.
+
+let _validJwt = ''
+let deps: { keys: LocalJWKSet }
+
+beforeAll(async () => {
+  _validJwt = await validJwt()
+  deps = { keys: await localJwks() }
+})
+
+function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('asset') },
-    ADMIN_TOKEN: opts.adminToken ?? ADMIN_TOKEN,
+    ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
+    ACCESS_AUD: TEST_AUD,
+    ADMIN_EMAILS: TEST_EMAIL,
+    ACCESS_DEV_MODE: undefined as string | undefined,
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
   }
 }
 
+/**
+ * Build an admin request with the JWT fixture + X-Requested-With for non-GET.
+ * Uses the module-level _validJwt pre-generated in beforeAll.
+ */
 function adminReq(method: string, path: string, body?: unknown, ip = '1.2.3.4') {
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${ADMIN_TOKEN}`,
+    'Cf-Access-Jwt-Assertion': _validJwt,
     'CF-Connecting-IP': ip,
   }
+  // CSRF: every non-GET admin request must carry X-Requested-With: fetch
+  if (method !== 'GET') headers['X-Requested-With'] = 'fetch'
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   return new Request(`https://x${path}`, {
     method,
@@ -56,17 +77,16 @@ beforeEach(() => {
 
 describe('GET /api/admin/teachers', () => {
   it('returns 200 with an empty array when no teachers exist', async () => {
-    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
+    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db), deps)
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual([])
   })
 
   it('returns all teachers with card message and status joined', async () => {
-    // Create two teachers
-    await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher A', subject: 'Math' }), makeEnv(db))
-    await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher B', subject: 'Science' }), makeEnv(db))
+    await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher A', subject: 'Math' }), makeEnv(db), deps)
+    await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher B', subject: 'Science' }), makeEnv(db), deps)
 
-    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
+    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db), deps)
     const list = await r.json() as TeacherRow[]
     expect(list).toHaveLength(2)
     expect(list[0]).toMatchObject({ name: 'Teacher A', subject: 'Math', message: '', status: 'draft' })
@@ -80,7 +100,7 @@ describe('GET /api/admin/teachers', () => {
 
 describe('POST /api/admin/teachers', () => {
   it('creates a teacher with draft card and returns the record including token', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Nguyen Van A', subject: 'Vietnamese' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Nguyen Van A', subject: 'Vietnamese' }), makeEnv(db), deps)
     expect(r.status).toBe(200)
     const body = await r.json() as TeacherRow
     expect(body.name).toBe('Nguyen Van A')
@@ -93,41 +113,41 @@ describe('POST /api/admin/teachers', () => {
   })
 
   it('subject is optional and defaults to empty string', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'No Subject' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'No Subject' }), makeEnv(db), deps)
     expect(r.status).toBe(200)
     expect((await r.json() as TeacherRow).subject).toBe('')
   })
 
   it('name is required → 400 when absent', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { subject: 'Math' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { subject: 'Math' }), makeEnv(db), deps)
     expect(r.status).toBe(400)
     expect((await r.json() as { error: string }).error).toBe('bad_request')
   })
 
   it('name is required → 400 when empty after trim', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: '   ' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: '   ' }), makeEnv(db), deps)
     expect(r.status).toBe(400)
   })
 
   it('name > 80 chars → 400', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'A'.repeat(81) }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'A'.repeat(81) }), makeEnv(db), deps)
     expect(r.status).toBe(400)
     expect((await r.json() as { error: string }).error).toBe('bad_request')
   })
 
   it('subject > 80 chars → 400', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Valid', subject: 'S'.repeat(81) }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Valid', subject: 'S'.repeat(81) }), makeEnv(db), deps)
     expect(r.status).toBe(400)
   })
 
   it('null body → 400 bad_request', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', null), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', null), makeEnv(db), deps)
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
   })
 
   it('array body → 400 bad_request', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', []), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', []), makeEnv(db), deps)
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
   })
@@ -142,11 +162,16 @@ describe('POST /api/admin/teachers', () => {
     })
     const req = new Request('https://x/api/admin/teachers', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      headers: {
+        'Cf-Access-Jwt-Assertion': _validJwt,
+        'CF-Connecting-IP': '1.2.3.4',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'fetch',
+      },
       body: stream,
       duplex: 'half',
     } as RequestInit)
-    const r = await handleAdmin(req, makeEnv(db))
+    const r = await handleAdmin(req, makeEnv(db), deps)
     expect(r.status).toBe(413)
     expect((await r.json() as { error: string }).error).toBe('too_long')
   })
@@ -164,7 +189,7 @@ describe('POST /api/admin/teachers', () => {
       .mockReturnValueOnce('gn00000000000000')  // collides
       .mockReturnValueOnce('gn00000000000001')  // succeeds
 
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'New Teacher' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'New Teacher' }), makeEnv(db), deps)
     expect(r.status).toBe(200)
     expect((await r.json() as TeacherRow).token).toBe('gn00000000000001')
   })
@@ -184,7 +209,7 @@ describe('POST /api/admin/teachers', () => {
       .mockReturnValueOnce('aaaa000000000001')
       .mockReturnValueOnce('aaaa000000000002')
 
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Unlucky' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Unlucky' }), makeEnv(db), deps)
     expect(r.status).toBe(503)
     expect(await r.json()).toEqual({ error: 'unavailable' })
   })
@@ -194,10 +219,11 @@ describe('POST /api/admin/teachers', () => {
 
 describe('PUT /api/admin/teachers/:id', () => {
   it('updates name, subject, message and status, returns updated record', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Original' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Original' }), makeEnv(db), deps)).json() as TeacherRow
     const r = await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'Updated', subject: 'Art', message: 'Great teacher!', status: 'published' }),
       makeEnv(db),
+      deps,
     )
     expect(r.status).toBe(200)
     const body = await r.json() as TeacherRow
@@ -208,85 +234,91 @@ describe('PUT /api/admin/teachers/:id', () => {
   })
 
   it('token is not updated even if sent in body (mass assignment ignored)', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
     await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'draft', token: 'malicious0000001' }),
       makeEnv(db),
+      deps,
     )
-    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as TeacherRow[]
+    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db), deps)).json() as TeacherRow[]
     expect(list[0].token).toBe(created.token)
   })
 
   it('id is not updated even if sent in body (mass assignment ignored)', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
     await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'draft', id: 999 }),
       makeEnv(db),
+      deps,
     )
-    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as TeacherRow[]
+    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db), deps)).json() as TeacherRow[]
     expect(list[0].id).toBe(created.id)
   })
 
   it('created_at is not updated even if sent in body (mass assignment ignored)', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
     await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'draft', created_at: '1970-01-01T00:00:00.000Z' }),
       makeEnv(db),
+      deps,
     )
-    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as TeacherRow[]
+    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db), deps)).json() as TeacherRow[]
     expect(list[0].created_at).toBe(created.created_at)
   })
 
   it('message > 600 chars → 400', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
     const r = await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'M'.repeat(601), status: 'draft' }),
       makeEnv(db),
+      deps,
     )
     expect(r.status).toBe(400)
     expect((await r.json() as { error: string }).error).toBe('bad_request')
   })
 
   it('invalid status → 400', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
     const r = await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'active' }),
       makeEnv(db),
+      deps,
     )
     expect(r.status).toBe(400)
   })
 
   it('unknown teacher id → 404', async () => {
-    const r = await handleAdmin(adminReq('PUT', '/api/admin/teachers/999', { name: 'T', subject: '', message: 'msg', status: 'draft' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('PUT', '/api/admin/teachers/999', { name: 'T', subject: '', message: 'msg', status: 'draft' }), makeEnv(db), deps)
     expect(r.status).toBe(404)
   })
 
   it(':id not matching ^\\d{1,9}$ → 400', async () => {
     for (const bad of ['abc', '0', '1000000000', '-1', '1.5']) {
-      const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${bad}`, { name: 'T', subject: '', message: 'msg', status: 'draft' }), makeEnv(db))
+      const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${bad}`, { name: 'T', subject: '', message: 'msg', status: 'draft' }), makeEnv(db), deps)
       expect(r.status, `expected 400 for id="${bad}"`).toBe(400)
     }
   })
 
   it('null body → 400 bad_request', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
-    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, null), makeEnv(db))
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, null), makeEnv(db), deps)
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
   })
 
   it('array body → 400 bad_request', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
-    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, []), makeEnv(db))
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, []), makeEnv(db), deps)
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
   })
 
   it('publish with empty (trimmed) message → 400 bad_request', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db), deps)).json() as TeacherRow
     const r = await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: '   ', status: 'published' }),
       makeEnv(db),
+      deps,
     )
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
@@ -297,14 +329,15 @@ describe('PUT /api/admin/teachers/:id', () => {
 
 describe('POST /api/admin/teachers/:id/rotate', () => {
   it('replaces token; old token no longer exists in DB', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Rotate Me' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Rotate Me' }), makeEnv(db), deps)).json() as TeacherRow
     // Publish so the card is accessible
     await handleAdmin(
       adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'Rotate Me', subject: '', message: 'msg', status: 'published' }),
       makeEnv(db),
+      deps,
     )
 
-    const r = await handleAdmin(adminReq('POST', `/api/admin/teachers/${created.id}/rotate`), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', `/api/admin/teachers/${created.id}/rotate`), makeEnv(db), deps)
     expect(r.status).toBe(200)
     const body = await r.json() as { token: string }
     expect(body.token).not.toBe(created.token)
@@ -316,7 +349,7 @@ describe('POST /api/admin/teachers/:id/rotate', () => {
   })
 
   it('unknown teacher id → 404', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/999/rotate'), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/999/rotate'), makeEnv(db), deps)
     expect(r.status).toBe(404)
   })
 })
@@ -325,9 +358,9 @@ describe('POST /api/admin/teachers/:id/rotate', () => {
 
 describe('DELETE /api/admin/teachers/:id', () => {
   it('deletes teacher and cascades to card', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Del Me' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Del Me' }), makeEnv(db), deps)).json() as TeacherRow
 
-    const r = await handleAdmin(adminReq('DELETE', `/api/admin/teachers/${created.id}`), makeEnv(db))
+    const r = await handleAdmin(adminReq('DELETE', `/api/admin/teachers/${created.id}`), makeEnv(db), deps)
     expect(r.status).toBe(200)
 
     // Both teacher and card rows are gone
@@ -336,7 +369,7 @@ describe('DELETE /api/admin/teachers/:id', () => {
   })
 
   it('unknown teacher id → 404', async () => {
-    const r = await handleAdmin(adminReq('DELETE', '/api/admin/teachers/999'), makeEnv(db))
+    const r = await handleAdmin(adminReq('DELETE', '/api/admin/teachers/999'), makeEnv(db), deps)
     expect(r.status).toBe(404)
   })
 })
@@ -344,20 +377,45 @@ describe('DELETE /api/admin/teachers/:id', () => {
 // ---- Auth guard via handleAdmin ----
 
 describe('admin auth (via handleAdmin)', () => {
-  it('missing Authorization header → 401', async () => {
+  it('no Cf-Access-Jwt-Assertion header → 401', async () => {
     const req = new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
-    expect((await handleAdmin(req, makeEnv(db))).status).toBe(401)
+    expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(401)
   })
 
-  it('wrong token → 401', async () => {
+  it('garbage JWT → 401', async () => {
     const req = new Request('https://x/api/admin/teachers', {
-      headers: { Authorization: 'Bearer wrong-token-value-not-valid', 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { 'Cf-Access-Jwt-Assertion': 'not-a-valid-jwt', 'CF-Connecting-IP': '1.2.3.4' },
     })
-    expect((await handleAdmin(req, makeEnv(db))).status).toBe(401)
+    expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(401)
   })
 
-  it('ADMIN_FAIL_LIMIT exhausted with valid token → 429', async () => {
-    expect((await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }))).status).toBe(429)
+  it('ADMIN_FAIL_LIMIT exhausted with valid JWT → 429', async () => {
+    expect((await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }), deps)).status).toBe(429)
+  })
+})
+
+// ---- CSRF guard via handleAdmin ----
+
+describe('CSRF guard (via handleAdmin)', () => {
+  it('POST without X-Requested-With: fetch → 403', async () => {
+    const req = new Request('https://x/api/admin/teachers', {
+      method: 'POST',
+      headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'T' }),
+    })
+    expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(403)
+  })
+
+  it('OPTIONS /api/admin/teachers has no Access-Control-* headers', async () => {
+    const req = new Request('https://x/api/admin/teachers', {
+      method: 'OPTIONS',
+      headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4' },
+      // No X-Requested-With → CSRF check → 403
+    })
+    const r = await handleAdmin(req, makeEnv(db), deps)
+    expect(r.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    expect(r.headers.get('Access-Control-Allow-Methods')).toBeNull()
+    expect(r.headers.get('Access-Control-Allow-Headers')).toBeNull()
   })
 })
 
@@ -365,7 +423,11 @@ describe('admin auth (via handleAdmin)', () => {
 
 describe('method guard', () => {
   it('PATCH /api/admin/teachers → 405', async () => {
-    const r = await handleAdmin(adminReq('PATCH', '/api/admin/teachers'), makeEnv(db))
+    const req = new Request('https://x/api/admin/teachers', {
+      method: 'PATCH',
+      headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+    })
+    const r = await handleAdmin(req, makeEnv(db), deps)
     expect(r.status).toBe(405)
     expect((await r.json() as { error: string }).error).toBe('method')
   })
@@ -375,12 +437,24 @@ describe('method guard', () => {
 
 describe('security headers', () => {
   it.each([
-    ['200 list',          () => handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))],
-    ['401 unauthorized',  () => handleAdmin(new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))],
-    ['429 rate limited',  () => handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }))],
-    ['405 method',        () => handleAdmin(adminReq('PATCH', '/api/admin/teachers'), makeEnv(db))],
-  ])('%s has Cache-Control, X-Content-Type-Options, X-Robots-Tag', async (_, makeReq) => {
-    const r = await makeReq()
+    ['200 list', async () => {
+      return handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db), deps)
+    }],
+    ['401 unauthorized', async () => {
+      return handleAdmin(new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db), deps)
+    }],
+    ['429 rate limited', async () => {
+      return handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }), deps)
+    }],
+    ['405 method', async () => {
+      const req = new Request('https://x/api/admin/teachers', {
+        method: 'PATCH',
+        headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+      })
+      return handleAdmin(req, makeEnv(db), deps)
+    }],
+  ])('%s has Cache-Control, X-Content-Type-Options, X-Robots-Tag', async (_, makeReqFn) => {
+    const r = await makeReqFn()
     expect(r.headers.get('Cache-Control')).toBe('no-store')
     expect(r.headers.get('X-Content-Type-Options')).toBe('nosniff')
     expect(r.headers.get('X-Robots-Tag')).toBe('noindex')

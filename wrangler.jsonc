@@ -3,6 +3,15 @@
   "compatibility_date": "2026-11-01",
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
+  // Admin auth uses Cloudflare Access JWT (Cf-Access-Jwt-Assertion header). No ADMIN_TOKEN.
+  // Required secrets: ACCESS_TEAM_DOMAIN, ACCESS_AUD, ADMIN_EMAILS (set via `wrangler secret put`).
+  // ACCESS_DEV_MODE must NOT be set in production — it is for local dev only (.dev.vars).
+  //
+  // workers_dev: If a custom domain is configured, add "workers_dev": false and redeploy so that
+  // the workers.dev URL is disabled (unauthenticated requests still 401 at the Worker, but Access
+  // won't protect the .workers.dev hostname). Without a custom domain, create a second Cloudflare
+  // Access application covering the <name>.<account>.workers.dev hostname instead.
+  //
   // The Worker runs only for /api/* (card and admin endpoints); every other path is a static asset from dist/.
   "main": "worker/index.ts",
   "assets": {

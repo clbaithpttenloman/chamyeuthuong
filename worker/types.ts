@@ -18,7 +18,10 @@ export type RateLimit = {
 export type Env = {
   DB: D1
   ASSETS: { fetch(request: Request): Promise<Response> }
-  ADMIN_TOKEN: string
+  ACCESS_TEAM_DOMAIN: string
+  ACCESS_AUD: string
+  ADMIN_EMAILS: string
+  ACCESS_DEV_MODE?: string
   CARD_IP_LIMIT: RateLimit
   ADMIN_FAIL_LIMIT: RateLimit
 }

@@ -1,6 +1,7 @@
 import { error, json, readJson, HttpError } from './http.ts'
 import { requireAdmin } from './auth.ts'
 import { newToken } from './token.ts'
+import type { JWTVerifyGetKey } from 'jose'
 import type { Env } from './types.ts'
 
 type TeacherRow = {
@@ -129,9 +130,10 @@ async function deleteTeacher(env: Env, id: number): Promise<Response> {
 /**
  * Routes all /api/admin/* requests after checking auth.
  * Never reads token, id, or created_at from request bodies (plan § Constraints).
+ * deps.keys: inject a local JWKS resolver in tests (avoids network calls).
  */
-export async function handleAdmin(request: Request, env: Env): Promise<Response> {
-  const deny = await requireAdmin(request, env)
+export async function handleAdmin(request: Request, env: Env, deps?: { keys: JWTVerifyGetKey }): Promise<Response> {
+  const deny = await requireAdmin(request, env, deps)
   if (deny) return deny
 
   const { pathname } = new URL(request.url)

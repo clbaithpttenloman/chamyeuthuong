@@ -6,7 +6,17 @@ export default defineConfig({
   test: { environment: 'node' },
   server: {
     proxy: {
-      '/api': 'http://localhost:8787',
+      '/api': {
+        target: 'http://localhost:8787',
+        // Inject the dev Access JWT from the environment so the worker can verify it.
+        // Set DEV_ACCESS_JWT (printed by `npm run dev:access`) before starting `npm run dev`.
+        configure(proxy) {
+          proxy.on('proxyReq', (proxyReq) => {
+            const jwt = process.env['DEV_ACCESS_JWT']
+            if (jwt) proxyReq.setHeader('Cf-Access-Jwt-Assertion', jwt)
+          })
+        },
+      },
     },
   },
 })

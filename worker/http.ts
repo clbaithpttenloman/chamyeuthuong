@@ -1,8 +1,9 @@
-export type ErrorCode = 'bad_request' | 'unauthorized' | 'not_found' | 'too_long' | 'rate_limited' | 'method' | 'unavailable'
+export type ErrorCode = 'bad_request' | 'unauthorized' | 'forbidden' | 'not_found' | 'too_long' | 'rate_limited' | 'method' | 'unavailable'
 
 const STATUS: Record<ErrorCode, number> = {
   bad_request: 400,
   unauthorized: 401,
+  forbidden: 403,
   not_found: 404,
   too_long: 413,
   method: 405,

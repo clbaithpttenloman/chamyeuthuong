@@ -1,6 +1,6 @@
 // Typed fetch client for the backend API.
-// A 401 response automatically clears the stored admin token so callers
-// can re-render to the login form by checking getToken() === null.
+// Admin routes are protected by Cloudflare Access (JWT in Cf-Access-Jwt-Assertion).
+// Every /api/admin/* request includes X-Requested-With: fetch as CSRF protection.
 
 export type TeacherRow = {
   id: number
@@ -18,20 +18,6 @@ export type CardData = {
   message: string
 }
 
-const SESSION_KEY = 'admin_token'
-
-export function getToken(): string | null {
-  return sessionStorage.getItem(SESSION_KEY)
-}
-
-export function setToken(token: string): void {
-  sessionStorage.setItem(SESSION_KEY, token)
-}
-
-export function clearToken(): void {
-  sessionStorage.removeItem(SESSION_KEY)
-}
-
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -41,13 +27,13 @@ export class ApiError extends Error {
   }
 }
 
+/** All admin API calls go through here; the CSRF header is always present. */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const tok = getToken()
-  const headers: Record<string, string> = { ...(init.headers as Record<string, string>) }
-  if (tok) headers['Authorization'] = `Bearer ${tok}`
-  const res = await fetch(path, { ...init, headers })
-  if (res.status === 401) clearToken()
-  return res
+  const headers: Record<string, string> = {
+    ...(init.headers as Record<string, string>),
+    'X-Requested-With': 'fetch',
+  }
+  return fetch(path, { ...init, headers })
 }
 
 async function expectOk(res: Response): Promise<Response> {
@@ -70,7 +56,7 @@ export async function getCard(token: string): Promise<CardData | null> {
   return res.json() as Promise<CardData>
 }
 
-/** List all teachers (requires admin token in sessionStorage). */
+/** List all teachers (requires Access JWT via Cloudflare Access). */
 export async function listTeachers(): Promise<TeacherRow[]> {
   return (await expectOk(await apiFetch('/api/admin/teachers'))).json() as Promise<TeacherRow[]>
 }

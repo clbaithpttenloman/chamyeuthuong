@@ -9,7 +9,7 @@ type PublishedCard = { name: string; subject: string; message: string }
  * Unknown token, draft card, and malformed token all return the same 404.
  * Per-IP rate limit is applied before token validation (plan § Decision: Public API).
  */
-export async function handleCard(request: Request, env: Env): Promise<Response> {
+export async function handleCard(request: Request, env: Pick<Env, 'DB' | 'CARD_IP_LIMIT'>): Promise<Response> {
   if (request.method !== 'GET') return error('method')
 
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
