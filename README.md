@@ -1,7 +1,7 @@
 # AI - Chạm yêu thương
 
 **Thông điệp:** Công nghệ tạo lời chúc - Tình cảm tạo nên ý nghĩa.
-**Đơn vị thực hiện:** CLB AI - THPT Tên Lơ Man
+**Đơn vị thực hiện:** CLB AI - THPT Ten Lơ Man
 **Ngày:** 20/11/2026
 
 Website tĩnh (Vite + React + TypeScript), triển khai bằng Cloudflare Workers static assets, giống repo `phamhuuthien`. Không có Worker hay cơ sở dữ liệu.
