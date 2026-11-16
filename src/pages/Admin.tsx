@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import {
   type AdminRow,
   type TeacherRow,
   ApiError,
   addAdmin,
+  clearIdToken,
   createTeacher,
   deleteTeacher,
   listAdmins,
   listTeachers,
   removeAdmin,
   rotateTeacherToken,
+  setIdToken,
   updateTeacher,
 } from '../api'
+import {
+  type GisCredentialResponse,
+  gisDisableAutoSelect,
+  gisInitialize,
+  gisRenderButton,
+  loadGis,
+} from '../gis'
 
 /** Inject <meta name="robots" content="noindex"> while this component is mounted. */
 function useNoIndex() {
@@ -36,6 +45,49 @@ function emptyDraft(t?: TeacherRow): EditDraft {
   }
 }
 
+// ── Auth states ──────────────────────────────────────────────────────────────
+// signedOut  — no token; show GIS sign-in button
+// signedIn   — has token; show admin interface
+// expired    — had token, got 401; show session-expired message + sign-in button
+// denied     — got 403; not an admin; show permanent access-denied message
+
+type AuthState = 'signedOut' | 'signedIn' | 'expired' | 'denied'
+
+// ── Sign-in section ──────────────────────────────────────────────────────────
+
+function SignInSection({
+  clientId,
+  btnRef,
+  expired,
+}: {
+  clientId: string | undefined
+  btnRef: React.RefObject<HTMLDivElement | null>
+  expired: boolean
+}) {
+  if (!clientId) {
+    return (
+      <section className="admin-signin">
+        <h1>Đăng nhập quản trị</h1>
+        <p className="admin-signin-error">
+          Chưa cấu hình Google Client ID (<code>VITE_GOOGLE_CLIENT_ID</code>).
+          Vui lòng liên hệ quản trị viên hệ thống.
+        </p>
+      </section>
+    )
+  }
+  return (
+    <section className="admin-signin">
+      <h1>Đăng nhập quản trị</h1>
+      {expired && (
+        <p className="admin-session-expired" role="alert">
+          Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại.
+        </p>
+      )}
+      <div ref={btnRef} className="admin-signin-btn" aria-label="Đăng nhập bằng Google" />
+    </section>
+  )
+}
+
 // ── Access denied ────────────────────────────────────────────────────────────
 
 function AccessDenied() {
@@ -43,8 +95,9 @@ function AccessDenied() {
     <section className="admin-access-denied">
       <h1>Không có quyền truy cập</h1>
       <p>Tài khoản của bạn chưa được cấp quyền quản trị.</p>
-      <p className="admin-access-denied-hint">Phiên đăng nhập đã hết hạn hoặc bạn không có quyền vào trang này.</p>
-      <a href="/cdn-cgi/access/logout">Đăng xuất và đăng nhập lại</a>
+      <p className="admin-access-denied-hint">
+        Hãy liên hệ quản trị viên để được thêm vào danh sách.
+      </p>
     </section>
   )
 }
@@ -195,7 +248,9 @@ function QrSection({
 export default function Admin() {
   useNoIndex()
 
-  const [accessDenied, setAccessDenied] = useState(false)
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+
+  const [authState, setAuthState] = useState<AuthState>('signedOut')
   const [teachers, setTeachers] = useState<TeacherRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -211,15 +266,42 @@ export default function Admin() {
   const [addingAdmin, setAddingAdmin] = useState(false)
   const [adminEmailInput, setAdminEmailInput] = useState('')
 
-  /** Returns true if the error was 401/403 and access-denied state was set. */
+  // Ref for the GIS button container
+  const googleBtnRef = useRef<HTMLDivElement | null>(null)
+
+  // ── GIS initialisation ───────────────────────────────────────────────────
+  // Load the script and render the button whenever the sign-in section is shown.
+  // clientId is a build-time constant so it is safe to omit from deps.
+  useEffect(() => {
+    if (authState !== 'signedOut' && authState !== 'expired') return
+    if (!clientId) return
+
+    void loadGis().then(() => {
+      const btn = googleBtnRef.current
+      if (!btn) return
+      gisInitialize({
+        client_id: clientId,
+        callback: (response: GisCredentialResponse) => {
+          setIdToken(response.credential)
+          setAuthState('signedIn')
+        },
+        auto_select: true,
+      })
+      gisRenderButton(btn, { theme: 'outline', size: 'large' })
+    })
+  }, [authState]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Error handler ────────────────────────────────────────────────────────
+  /** Returns true when the error was an auth error (caller should not set generic error). */
   const handleAccessError = useCallback((e: unknown): boolean => {
-    if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-      setAccessDenied(true)
-      return true
+    if (e instanceof ApiError) {
+      if (e.status === 401) { setAuthState('expired'); return true }
+      if (e.status === 403) { setAuthState('denied'); return true }
     }
     return false
   }, [])
 
+  // ── Data loaders ─────────────────────────────────────────────────────────
   const loadTeachers = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -247,11 +329,31 @@ export default function Admin() {
     }
   }, [handleAccessError])
 
-  // Load teachers and admins together on first render (2 calls ≤ 3 limit)
+  // Load teachers and admins once signed in
   useEffect(() => {
-    void loadTeachers()
-    void loadAdmins()
-  }, [loadTeachers, loadAdmins])
+    if (authState === 'signedIn') {
+      void loadTeachers()
+      void loadAdmins()
+    }
+  }, [authState, loadTeachers, loadAdmins])
+
+  // ── Sign-out ─────────────────────────────────────────────────────────────
+  function handleSignOut() {
+    clearIdToken()
+    gisDisableAutoSelect()
+    setAuthState('signedOut')
+    setTeachers([])
+    setAdmins([])
+    setError(null)
+    setAdminsError(null)
+    setAdding(false)
+    setEditTeacher(null)
+    setQrData(null)
+    setAddingAdmin(false)
+    setAdminEmailInput('')
+  }
+
+  // ── Teacher CRUD handlers ─────────────────────────────────────────────────
 
   async function handleAdd(name: string, subject: string) {
     setError(null)
@@ -353,6 +455,8 @@ export default function Admin() {
     }
   }
 
+  // ── Admin management handlers ─────────────────────────────────────────────
+
   async function handleAddAdmin(e: React.FormEvent) {
     e.preventDefault()
     setAdminsError(null)
@@ -391,8 +495,21 @@ export default function Admin() {
     }
   }
 
-  if (accessDenied) return <AccessDenied />
+  // ── Render ────────────────────────────────────────────────────────────────
 
+  if (authState === 'signedOut' || authState === 'expired') {
+    return (
+      <SignInSection
+        clientId={clientId}
+        btnRef={googleBtnRef}
+        expired={authState === 'expired'}
+      />
+    )
+  }
+
+  if (authState === 'denied') return <AccessDenied />
+
+  // authState === 'signedIn'
   return (
     <section className="admin-page">
       <div className="admin-header">
@@ -404,7 +521,7 @@ export default function Admin() {
           >
             + Thêm giáo viên
           </button>
-          <a href="/cdn-cgi/access/logout" className="btn-ghost">Đăng xuất</a>
+          <button onClick={handleSignOut} className="btn-ghost">Đăng xuất</button>
         </div>
       </div>
 

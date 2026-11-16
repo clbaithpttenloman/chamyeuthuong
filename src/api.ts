@@ -1,6 +1,7 @@
 // Typed fetch client for the backend API.
-// Admin routes are protected by Cloudflare Access (JWT in Cf-Access-Jwt-Assertion).
-// Every /api/admin/* request includes X-Requested-With: fetch as CSRF protection.
+// Admin routes require a Google ID token (Authorization: Bearer <token>).
+// Every /api/admin/* request also includes X-Requested-With: fetch as
+// CSRF defence in depth.
 
 export type TeacherRow = {
   id: number
@@ -27,17 +28,36 @@ export class ApiError extends Error {
   }
 }
 
-/** All admin API calls go through here; the CSRF header is always present. */
+// ── In-memory token store ─────────────────────────────────────────────────
+
+/** The Google ID token for admin API calls. Never written to any storage. */
+let _idToken: string | null = null
+
+/** Store the credential from the GIS callback. Called by Admin.tsx. */
+export function setIdToken(token: string): void {
+  _idToken = token
+}
+
+/** Clear the token (sign-out or 401 response). Called by Admin.tsx and expectOk. */
+export function clearIdToken(): void {
+  _idToken = null
+}
+
+// ── Core fetch helpers ────────────────────────────────────────────────────
+
+/** All admin API calls go through here; Bearer + CSRF headers always present. */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
     ...(init.headers as Record<string, string>),
     'X-Requested-With': 'fetch',
   }
+  if (_idToken) headers['Authorization'] = `Bearer ${_idToken}`
   return fetch(path, { ...init, headers })
 }
 
 async function expectOk(res: Response): Promise<Response> {
   if (!res.ok) {
+    if (res.status === 401) clearIdToken()
     let code = 'unknown'
     try {
       const body = await res.json() as { error?: string }
@@ -56,7 +76,7 @@ export async function getCard(token: string): Promise<CardData | null> {
   return res.json() as Promise<CardData>
 }
 
-/** List all teachers (requires Access JWT via Cloudflare Access). */
+/** List all teachers (requires Google ID token). */
 export async function listTeachers(): Promise<TeacherRow[]> {
   return (await expectOk(await apiFetch('/api/admin/teachers'))).json() as Promise<TeacherRow[]>
 }
@@ -103,7 +123,7 @@ export type AdminRow = {
   created_by: string
 }
 
-/** List all admins (requires admin JWT). */
+/** List all admins (requires Google ID token). */
 export async function listAdmins(): Promise<AdminRow[]> {
   return (await expectOk(await apiFetch('/api/admin/admins'))).json() as Promise<AdminRow[]>
 }

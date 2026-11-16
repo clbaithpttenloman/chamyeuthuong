@@ -1,5 +1,5 @@
 /**
- * Test helpers for Cloudflare Access JWT authentication.
+ * Test helpers for Google Sign-In ID-token authentication.
  * Provides key-pair generation, JWT signing, local JWKS resolvers, and env builders
  * so auth tests run without any network calls.
  */
@@ -9,9 +9,17 @@ import { testDb, type D1 } from './testDb.ts'
 
 // ---- Constants ----
 
-export const TEST_TEAM_DOMAIN = 'https://test.cloudflareaccess.com'
-export const TEST_AUD = 'test-aud-12345678'
-export const TEST_EMAIL = 'admin@example.com'
+/** Google ID token client ID (must end with .apps.googleusercontent.com). */
+export const TEST_CLIENT_ID = 'test-client-123.apps.googleusercontent.com'
+
+/** Default test email: a standard Gmail address. */
+export const TEST_EMAIL = 'admin@gmail.com'
+
+/** Workspace email paired with TEST_HD for hd-domain tests. */
+export const TEST_EMAIL_WORKSPACE = 'admin@workspace.example.com'
+
+/** Workspace hd claim value paired with TEST_EMAIL_WORKSPACE. */
+export const TEST_HD = 'workspace.example.com'
 
 // ---- Lazy key pairs (generated once per test run) ----
 
@@ -58,8 +66,8 @@ export type SignOpts = {
 
 /**
  * Sign a JWT with exactly the given claims payload.
- * Sets iat and exp automatically unless noIat/noExp are set.
- * Caller is responsible for all claims (iss, aud, email, etc.).
+ * Sets iat and exp automatically unless noIat/noExp are set, or the caller provides them.
+ * Caller is responsible for all claims (iss, aud, email, email_verified, etc.).
  */
 export async function signJwt(
   claims: Record<string, unknown>,
@@ -75,58 +83,68 @@ export async function signJwt(
 }
 
 /**
- * Convenience: sign a valid JWT with the standard test claims and optional overrides.
- * Produces { iss: TEST_TEAM_DOMAIN, aud: TEST_AUD, email: TEST_EMAIL, iat, exp }.
+ * Convenience: sign a valid Google ID token with standard test claims and optional overrides.
+ * Default payload: { iss: 'https://accounts.google.com', aud: TEST_CLIENT_ID,
+ *                    email: TEST_EMAIL, email_verified: true, iat, exp }.
  */
 export async function validJwt(
   overrides: Record<string, unknown> = {},
   opts: SignOpts = {},
 ): Promise<string> {
   return signJwt(
-    { iss: TEST_TEAM_DOMAIN, aud: TEST_AUD, email: TEST_EMAIL, ...overrides },
+    {
+      iss: 'https://accounts.google.com',
+      aud: TEST_CLIENT_ID,
+      email: TEST_EMAIL,
+      email_verified: true,
+      ...overrides,
+    },
     opts,
   )
 }
 
-// ---- Env type and builder ----
+// ---- Env type and builder (Google auth interface) ----
 
-/** Env shape required by requireAdmin. */
-export type AccessEnv = {
-  ACCESS_TEAM_DOMAIN: string
-  ACCESS_AUD: string
-  ACCESS_DEV_MODE?: string | undefined
+/**
+ * Env shape required by the future worker/auth.ts (Google Sign-In).
+ * Note: ACCESS_* fields are absent — the future auth.ts uses GOOGLE_CLIENT_ID instead.
+ */
+export type GoogleEnv = {
+  GOOGLE_CLIENT_ID: string
+  AUTH_DEV_MODE?: string
+  AUTH_DEV_JWKS_URL?: string
   ADMIN_FAIL_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   DB: D1
-  BOOTSTRAP_EMAIL?: string | undefined
-  ALLOW_FIRST_CLAIM?: string | undefined
+  BOOTSTRAP_EMAIL?: string
+  ALLOW_FIRST_CLAIM?: string
 }
 
-type AccessEnvOpts = {
-  /** Override ACCESS_TEAM_DOMAIN. Pass '' to simulate missing/empty. */
-  teamDomain?: string
-  /** Override ACCESS_AUD. Pass '' to simulate missing/empty. */
-  aud?: string
-  /** Set ACCESS_DEV_MODE. Pass '1' to enable dev mode. */
+type GoogleEnvOpts = {
+  /** Override GOOGLE_CLIENT_ID. Pass '' to simulate missing/empty. */
+  clientId?: string
+  /** Set AUTH_DEV_MODE. Pass '1' to enable dev mode. */
   devMode?: string
+  /** Set AUTH_DEV_JWKS_URL. Only honored by auth.ts when AUTH_DEV_MODE === '1'. */
+  devJwksUrl?: string
   /** Whether the rate-limit check succeeds (default true). */
   failLimit?: boolean
   /** Provide a specific D1 instance. Defaults to a fresh empty testDb. */
   db?: D1
-  /** Set BOOTSTRAP_EMAIL in env. Pass '' to simulate set-but-empty. */
+  /** Set BOOTSTRAP_EMAIL in env. */
   bootstrapEmail?: string
   /** Set ALLOW_FIRST_CLAIM in env. Pass '1' to enable open first-user claim. */
   allowFirstClaim?: string
 }
 
 /**
- * Build a minimal env for direct requireAdmin tests.
- * Does NOT include ASSETS or CARD_IP_LIMIT — add those when calling handleAdmin.
+ * Build a minimal env for direct requireAdmin tests (Google auth interface).
+ * Example: requireAdmin(req, googleEnv({ db }), deps)
  */
-export function accessEnv(opts: AccessEnvOpts = {}): AccessEnv {
+export function googleEnv(opts: GoogleEnvOpts = {}): GoogleEnv {
   return {
-    ACCESS_TEAM_DOMAIN: opts.teamDomain !== undefined ? opts.teamDomain : TEST_TEAM_DOMAIN,
-    ACCESS_AUD: opts.aud !== undefined ? opts.aud : TEST_AUD,
-    ACCESS_DEV_MODE: opts.devMode,
+    GOOGLE_CLIENT_ID: opts.clientId !== undefined ? opts.clientId : TEST_CLIENT_ID,
+    AUTH_DEV_MODE: opts.devMode,
+    AUTH_DEV_JWKS_URL: opts.devJwksUrl,
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: opts.failLimit ?? true }) },
     DB: opts.db ?? testDb().db,
     BOOTSTRAP_EMAIL: opts.bootstrapEmail,

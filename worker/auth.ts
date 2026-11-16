@@ -1,4 +1,4 @@
-import { jwtVerify, createRemoteJWKSet, decodeProtectedHeader } from 'jose'
+import { jwtVerify, createRemoteJWKSet, decodeProtectedHeader, errors } from 'jose'
 import type { JWTVerifyGetKey, RemoteJWKSet } from 'jose'
 import { error } from './http.ts'
 import { ensureSchema } from './schema.ts'
@@ -23,76 +23,64 @@ function getRemoteJwks(certsUrl: URL): RemoteJWKSet {
 }
 
 type ValidatedConfig = {
-  issuer: string
+  clientId: string
   certsUrl: URL
-  aud: string
 }
 
 /**
- * Validates all required env fields for Access JWT auth.
- * Returns a config object on success, or null and logs `admin: misconfigured` on failure.
+ * Validates GOOGLE_CLIENT_ID and, in dev mode, AUTH_DEV_JWKS_URL.
+ * Returns config on success, or null and logs `admin: misconfigured` on failure.
  * Never logs env values — fixed strings only.
  */
 function parseConfig(
-  env: Pick<Env, 'ACCESS_TEAM_DOMAIN' | 'ACCESS_AUD' | 'ACCESS_DEV_MODE'>,
+  env: Pick<Env, 'GOOGLE_CLIENT_ID' | 'AUTH_DEV_MODE' | 'AUTH_DEV_JWKS_URL'>,
 ): ValidatedConfig | null {
-  const rawDomain = env.ACCESS_TEAM_DOMAIN ?? ''
-  const aud = env.ACCESS_AUD ?? ''
-  const devMode = env.ACCESS_DEV_MODE === '1'
-
-  // Single failure path: log fixed string and return null.
   function fail(): null {
     console.error('admin: misconfigured')
     return null
   }
 
-  // Both required strings must be non-empty before URL parsing.
-  if (!rawDomain || !aud) return fail()
+  const clientId = env.GOOGLE_CLIENT_ID ?? ''
+  if (!clientId || !clientId.endsWith('.apps.googleusercontent.com')) return fail()
 
-  // No trailing slash in configured string — iss must equal url.origin exactly.
-  if (rawDomain.endsWith('/')) return fail()
-
-  let url: URL
-  try {
-    url = new URL(rawDomain)
-  } catch {
-    return fail()
+  if (env.AUTH_DEV_MODE === '1') {
+    // Dev mode: AUTH_DEV_JWKS_URL must be present and be http://127.0.0.1:<port>/<path>.
+    // Any other value (missing, non-loopback, https) → fail closed, never fall back to Google keys.
+    const rawUrl = env.AUTH_DEV_JWKS_URL ?? ''
+    if (!rawUrl) return fail()
+    let url: URL
+    try {
+      url = new URL(rawUrl)
+    } catch {
+      return fail()
+    }
+    if (url.protocol !== 'http:') return fail()
+    // Hostname must be exactly '127.0.0.1' — prevents http://127.0.0.1.evil.com bypass.
+    if (url.hostname !== '127.0.0.1') return fail()
+    if (url.username || url.password) return fail()
+    return { clientId, certsUrl: url }
   }
 
-  // No username or password in the URL.
-  if (url.username || url.password) return fail()
-
-  // Pathname must be exactly '/'.
-  if (url.pathname !== '/') return fail()
-
-  if (devMode) {
-    // Dev mode (ACCESS_DEV_MODE === '1'): only http://127.0.0.1:<port> is allowed.
-    // The hostname must be exactly '127.0.0.1' — prevents http://127.0.0.1.evil.com bypass.
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') return fail()
-  } else {
-    // Production: must be https://<subdomain>.cloudflareaccess.com.
-    if (url.protocol !== 'https:' || !url.hostname.endsWith('.cloudflareaccess.com')) return fail()
-  }
-
-  const issuer = url.origin
-  const certsUrl = new URL('/cdn-cgi/access/certs', issuer)
-
-  return { issuer, certsUrl, aud }
+  // Production: use Google's public JWKS endpoint.
+  return { clientId, certsUrl: new URL('https://www.googleapis.com/oauth2/v3/certs') }
 }
 
+/** ASCII email pattern (after lower-case + trim). */
+const EMAIL_ASCII_RE = /^[a-z0-9._%+\-]+@[a-z0-9.\-]+$/
+
 /**
- * Guards every /api/admin/* request using a Cloudflare Access JWT + DB admin table.
+ * Guards every /api/admin/* request using a Google ID token + DB admin table.
  *
  * Returns `{ email }` when the request may proceed, or a Response on any failure.
- * Order: (1) rate limit → (2) config → (3) JWT header → (4) alg/kid pre-check →
- *        (5) jwtVerify → (6) email claim shape (≤254) → (7) CSRF → (8) DB.
+ * Order: (1) rate limit → (2) config → (3) Bearer token (4 KB cap) → (4) alg/kid pre-check →
+ *        (5) jwtVerify → (6) email_verified + email rules → (7) CSRF → (8) DB.
  *
  * deps.keys: inject a local JWKS resolver in tests (avoids network calls).
- * Production: builds RemoteJWKSet once per team domain and reuses it.
+ * Production: builds RemoteJWKSet once per certsUrl and reuses it.
  */
 export async function requireAdmin(
   request: Request,
-  env: Pick<Env, 'ACCESS_TEAM_DOMAIN' | 'ACCESS_AUD' | 'ACCESS_DEV_MODE' | 'ADMIN_FAIL_LIMIT' | 'DB' | 'BOOTSTRAP_EMAIL' | 'ALLOW_FIRST_CLAIM'>,
+  env: Pick<Env, 'GOOGLE_CLIENT_ID' | 'AUTH_DEV_MODE' | 'AUTH_DEV_JWKS_URL' | 'ADMIN_FAIL_LIMIT' | 'DB' | 'BOOTSTRAP_EMAIL' | 'ALLOW_FIRST_CLAIM'>,
   deps?: { keys: JWTVerifyGetKey },
 ): Promise<{ email: string } | Response> {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
@@ -105,9 +93,11 @@ export async function requireAdmin(
   const config = parseConfig(env)
   if (!config) return error('unauthorized')
 
-  // 3. JWT header must be present.
-  const token = request.headers.get('Cf-Access-Jwt-Assertion')
-  if (!token) return error('unauthorized')
+  // 3. Authorization: Bearer <token> — 4 KB cap before any decoding.
+  const authHeader = request.headers.get('Authorization')
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return error('unauthorized')
+  const token = authHeader.slice(7) // skip 'Bearer '
+  if (!token || token.length > 4096) return error('unauthorized')
 
   // 4. Pre-check protected header: alg must be 'RS256' and kid must be a string.
   //    Rejects alg:none, HS256, and tokens without a kid before any JWKS fetch.
@@ -121,26 +111,32 @@ export async function requireAdmin(
     return error('unauthorized')
   }
 
-  // 5. Full JWT verification: signature, issuer, audience, exp, iat.
+  // 5. Full JWT verification: signature, issuer array, audience, exp, iat, maxTokenAge.
   const rawKeys: JWTVerifyGetKey = deps?.keys ?? getRemoteJwks(config.certsUrl)
-  // Wrap the key resolver to distinguish JWKS-fetch failures from JWT-claim failures.
+
+  // Wrap the key resolver to distinguish JWKS-fetch failures from JWKSNoMatchingKey.
+  // JWKSNoMatchingKey is a token issue (unknown kid), not a JWKS fetch failure — do not log it.
   let keyFetchFailed = false
   const keyResolver: JWTVerifyGetKey = async (header, input) => {
     try {
       return await rawKeys(header, input)
     } catch (e) {
-      keyFetchFailed = true
+      if (!(e instanceof errors.JWKSNoMatchingKey)) {
+        keyFetchFailed = true
+      }
       throw e
     }
   }
+
   let payload: Record<string, unknown>
   try {
     const result = await jwtVerify(token, keyResolver, {
       algorithms: ['RS256'],
-      issuer: config.issuer,
-      audience: config.aud,
+      issuer: ['https://accounts.google.com', 'accounts.google.com'],
+      audience: config.clientId,
       requiredClaims: ['exp', 'iat'],
       clockTolerance: 30,
+      maxTokenAge: '1h',
     })
     payload = result.payload as Record<string, unknown>
   } catch {
@@ -149,11 +145,32 @@ export async function requireAdmin(
     return error('unauthorized')
   }
 
-  // 6. Email claim shape: must be a string, trimmed+lowercased, length ≤ 254 (before DB).
+  // 6. Email rules — Google must be authoritative for the address.
+
+  // 6a. email_verified must be boolean true (not the string "true", not missing, not false).
+  if (payload['email_verified'] !== true) return error('unauthorized')
+
+  // 6b. email claim must be a non-empty string.
   const rawEmail = payload['email']
   if (typeof rawEmail !== 'string') return error('unauthorized')
   const email = rawEmail.trim().toLowerCase()
+
+  // 6c. Length ≤ 254 (before DB).
   if (email.length === 0 || email.length > 254) return error('unauthorized')
+
+  // 6d. ASCII pattern only — rejects IDN, encoded chars, non-ASCII.
+  if (!EMAIL_ASCII_RE.test(email)) return error('unauthorized')
+
+  // 6e. Google is authoritative only for @gmail.com (exact suffix) or for Workspace (hd set
+  //     and email domain equals hd). googlemail.com is explicitly rejected regardless of hd.
+  const atIdx = email.lastIndexOf('@')
+  const domain = email.slice(atIdx + 1)
+  if (domain === 'googlemail.com') return error('unauthorized')
+
+  const isGmail = domain === 'gmail.com'
+  const hd = payload['hd']
+  const isWorkspace = typeof hd === 'string' && hd.length > 0 && domain === hd.toLowerCase()
+  if (!isGmail && !isWorkspace) return error('unauthorized')
 
   // 7. CSRF checks (after successful JWT auth):
   //    - Sec-Fetch-Site: cross-site → 403 for every method.
@@ -182,7 +199,7 @@ export async function requireAdmin(
   // Standard CSRF (above) only guards non-GET; this guard covers GET specifically for bootstrap.
   if (request.headers.get('X-Requested-With') !== 'fetch') return error('forbidden')
 
-  // Gate evaluation (W5): BOOTSTRAP_EMAIL present (even empty string) takes precedence
+  // Gate evaluation: BOOTSTRAP_EMAIL present (even empty string) takes precedence
   // over ALLOW_FIRST_CLAIM. Only if BOOTSTRAP_EMAIL is undefined does ALLOW_FIRST_CLAIM apply.
   const rawBootstrapEmail = env.BOOTSTRAP_EMAIL
   if (rawBootstrapEmail !== undefined) {

@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "dev:access": "node scripts/dev-access.ts",
+    "dev:google": "node scripts/dev-google.ts",
     "build": "tsc --noEmit && vite build && node scripts/check-headers.ts",
     "preview": "vite preview",
     "test": "vitest run",

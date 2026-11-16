@@ -11,7 +11,10 @@ import { handleAdmin } from './admin.ts'
 import worker from './index.ts'
 import { newToken } from './token.ts'
 import { testDb, type D1 } from './testDb.ts'
-import { validJwt, localJwks, TEST_TEAM_DOMAIN, TEST_AUD, TEST_EMAIL } from './testAccess.ts'
+import {
+  validJwt, localJwks,
+  TEST_CLIENT_ID, TEST_EMAIL,
+} from './testAccess.ts'
 import type { LocalJWKSet } from 'jose'
 
 type TeacherRow = {
@@ -34,10 +37,9 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('asset') },
-    ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
-    ACCESS_AUD: TEST_AUD,
-    // ASSETS, CARD_IP_LIMIT, etc. are present to satisfy the full Env type.
-    ACCESS_DEV_MODE: undefined as string | undefined,
+    GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+    AUTH_DEV_MODE: undefined as string | undefined,
+    AUTH_DEV_JWKS_URL: undefined as string | undefined,
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
     BOOTSTRAP_EMAIL: undefined as string | undefined,
@@ -46,12 +48,13 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
 }
 
 /**
- * Build an admin request with the JWT fixture + X-Requested-With for non-GET.
+ * Build an admin request with the JWT fixture + Authorization: Bearer header.
  * Uses the module-level _validJwt pre-generated in beforeAll.
+ * X-Requested-With is added for non-GET (CSRF requirement).
  */
 function adminReq(method: string, path: string, body?: unknown, ip = '1.2.3.4') {
   const headers: Record<string, string> = {
-    'Cf-Access-Jwt-Assertion': _validJwt,
+    'Authorization': `Bearer ${_validJwt}`,
     'CF-Connecting-IP': ip,
   }
   // CSRF: every non-GET admin request must carry X-Requested-With: fetch
@@ -167,7 +170,7 @@ describe('POST /api/admin/teachers', () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'POST',
       headers: {
-        'Cf-Access-Jwt-Assertion': _validJwt,
+        'Authorization': `Bearer ${_validJwt}`,
         'CF-Connecting-IP': '1.2.3.4',
         'Content-Type': 'application/json',
         'X-Requested-With': 'fetch',
@@ -381,14 +384,14 @@ describe('DELETE /api/admin/teachers/:id', () => {
 // ---- Auth guard via handleAdmin ----
 
 describe('admin auth (via handleAdmin)', () => {
-  it('no Cf-Access-Jwt-Assertion header → 401', async () => {
+  it('no Authorization header → 401', async () => {
     const req = new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
     expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(401)
   })
 
-  it('garbage JWT → 401', async () => {
+  it('garbage JWT in Authorization → 401', async () => {
     const req = new Request('https://x/api/admin/teachers', {
-      headers: { 'Cf-Access-Jwt-Assertion': 'not-a-valid-jwt', 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { 'Authorization': 'Bearer not-a-valid-jwt', 'CF-Connecting-IP': '1.2.3.4' },
     })
     expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(401)
   })
@@ -404,7 +407,11 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('POST without X-Requested-With: fetch → 403', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'POST',
-      headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${_validJwt}`,
+        'CF-Connecting-IP': '1.2.3.4',
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ name: 'T' }),
     })
     expect((await handleAdmin(req, makeEnv(db), deps)).status).toBe(403)
@@ -413,8 +420,11 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('OPTIONS /api/admin/teachers has no Access-Control-* headers and returns 403', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
-      headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4' },
-      // No X-Requested-With → CSRF check → 403
+      headers: {
+        'Authorization': `Bearer ${_validJwt}`,
+        'CF-Connecting-IP': '1.2.3.4',
+        // No X-Requested-With → CSRF check → 403
+      },
     })
     const r = await handleAdmin(req, makeEnv(db), deps)
     expect(r.status).toBe(403)
@@ -427,7 +437,7 @@ describe('CSRF guard (via handleAdmin)', () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
       headers: {
-        'Cf-Access-Jwt-Assertion': _validJwt,
+        'Authorization': `Bearer ${_validJwt}`,
         'CF-Connecting-IP': '1.2.3.4',
         'X-Requested-With': 'fetch',
       },
@@ -444,7 +454,11 @@ describe('method guard', () => {
   it('PATCH /api/admin/teachers → 405', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'PATCH',
-      headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+      headers: {
+        'Authorization': `Bearer ${_validJwt}`,
+        'CF-Connecting-IP': '1.2.3.4',
+        'X-Requested-With': 'fetch',
+      },
     })
     const r = await handleAdmin(req, makeEnv(db), deps)
     expect(r.status).toBe(405)
@@ -468,7 +482,11 @@ describe('security headers', () => {
     ['405 method', async () => {
       const req = new Request('https://x/api/admin/teachers', {
         method: 'PATCH',
-        headers: { 'Cf-Access-Jwt-Assertion': _validJwt, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+        headers: {
+          'Authorization': `Bearer ${_validJwt}`,
+          'CF-Connecting-IP': '1.2.3.4',
+          'X-Requested-With': 'fetch',
+        },
       })
       return handleAdmin(req, makeEnv(db), deps)
     }],
@@ -522,7 +540,7 @@ describe('worker routing', () => {
 // ---- Admins API routing (unauthenticated → 401) ----
 
 describe('admin admins routing — auth required (via handleAdmin)', () => {
-  it('GET /api/admin/admins without JWT → 401', async () => {
+  it('GET /api/admin/admins without Authorization header → 401', async () => {
     const r = await handleAdmin(
       new Request('https://x/api/admin/admins', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -531,7 +549,7 @@ describe('admin admins routing — auth required (via handleAdmin)', () => {
     expect(r.status).toBe(401)
   })
 
-  it('POST /api/admin/admins without JWT → 401', async () => {
+  it('POST /api/admin/admins without Authorization header → 401', async () => {
     const r = await handleAdmin(
       new Request('https://x/api/admin/admins', {
         method: 'POST',
@@ -544,7 +562,7 @@ describe('admin admins routing — auth required (via handleAdmin)', () => {
     expect(r.status).toBe(401)
   })
 
-  it('DELETE /api/admin/admins/1 without JWT → 401', async () => {
+  it('DELETE /api/admin/admins/1 without Authorization header → 401', async () => {
     const r = await handleAdmin(
       new Request('https://x/api/admin/admins/1', {
         method: 'DELETE',
@@ -624,7 +642,7 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
     const req = new Request('https://x/api/admin/admins', {
       method: 'POST',
       headers: {
-        'Cf-Access-Jwt-Assertion': _validJwt,
+        'Authorization': `Bearer ${_validJwt}`,
         'CF-Connecting-IP': '1.2.3.4',
         'Content-Type': 'application/json',
         // No X-Requested-With

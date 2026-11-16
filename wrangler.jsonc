@@ -3,21 +3,18 @@
   "compatibility_date": "2026-11-01",
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
-  // Admin auth uses Cloudflare Access JWT (Cf-Access-Jwt-Assertion header). No ADMIN_TOKEN.
-  // Required: ACCESS_TEAM_DOMAIN, ACCESS_AUD (identifiers, not secrets). Put them in a "vars" block here (see
-  // docs/runbooks/admin.md, "Automatic deploy") or set them with `wrangler secret put`. One place per key, never both.
-  // Example (add after the Access application exists):
-  //   "vars": { "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com", "ACCESS_AUD": "<aud>", "BOOTSTRAP_EMAIL": "admin@gmail.com" }
-  // ACCESS_DEV_MODE must NOT be set in production — it is for local dev only (.dev.vars).
+  // Admin auth uses Google Sign-In ID tokens (Authorization: Bearer). No ADMIN_TOKEN.
+  // Required public value: GOOGLE_CLIENT_ID (ends with .apps.googleusercontent.com). Set it in "vars" here (see
+  // docs/runbooks/admin.md) or with `wrangler secret put`. Never commit the client secret — there is none.
+  // Commented example (replace with your real OAuth client ID):
+  //   "vars": { "GOOGLE_CLIENT_ID": "123456789-abc.apps.googleusercontent.com", "BOOTSTRAP_EMAIL": "admin@gmail.com" }
   //
   // First-admin bootstrap: BOOTSTRAP_EMAIL (in "vars" or as a secret) lets only that address claim an EMPTY admin table
-  // and may stay set. ALLOW_FIRST_CLAIM=1 lets ANY verified Access user claim: set it only temporarily via
+  // and may stay set. ALLOW_FIRST_CLAIM=1 lets ANY verified Google user claim: set it only temporarily via
   // `wrangler secret put ALLOW_FIRST_CLAIM`, never in "vars", and delete it after the first admin is confirmed.
   //
-  // workers_dev: If a custom domain is configured, add "workers_dev": false and redeploy so that
-  // the workers.dev URL is disabled (unauthenticated requests still 401 at the Worker, but Access
-  // won't protect the .workers.dev hostname). Without a custom domain, create a second Cloudflare
-  // Access application covering the <name>.<account>.workers.dev hostname instead.
+  // Local dev: AUTH_DEV_MODE=1 and AUTH_DEV_JWKS_URL=http://127.0.0.1:<port>/certs go in .dev.vars only.
+  // Never set AUTH_DEV_MODE in production — it must stay absent from this file.
   //
   // The Worker runs only for /api/* (card and admin endpoints); every other path is a static asset from dist/.
   "main": "worker/index.ts",

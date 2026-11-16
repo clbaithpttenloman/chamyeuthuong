@@ -95,3 +95,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .admin-subsection-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin: 2.5rem 0 1rem; }
 .admin-subsection-header h2 { margin: 0; }
+
+/* ── Google Sign-In ──────────────────────────────────────────────────────── */
+.admin-signin { max-width: 28rem; margin: 4rem auto; padding: 2rem; background: #fff; border: 1px solid #fed7aa; border-radius: 0.9rem; text-align: center; }
+.admin-signin h1 { margin-top: 0; }
+.admin-signin-btn { display: flex; justify-content: center; margin-top: 1.5rem; min-height: 44px; }
+.admin-signin-error { color: #991b1b; background: #fef2f2; border: 1px solid #fca5a5; padding: 0.75rem 1rem; border-radius: 0.4rem; font-size: 0.9rem; }
+.admin-session-expired { color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; padding: 0.75rem 1rem; border-radius: 0.4rem; margin-bottom: 1rem; font-size: 0.9rem; }

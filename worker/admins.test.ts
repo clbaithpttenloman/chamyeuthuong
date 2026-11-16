@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { handleAdmins } from './admins.ts'
 import { testDb, type D1 } from './testDb.ts'
-import { TEST_EMAIL, TEST_TEAM_DOMAIN, TEST_AUD } from './testAccess.ts'
+import { TEST_EMAIL, TEST_CLIENT_ID } from './testAccess.ts'
 
 type AdminRow = {
   id: number
@@ -25,9 +25,9 @@ function makeEnv(db: D1) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('asset') },
-    ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
-    ACCESS_AUD: TEST_AUD,
-    ACCESS_DEV_MODE: undefined as string | undefined,
+    GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+    AUTH_DEV_MODE: undefined as string | undefined,
+    AUTH_DEV_JWKS_URL: undefined as string | undefined,
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
     BOOTSTRAP_EMAIL: undefined as string | undefined,

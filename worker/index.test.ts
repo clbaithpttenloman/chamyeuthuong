@@ -12,7 +12,7 @@ vi.mock('./admin.ts', () => ({
 }))
 
 import worker from './index.ts'
-import { TEST_TEAM_DOMAIN, TEST_AUD } from './testAccess.ts'
+import { TEST_CLIENT_ID } from './testAccess.ts'
 import { testDb } from './testDb.ts'
 
 const VALID_TOKEN = 'abc123def456gh78'
@@ -20,9 +20,9 @@ const VALID_TOKEN = 'abc123def456gh78'
 type Env = {
   DB: never
   ASSETS: { fetch(request: Request): Promise<Response> }
-  ACCESS_TEAM_DOMAIN: string
-  ACCESS_AUD: string
-  ACCESS_DEV_MODE?: string
+  GOOGLE_CLIENT_ID: string
+  AUTH_DEV_MODE?: string
+  AUTH_DEV_JWKS_URL?: string
   CARD_IP_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_FAIL_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   BOOTSTRAP_EMAIL?: string
@@ -33,9 +33,9 @@ function makeEnv(): Env {
   return {
     DB: {} as never,
     ASSETS: { fetch: async () => new Response('asset') },
-    ACCESS_TEAM_DOMAIN: TEST_TEAM_DOMAIN,
-    ACCESS_AUD: TEST_AUD,
-    ACCESS_DEV_MODE: undefined,
+    GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+    AUTH_DEV_MODE: undefined,
+    AUTH_DEV_JWKS_URL: undefined,
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
     BOOTSTRAP_EMAIL: undefined,

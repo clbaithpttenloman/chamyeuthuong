@@ -68,3 +68,20 @@ Verified 2026-11-16 against Wrangler 4.157.0 (released 2026-11-03). Reference im
   The `email` claim is used to match against the admin list in D1.
 - Hostname/path protection: a self-hosted Access application on the hostname and paths (`/admin*`, `/api/admin/*`)
   protects only those URLs. A `workers.dev` hostname needs its own application or must be disabled.
+
+## Google Sign-In (Google Identity Services) ID tokens (verified 2026-11-16)
+
+- Browser: load `https://accounts.google.com/gsi/client` with a `<script async>`; `google.accounts.id.initialize({ client_id, callback })`
+  returns the ID token as `response.credential` in the JS callback (no cookie). `renderButton` draws the button.
+  Sources: https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid ,
+  https://developers.google.com/identity/gsi/web/reference/js-reference
+- Server verification (https://developers.google.com/identity/gsi/web/guides/verify-google-id-token): signature with Google's public keys
+  (JWKS `https://www.googleapis.com/oauth2/v3/certs`, RS256, rotated; honour `Cache-Control`), `aud` equals the app's client ID, `iss` is
+  `accounts.google.com` or `https://accounts.google.com`, `exp` not passed. Discovery (checked today):
+  `https://accounts.google.com/.well-known/openid-configuration` gives issuer `https://accounts.google.com`, `id_token_signing_alg_values_supported: [RS256]`.
+- Google is authoritative for an email when it ends with `@gmail.com`, or when `email_verified` is true and `hd` is set (Workspace). Otherwise the
+  address may have changed owner. Google recommends `sub` as the stable user id; this project allow-lists by email because admins are added by typing an address.
+- CSP additions for GIS: `script-src https://accounts.google.com/gsi/client`, `frame-src https://accounts.google.com/gsi/`,
+  `connect-src https://accounts.google.com/gsi/`, `style-src https://accounts.google.com/gsi/style`. COOP changes are only needed when FedCM is off.
+- Jose usage (6.2.16, same as the Access code): `jwtVerify(token, keys, { algorithms, issuer: [..], audience, requiredClaims, clockTolerance, maxTokenAge })`;
+  confirm option names in `node_modules/jose` types.
