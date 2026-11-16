@@ -29,6 +29,10 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "cham-yeu-thuong", "database_id": "9e58f935-fb6f-4c1f-be0b-21a9183ba483" }
   ],
+  // Only this address can claim the empty admin table (first-admin bootstrap). Not a secret; inert once an admin exists.
+  "vars": {
+    "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com"
+  },
   // Per-IP rate limits. Counts are approximate and per Cloudflare location.
   // CARD_IP_LIMIT: blunts token scanners (school NAT shares one IP → 60 generous).
   // ADMIN_FAIL_LIMIT: guards /api/admin/* per source IP (all requests count, not just failures).
