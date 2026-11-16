@@ -7,10 +7,10 @@ Admins are stored in the `admin` table in D1 and managed via the admin page (`/a
 ### First-time bootstrap
 
 On first deploy, the first person to log in via Cloudflare Access becomes the admin. This requires either:
-- **`BOOTSTRAP_EMAIL`**: set this secret to a specific email address; only that person can claim admin
+- **`BOOTSTRAP_EMAIL`**: a `vars` entry in `wrangler.jsonc` or a Wrangler secret holding one email address; only that person can claim admin (recommended)
 - **`ALLOW_FIRST_CLAIM`**: set this variable to `1` (open claim); any Access-verified user can claim admin (Superset-style)
 
-Set **one** of these via the Wrangler CLI for the first deploy only. After the first admin is confirmed in `/admin`, remove the variable and redeploy. See "First Deploy" below for the exact steps.
+Set **one** of these for the first deploy. `ALLOW_FIRST_CLAIM` is only ever set temporarily with `wrangler secret put` and must be deleted after the first admin is confirmed in `/admin`. `BOOTSTRAP_EMAIL` may stay set, because it only lets that one address claim an empty table. See "Automatic deploy" and "First Deploy" below for the exact steps.
 
 Leftover flags are inert once an admin exists: they are only checked when the admin table is empty.
 
