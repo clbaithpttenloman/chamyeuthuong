@@ -10,6 +10,9 @@ Verified 2026-11-16 against Wrangler 4.157.0 (released 2026-11-03). Reference im
 - D1 binding: `"d1_databases": [{ "binding": "DB", "database_name": "...", "database_id": "..." }]`. Without `database_id`,
   Wrangler auto-provisions on deploy; pin the ID afterwards. API: `env.DB.prepare(sql).bind(...)` then `.run()`,
   `.all()`, `.first(column?)`; `env.DB.batch([...])` is one transaction. Only `?`/`?NNN` parameters.
+  **`meta.changes` on `.run()`**: for INSERT/UPDATE/DELETE, `meta.changes` is the number of rows affected.
+  Useful for checking if an operation succeeded: e.g., `INSERT ... WHERE NOT EXISTS ...` returns `changes === 1` if
+  the INSERT happened, `0` if the WHERE condition blocked it. Tested and works in both local and remote D1.
   Source: https://developers.cloudflare.com/d1/worker-api/
 - D1 migrations: SQL files in `migrations/`, names sorted by number; `wrangler d1 migrations apply <database_name>
   [--local|--remote]`. Applied names are tracked in the `d1_migrations` table. Prefer the database name over the
@@ -63,6 +66,7 @@ Verified 2026-11-16 against Wrangler 4.157.0 (released 2026-11-03). Reference im
   // Test helpers — generateKeyPair returns { privateKey: CryptoKey, publicKey: CryptoKey }
   // createLocalJWKSet({ keys: [{ ...jwk, kid: 'k1' }] }) returns LocalJWKSet (callable as JWTVerifyGetKey)
   ```
-  `payload.email` is the claim used to match against `ADMIN_EMAILS`.
+  Validate signature, `iss` = `https://<team>.cloudflareaccess.com` and `aud` = the application's AUD tag.
+  The `email` claim is used to match against the admin list in D1.
 - Hostname/path protection: a self-hosted Access application on the hostname and paths (`/admin*`, `/api/admin/*`)
   protects only those URLs. A `workers.dev` hostname needs its own application or must be disabled.
