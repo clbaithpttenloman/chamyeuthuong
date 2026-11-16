@@ -6,3 +6,5 @@ dist/
 qr/
 # Local dev secrets — never commit
 .dev.vars
+.env
+.env.*

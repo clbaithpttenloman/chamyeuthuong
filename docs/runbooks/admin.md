@@ -1,305 +1,255 @@
 # Admin Operations Runbook
 
-## Admins in D1
-
-Admins are stored in the `admin` table in D1 and managed via the admin page (`/admin`). No static email list.
-
-### First-time bootstrap
-
-On first deploy, the first person to log in via Cloudflare Access becomes the admin. This requires either:
-- **`BOOTSTRAP_EMAIL`**: a `vars` entry in `wrangler.jsonc` or a Wrangler secret holding one email address; only that person can claim admin (recommended)
-- **`ALLOW_FIRST_CLAIM`**: set this variable to `1` (open claim); any Access-verified user can claim admin (Superset-style)
-
-Set **one** of these for the first deploy. `ALLOW_FIRST_CLAIM` is only ever set temporarily with `wrangler secret put` and must be deleted after the first admin is confirmed in `/admin`. `BOOTSTRAP_EMAIL` may stay set, because it only lets that one address claim an empty table. See "Automatic deploy" and "First Deploy" below for the exact steps.
-
-Leftover flags are inert once an admin exists: they are only checked when the admin table is empty.
+Admin access is protected by **Google Sign-In** with identity-based authorization in D1. Admins are stored in an `admin` table; the first person to log in can claim the admin role via a bootstrap email or open claim.
 
 ---
 
-## Cloudflare Access Setup
+## Create a Google OAuth Client
 
-Admin access is protected by **Cloudflare Access** with Google SSO or One-time PIN. The Worker verifies the JWT and checks the admin table. No OAuth code in the repo.
+To enable admin sign-in, you must create a Google OAuth client ID (Web application type). This is done **once** in the Google Cloud Console:
 
-### First-time dashboard setup
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Navigate to **APIs & Services** > **Credentials**
+3. Click **+ Create Credentials** > **OAuth client ID**
+4. Select **Web application**
+5. **Authorized JavaScript origins**: add your site hostname(s):
+   - Production: `https://yourdomain.com`
+   - Local dev: `http://localhost:5173`
+   - (both can be listed; the OAuth consent screen must have been published at least once)
+6. Leave **Authorized redirect URIs** empty (Sign-In v3 doesn't use redirect URIs)
+7. Click **Create**
+8. Copy the **Client ID** (format: `123456789-abc.apps.googleusercontent.com`)
+   - **Do NOT copy the client secret** — it is not used by this application
 
-These steps are performed **once** in the Cloudflare dashboard (outside the repo):
+### OAuth Consent Screen Publishing Status
 
-1. **Enable Zero Trust**
-   - Go to `https://dash.cloudflare.com/?to=/:account/zero-trust`
-   - Click "Activate account" if you haven't already (free up to 50 users)
+- **Testing**: only email addresses listed as "test users" can sign in
+- **In production**: any Google account can sign in (for basic scopes like email)
 
-2. **Choose a login method**
-   - Navigate to **Authentication** > **Login methods**
-   - Option A: **Google OAuth** — add Google as an IdP and set up Google Cloud credentials
-   - Option B: **One-time PIN** (simpler if you don't want to set up OAuth) — users receive a PIN via email
+For a small admin list, either mode works:
+- **Testing mode** (simpler): use test user emails in the Google console, and ensure those same emails are also in the `admin` table in D1
+- **In production**: anyone can pass Google Sign-In, but the D1 admin list gates who becomes an admin
 
-3. **Create a self-hosted Access application**
-   - Go to **Applications** > **Self-hosted**
-   - Click **Add an application**
-   - **Application name**: e.g., "Chạm yêu thương admin"
-   - **Subdomain**: leave empty (not used for self-hosted)
-   - **Domain**: your site's hostname (e.g., `cham-yeu-thuong.example.com`)
-     - If you haven't set a custom domain yet, use the `workers.dev` hostname (see "workers.dev considerations" below)
-   - **Application type**: `Self-hosted`
-   - Click **Next**
+You can change the publishing status in **APIs & Services** > **OAuth consent screen** > **User type** > **Edit**.
 
-4. **Configure the application policy — allow-list only**
-   - Application URLs: add two routes:
-     - `/admin*` (covers `/admin` and `/admin/anything`)
-     - `/api/admin/*` (covers all admin API endpoints)
-   - Policy name: "Allow-list"
-     - **Rule type**: `Include` > **Emails** > paste the email addresses you want to allow initially (one per line, or comma-separated)
-     - **Session duration**: 8 hours (or your preferred duration)
-   - Click **Next** to finish
-   - **Important**: the Access policy is your first gate; use an allow-list, not "everyone with a Google account"
+---
 
-5. **Copy the integration details**
-   - After creation, you'll see the application page
-   - Click **Settings** and scroll to find:
-     - **Team domain**: looks like `https://<team>.cloudflareaccess.com` — copy this
-     - **Application Audience tag**: a UUID like `abc123...` — copy this
-   - (These become the values of `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` below, in `vars` or as secrets)
+## Deploy and Configure
 
-6. **Access application CORS settings**
-   - In the application settings, leave **CORS** and **Bypass OPTIONS** both **OFF** — the Worker handles CSRF protection via the `X-Requested-With` header
+### Set GOOGLE_CLIENT_ID
 
-### Automatic deploy (Cloudflare Git build, recommended)
+The client ID goes in two places (must be equal; see mismatch symptoms below):
 
-Same setup as `phamhuuthien`: connect the GitHub repo to a Worker in **Workers & Pages > Create > Import a repository** and use
+1. **Worker** (`wrangler.jsonc`): `vars.GOOGLE_CLIENT_ID`
+   ```jsonc
+   "vars": {
+     "GOOGLE_CLIENT_ID": "123456789-abc.apps.googleusercontent.com"
+   }
+   ```
 
-- Build command: `npm run build`
-- Deploy command: `npx wrangler deploy`
+2. **Frontend** (Vite build): `VITE_GOOGLE_CLIENT_ID` environment variable or build variable
+   - Local dev: create `.env` in the project root
+     ```
+     VITE_GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
+     ```
+   - Deployed: set as a [Cloudflare build environment variable](https://developers.cloudflare.com/workers/wrangler/environments/#environment-variables)
+     (Workers & Pages > Settings > Environment variables)
 
-`database_id` is already pinned in `wrangler.jsonc`, and the tables are created by the Worker on the first request, so there is no migration step and no extra API token permission.
+**Mismatch symptom**: every sign-in attempt returns 401. Check that both values are identical.
 
-Configuration lives in the `vars` block of `wrangler.jsonc`. `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `BOOTSTRAP_EMAIL` are identifiers, not secrets:
+### First Deploy Order
+
+1. **Push the repo** to your Git-connected Worker.
+   - `GOOGLE_CLIENT_ID` is unset in `wrangler.jsonc`, so the first deploy fails closed: public pages work, `/api/admin/*` returns 401.
+
+2. **Add the OAuth client origins** (if not already done).
+   - Google Cloud Console > **APIs & Services** > **Credentials** > your client > edit
+   - Ensure your site's hostname and `http://localhost:5173` are in **Authorized JavaScript origins**
+
+3. **Set `GOOGLE_CLIENT_ID` and choose a bootstrap method**.
+   - Edit `wrangler.jsonc` (or use a build environment variable) to set `GOOGLE_CLIENT_ID`.
+   - Choose **one** of the following for first-admin bootstrap:
+     - **`BOOTSTRAP_EMAIL`** (recommended): set this to one email address (e.g., `admin@gmail.com`). Only that person can claim the empty admin table. Stays safe if left in place.
+     - **`ALLOW_FIRST_CLAIM=1`** (open claim): set temporarily with `wrangler secret put ALLOW_FIRST_CLAIM`. Any verified Google user can claim. Delete after the first admin is confirmed.
+
+   ```jsonc
+   "vars": {
+     "GOOGLE_CLIENT_ID": "123456789-abc.apps.googleusercontent.com",
+     "BOOTSTRAP_EMAIL": "admin@gmail.com"
+   }
+   ```
+
+4. **Commit and push**, then wait for the deployment to finish.
+
+5. **Open `/admin`** right away and sign in with Google.
+   - You should see the admin list (initially empty).
+   - Refresh the page; you should appear in the list.
+   - If you see 401, check the logs: `admin: misconfigured` means `GOOGLE_CLIENT_ID` is missing or malformed.
+
+6. **Remove the bootstrap variable** if you used `ALLOW_FIRST_CLAIM`.
+   ```bash
+   wrangler secret delete ALLOW_FIRST_CLAIM
+   npx wrangler deploy
+   ```
+   (If you used `BOOTSTRAP_EMAIL`, it may stay; it only gates an empty table.)
+
+---
+
+## Who Can Be an Admin
+
+- **Gmail accounts** (`@gmail.com` addresses) — verified with `email_verified: true` claim
+- **Google Workspace accounts** — verified with `hd` (hosted domain) claim + `email_verified: true`
+- **NOT accepted**: `@googlemail.com`, personal Google accounts without a Workspace domain
+
+**Session lifetime**: about one hour. After that, the admin must sign in again (the UI shows the sign-in button on 401).
+
+---
+
+## Managing Admins
+
+### Adding an Admin
+
+1. Log in to `/admin` as an existing admin
+2. Scroll to **Quản trị viên** (Admins)
+3. Click **+ Thêm quản trị viên** (Add admin)
+4. Enter the email address
+5. Click **Thêm** (Add)
+6. The admin appears in the list immediately
+
+Email must be a valid Gmail or Google Workspace address.
+
+### Removing an Admin
+
+1. Log in to `/admin`
+2. Scroll to **Quản trị viên**
+3. Click **Xóa** (Remove) next to the admin
+4. **Blocked**: the last admin cannot be removed
+
+Removed admins get a 401 on the next request (not an admin anymore).
+
+### Recovery When the Only Admin Loses Access
+
+If your Google account is deleted or compromised and you're the only admin:
+
+1. Update `BOOTSTRAP_EMAIL` in `wrangler.jsonc` to a new recovery address (or use `wrangler secret put` if you deploy from a laptop).
+2. **Delete the admin table** from D1:
+   ```bash
+   npx wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM admin"
+   ```
+3. Deploy the new `BOOTSTRAP_EMAIL`.
+4. Sign in with the recovery email; you become the first admin again.
+5. Add other admins via the admin page.
+
+---
+
+## Local Development
+
+### Real Google Button
+
+If you've added `http://localhost:5173` to your OAuth client's **Authorized JavaScript origins**:
+
+1. Create `.env` in the project root:
+   ```
+   VITE_GOOGLE_CLIENT_ID=<your-real-client-id>
+   ```
+
+2. Run `npm run dev`
+
+3. The real Google "Sign in with Google" button appears on `/admin`
+
+4. Sign in with any Google account that passes the OAuth consent screen publishing status
+
+### Token-Free Testing (Dev Mode)
+
+For automated tests and curl smoke tests without the browser, use the local Google mock:
+
+1. Run `npm run dev:google` in one terminal.
+   - It prints:
+     - `.dev.vars` lines to copy (GOOGLE_CLIENT_ID, AUTH_DEV_MODE, AUTH_DEV_JWKS_URL, ALLOW_FIRST_CLAIM)
+     - `DEV_GOOGLE_TOKEN` for curl
+   - The process keeps running to serve JWKS
+
+2. Copy the `.dev.vars` lines into `.dev.vars` (gitignored).
+
+3. Run `npm run worker:dev` in another terminal.
+
+4. Test with curl:
+   ```bash
+   export DEV_GOOGLE_TOKEN=<value from npm run dev:google>
+   curl -H "Authorization: Bearer $DEV_GOOGLE_TOKEN" http://localhost:8787/api/admin/teachers
+   ```
+
+**Never set `AUTH_DEV_MODE=1` in production** — it is for local development only.
+
+---
+
+## Deployment Environments
+
+### Git-Connected Deploy (Cloudflare Git integration)
+
+Configuration lives in `wrangler.jsonc`:
 
 ```jsonc
 "vars": {
-  "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com",
-  "ACCESS_AUD": "<application-audience-tag>",
+  "GOOGLE_CLIENT_ID": "123456789-abc.apps.googleusercontent.com",
   "BOOTSTRAP_EMAIL": "admin@gmail.com"
 }
 ```
 
-Order for the first time:
+Commit and push to trigger a build and deploy.
 
-1. Push the repo. The first Git build deploys without `vars`: public pages and `/api/card/*` work, and every `/api/admin/*` call returns 401 (fail closed).
-2. Create the Access application and the allow-list policy (see "First-time dashboard setup"). Copy the team domain and the AUD tag.
-3. Add the `vars` block above and push. Cloudflare deploys again.
-4. Open `/admin` right away and confirm the admin list shows the right person.
+### Laptop Deploy
 
-`BOOTSTRAP_EMAIL` may stay in `vars`: it only lets that one address claim an **empty** admin table. Never put `ALLOW_FIRST_CLAIM` in `vars`. Use one place per key: do not also set the same key as a dashboard variable or a `wrangler secret`, because `vars` in `wrangler.jsonc` overwrite dashboard variables on deploy.
-
-The CLI steps below are the manual alternative when you deploy from a laptop.
-
-### First Deploy
-
-#### 1. Create the allow-list Access policy (required before first deploy)
-
-**The Access policy must be an allow-list, not "everyone with a Google account".** This is the first gate: only people on the list can reach the Worker at all. See "First-time dashboard setup" above; make sure step 4 creates a policy with an allow-list.
-
-The Worker will dynamically create the first admin based on the claim variables (see step 4 below). The Access policy gates _who can reach the endpoint_; the claim variables gate _who can become the first admin_ without needing to be in the DB yet.
-
-#### 2. D1 database
-
-The database `cham-yeu-thuong` already exists and its ID (`9e58f935-fb6f-4c1f-be0b-21a9183ba483`) is pinned in `wrangler.jsonc`, so every deploy uses it. To use a different account or database, create one with `npx wrangler d1 create cham-yeu-thuong` and replace `database_id` in `wrangler.jsonc`.
-
-Tables are created automatically on the first request to the Worker (by `ensureSchema` in `worker/schema.ts`). No manual migration step is needed.
-
-#### 3. Set the two required secrets
-
-Use the Wrangler CLI (`wrangler secret put`) to store secrets (kept out of git):
+Use the Wrangler CLI:
 
 ```bash
-wrangler secret put ACCESS_TEAM_DOMAIN
-# Paste: https://<team>.cloudflareaccess.com
+# Set GOOGLE_CLIENT_ID (public, can be in vars or secrets)
+wrangler secret put GOOGLE_CLIENT_ID
+# Paste: 123456789-abc.apps.googleusercontent.com
 
-wrangler secret put ACCESS_AUD
-# Paste: <application-audience-tag>
-```
-
-`ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are identifiers, so they may live in `vars` in `wrangler.jsonc` (see "Automatic deploy"). Use the CLI secrets here only when you deploy from a laptop, and never set the same key in both places. Real secrets of any kind never go in `wrangler.jsonc`.
-
-#### 4. Set ONE claim variable (via CLI) for first bootstrap
-
-Choose **one** and set it with `wrangler secret put`:
-
-**Option A: Specific email (recommended for recovery)**
-```bash
+# Set BOOTSTRAP_EMAIL
 wrangler secret put BOOTSTRAP_EMAIL
-# Paste: admin@example.com
-```
-Only this exact email (after trimming and lowercasing) can claim the first-admin slot.
+# Paste: admin@gmail.com
 
-**Option B: Open claim**
-```bash
-wrangler secret put ALLOW_FIRST_CLAIM
-# Paste: 1
-```
-Any verified Access user can claim the first-admin slot (open, Superset-style).
-
-Set the variable that matches your needs. Do **not** set both; if `BOOTSTRAP_EMAIL` is set, it takes precedence and `ALLOW_FIRST_CLAIM` is ignored.
-
-After setting one of these, deploy:
-
-```bash
+# Deploy
 npx wrangler deploy
 ```
 
-#### 5. Verify first-admin bootstrap
+---
 
-1. Visit `/admin` on your deployed domain
-2. After Access login, you'll be redirected to the admin page
-3. The page should load and show **Quản trị viên** section with zero admins
-4. Refresh the page or open `/api/admin/admins` in a new tab
-5. **You should now appear in the admin list** (if your email matched the claim gate)
-6. If you see 401 or an empty list after refresh, check the logs:
-   - "admin: misconfigured" → neither claim variable was set correctly
-   - "admin: bootstrap" → you successfully claimed admin (good!)
+## Database
 
-#### 6. Remove the claim variable and redeploy
+The database `cham-yeu-thuong` and its ID (`9e58f935-fb6f-4c1f-be0b-21a9183ba483`) are pinned in `wrangler.jsonc`. Tables are created automatically on the first request by `ensureSchema(db)` in `worker/schema.ts` — no migration step needed.
 
-(CLI route. On the Git-connected route `BOOTSTRAP_EMAIL` in `vars` may stay; only `ALLOW_FIRST_CLAIM` must always be removed.)
-
+To use a different account or database:
 ```bash
-# Remove the variable (choose whichever you set):
-wrangler secret delete BOOTSTRAP_EMAIL
-# or
-wrangler secret delete ALLOW_FIRST_CLAIM
-
-# Redeploy to commit the removal
-npx wrangler deploy
+npx wrangler d1 create cham-yeu-thuong
+# Update database_id in wrangler.jsonc
 ```
 
-The first admin is now in the DB. The claim variables are inert for future logins (only read when the table is empty). You can now add more admins via the admin page.
-
 ---
 
-## Managing admins
-
-### Adding an admin
-
-1. Log in to `/admin` with an existing admin account
-2. Scroll to **Quản trị viên** section
-3. Enter the new admin's email address
-4. Click **Thêm** (add)
-5. The new admin appears in the list immediately.
-6. **Also add their email to the Access policy** (Zero Trust > Access > Applications > your app > Policies). Access is the first gate: someone who is not on the Access allow-list never reaches the Worker, so being in the admin list alone is not enough.
-
-### Removing an admin
-
-1. Log in to `/admin` with an existing admin account
-2. Scroll to **Quản trị viên** section
-3. Find the admin you want to remove
-4. Click **Xóa** (delete) next to their name
-5. **Blocked**: the last admin cannot be removed (the UI and API both prevent this)
-
-Removing an admin from the DB _does not_ revoke their Access session (they remain logged in for the session duration). To force logout:
-
-1. Go to Cloudflare Zero Trust dashboard
-2. Navigate to **Access** > **Sessions**
-3. Find the admin's session and click **Revoke**
-4. They must log in again
-
-If you also want to stop them from reaching the site at all, remove their email from the Access policy. Until then they can still pass Access but will see 401 when trying to access `/admin` or any API endpoint (not an admin anymore).
-
-### Recovery when the only admin loses access
-
-If your Gmail account is deleted or compromised and you're the only admin. First check where `BOOTSTRAP_EMAIL` is currently set (`vars` in `wrangler.jsonc`, or a Wrangler secret) and change it **in that place only**. Setting it in both places lets the old value come back on the next deploy.
-
-1. Set the new recovery address and make sure `ALLOW_FIRST_CLAIM` is **not set** anywhere (`wrangler secret delete ALLOW_FIRST_CLAIM` if it is).
-   - Git-connected deploy (vars): edit `"BOOTSTRAP_EMAIL"` in the `vars` block of `wrangler.jsonc` to the new address, commit and push, and wait for the build to finish.
-   - Laptop deploy (secret): `wrangler secret put BOOTSTRAP_EMAIL`, paste the new address, then `npx wrangler deploy`.
-
-2. Only after step 1 is live, empty the admin table:
-   ```bash
-   wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM admin"
-   ```
-
-3. Log in via Access with the recovery address. You become the new first admin; confirm it in the admin list.
-
-4. Clean up. Laptop deploy: `wrangler secret delete BOOTSTRAP_EMAIL` if you do not want to keep it. Git deploy: the address in `vars` may stay (it only lets that person claim an empty table), or restore the previous value and push.
-
-**Common error after first deploy**: "401 Unauthorized" with a log line `admin: misconfigured`. This means neither `BOOTSTRAP_EMAIL` nor `ALLOW_FIRST_CLAIM` was set. Set one of them and redeploy.
-
----
-
-## Card token rotation
-
-When a card's QR code is leaked or needs to change:
-
-1. Log in to `/admin`
-2. Find the teacher in the list
-3. Click **Đổi mã** (rotate token)
-4. The old URL (`/t/old-token`) returns 404
-5. Print a new QR code with the new token
-
----
-
-## Observability
-
-**Workers Logs and real-time tail are intentionally disabled** to keep fixed-string logging only (no tokens, names or messages appear in logs).
-
-If a Worker request fails, Cloudflare's standard observability shows:
-- HTTP status and method
-- Response time
-- Rate limit and resource metrics
-
-For debugging during development:
-```bash
-npm run worker:dev
-```
-
-Errors appear in the terminal where `wrangler dev` is running.
-
----
-
-## Printing QR codes
-
-1. Log in to the admin page (`/admin`)
-2. Create or edit a teacher to publish their card
-3. Click **QR** to display the code in the browser
-4. Click **Tải PNG** to save as PNG
-5. Print the PNG
-
-The QR code encodes the public card URL (e.g., `https://domain/t/token`). A teacher scans it with a phone camera to read their personalized message.
-
----
-
-## Local development
-
-See the **Local development** section in `README.md` for step-by-step instructions on running the dev Access mock (`npm run dev:access`), starting the Worker and frontend, and testing the admin flow locally.
-
-**Never set `ACCESS_DEV_MODE=1` in production** — it is for local development only and must stay in `.dev.vars`.
-
----
-
-## Error codes
-
-When the admin API fails, the response includes an error code. Common ones:
+## Error Codes
 
 | Status | Code | Reason |
 |--------|------|--------|
-| 400 | `bad_request` | Invalid email format or missing required fields |
-| 401 | `unauthorized` | Not signed in via Access, not an admin, or not in the allow-list |
-| 403 | `forbidden` | Missing `X-Requested-With: fetch` header or cross-site request detected |
-| 404 | `not_found` | Teacher or admin ID not found |
-| 409 | `conflict` | Duplicate email (add admin) or last admin (remove admin) |
-| 414 | `too_long` | Request body too large |
-| 429 | `rate_limited` | Too many failed attempts from your IP in the last 60 seconds |
-| 405 | `method` | HTTP method not allowed for this endpoint |
-| 503 | `unavailable` | Server error or database issue |
+| 401 | `unauthorized` | Not signed in, not an admin, expired token, token for an unverified email, token for a non-Gmail/non-Workspace address, misconfigured client ID, or rate limited |
+| 403 | `forbidden` | Missing or invalid `X-Requested-With: fetch` header (CSRF check) or cross-site request |
+| 429 | `rate_limited` | Too many failed attempts from your IP (30 attempts per 60 s) |
+| 503 | `unavailable` | Database error |
 
-If you see 401, check:
-- You're logged in to Cloudflare Access (the login page should not appear for `/admin`)
-- Your email is in the Access allow-list policy (ask an admin to verify)
-- `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set (in `vars` or as secrets, not both)
+**Common issue: 401 `admin: misconfigured`**
+- `GOOGLE_CLIENT_ID` is missing, empty, or doesn't end with `.apps.googleusercontent.com`
+- For local dev: `AUTH_DEV_MODE=1` is set but `AUTH_DEV_JWKS_URL` is missing or malformed
 
-If you see 403, check:
-- You're using a modern browser (Edge, Chrome, Firefox, Safari) — old browsers may not send the required headers
+**Common issue: every sign-in returns 401**
+- `GOOGLE_CLIENT_ID` in the Worker does not match `VITE_GOOGLE_CLIENT_ID` in the frontend (check both values are identical)
+- Your Google account is not on the OAuth consent screen's test users list (if in Testing mode)
+- Your email is not in the `admin` table in D1
 
-If you see 409 when removing an admin, check:
-- You're not trying to remove the last admin (another admin must exist first)
+---
 
-If you see 429, wait a minute and try again.
+## Token Rotation and Card Management
+
+See the **Local development** section in `README.md` for QR code generation and token rotation instructions.
+
