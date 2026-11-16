@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { type CardData, ApiError, getCard } from '../api'
-import site from '../content/site.json'
+import CardView from '../components/CardView.tsx'
+import { DEFAULT_LAYOUT } from '../../shared/layouts.ts'
 
 type State =
   | { status: 'loading' }
@@ -40,18 +41,10 @@ export default function CardPage() {
 
   const { card } = state
   return (
-    <article className="card">
-      <p className="kicker">{site.title}</p>
-      <p className="to">Kính gửi</p>
-      <h1>{card.name}</h1>
-      {card.subject && <p className="sub">{card.subject}</p>}
-      <hr />
-      <p className="msg">{card.message}</p>
-      <p className="from">
-        Học sinh {site.organization}
-        <br />
-        {site.date}
-      </p>
-    </article>
+    <CardView
+      card={{ name: card.name, subject: card.subject, message: card.message }}
+      layout={card.layout ?? DEFAULT_LAYOUT}
+      images={card.images ?? {}}
+    />
   )
 }

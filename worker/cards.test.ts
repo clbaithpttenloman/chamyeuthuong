@@ -11,6 +11,7 @@ function makeEnv(db: D1, opts: { cardIpLimit?: boolean } = {}) {
     ASSETS: { fetch: async () => new Response('asset') },
     CARD_IP_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.cardIpLimit ?? true }) },
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
   }
 }
 
@@ -169,5 +170,94 @@ describe('zero DB statements including DDL for early exits', () => {
     expect(r.status).toBe(405)
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
+  })
+})
+
+// ===================================================================
+// New: layout and images in public card JSON (failing until Group 2)
+// ===================================================================
+
+describe('GET /api/card/:token — layout and images (failing until Group 2)', () => {
+  it('published card returns layout (default "classic" when no card_style row)', async () => {
+    await seedTeacher(db, { status: 'published' })
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { layout?: string }
+    expect(body.layout).toBe('classic')
+  })
+
+  it('published card returns custom layout when card_style row exists', async () => {
+    const { id } = await seedTeacher(db, { status: 'published' })
+    // Insert a card_style row for the teacher
+    await db.prepare('INSERT INTO card_style (teacher_id, layout) VALUES (?, ?)').bind(id, 'lotus').run()
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { layout?: string }
+    expect(body.layout).toBe('lotus')
+  })
+
+  it('published card returns images as { [slot]: token } (empty when no images)', async () => {
+    await seedTeacher(db, { status: 'published' })
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { images?: Record<string, string> }
+    expect(typeof body.images).toBe('object')
+    expect(Object.keys(body.images ?? {})).toHaveLength(0)
+  })
+
+  it('published card returns image tokens for each attached slot', async () => {
+    const { id } = await seedTeacher(db, { status: 'published' })
+    // Seed an image row
+    const imgToken = 'imgabc1234567890'
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind(imgToken, 'x.jpg', 'image/jpeg', 100, 'data', now, 'admin@example.com')
+      .run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind(imgToken).first<{ id: number }>())!.id
+    await db.prepare('INSERT INTO card_image (teacher_id, slot, image_id) VALUES (?, ?, ?)').bind(id, 'banner', imgId).run()
+
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { images?: Record<string, string> }
+    expect(body.images?.['banner']).toBe(imgToken)
+    expect(body.images).not.toHaveProperty('background')
+    expect(body.images).not.toHaveProperty('photo')
+  })
+
+  it('response does NOT include unknown slots', async () => {
+    await seedTeacher(db, { status: 'published' })
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.json() as Record<string, unknown>
+    // Only 'background', 'banner', 'photo' are valid slot keys
+    const images = body['images'] as Record<string, unknown>
+    for (const key of Object.keys(images ?? {})) {
+      expect(['background', 'banner', 'photo']).toContain(key)
+    }
+  })
+
+  it('draft card still returns 404 regardless of layout/images', async () => {
+    const { id } = await seedTeacher(db, { status: 'draft' })
+    await db.prepare('INSERT INTO card_style (teacher_id, layout) VALUES (?, ?)').bind(id, 'night').run()
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
   })
 })

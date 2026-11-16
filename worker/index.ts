@@ -1,5 +1,6 @@
 import { handleCard } from './cards.ts'
 import { handleAdmin } from './admin.ts'
+import { handlePublicImage } from './images.ts'
 import { error } from './http.ts'
 import type { Env } from './types.ts'
 
@@ -12,6 +13,7 @@ export default {
     const { pathname } = new URL(request.url)
 
     try {
+      if (pathname.startsWith('/api/image/')) return await handlePublicImage(request, env)
       if (pathname.startsWith('/api/card/')) return await handleCard(request, env)
       if (pathname.startsWith('/api/admin/')) return await handleAdmin(request, env)
       if (pathname.startsWith('/api/')) return error('not_found')

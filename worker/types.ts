@@ -20,6 +20,8 @@ export type Env = {
   ASSETS: { fetch(request: Request): Promise<Response> }
   CARD_IP_LIMIT: RateLimit
   ADMIN_FAIL_LIMIT: RateLimit
+  /** Rate limit for public image fetches: 300 req/60 s per IP, namespace 2003. */
+  IMAGE_IP_LIMIT: RateLimit
   /** Set to a specific email to restrict who can claim the first-admin bootstrap. */
   BOOTSTRAP_EMAIL?: string
   /** Set to '1' (only when BOOTSTRAP_EMAIL is unset) to allow any user to claim the first admin slot. */

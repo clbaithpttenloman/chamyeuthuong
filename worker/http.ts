@@ -85,3 +85,43 @@ export async function readJson<T>(request: Request, limit: number): Promise<T> {
     throw new HttpError('bad_request')
   }
 }
+
+/**
+ * Reads the raw request body as bytes, up to `limit` bytes.
+ * Early-rejects on Content-Length > limit (plan § Amendments).
+ * Throws HttpError('bad_request') if the body exceeds `limit` bytes actually read.
+ * Returns an empty Uint8Array when the body is absent.
+ */
+export async function readBytes(request: Request, limit: number): Promise<Uint8Array> {
+  const cl = request.headers.get('Content-Length')
+  if (cl !== null) {
+    const len = parseInt(cl, 10)
+    if (!isNaN(len) && len > limit) throw new HttpError('bad_request')
+  }
+
+  const body = request.body
+  if (!body) return new Uint8Array(0)
+
+  const reader = body.getReader()
+  let total = 0
+  const chunks: Uint8Array[] = []
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > limit) {
+      reader.cancel().catch(() => {})
+      throw new HttpError('bad_request')
+    }
+    chunks.push(value)
+  }
+
+  const all = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    all.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return all
+}

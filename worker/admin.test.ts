@@ -27,6 +27,7 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
     ASSETS: { fetch: async () => new Response('asset') },
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
+    IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
     BOOTSTRAP_EMAIL: undefined as string | undefined,
     ALLOW_FIRST_CLAIM: undefined as string | undefined,
   }
@@ -656,5 +657,348 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
     const r = await handleAdmin(adminReq('GET', '/api/admin/admins/1/x'), makeEnv(db))
     expect(r.status).toBe(404)
     expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+})
+
+// ===================================================================
+// New teacher fields: layout, images, status (failing until Group 2)
+// ===================================================================
+
+describe('POST /api/admin/teachers — layout and status (failing until Group 2)', () => {
+  it('creates teacher with explicit layout and returns it', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'T', layout: 'lotus' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as { layout: string }).layout).toBe('lotus')
+  })
+
+  it('creates teacher with status: published and non-empty message → 200', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', {
+        name: 'T',
+        message: 'Chúc mừng ngày Nhà giáo!',
+        status: 'published',
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as { status: string }).status).toBe('published')
+  })
+
+  it('creates teacher with status: published but empty message → 400', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'T', message: '', status: 'published' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('invalid layout → 400', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'T', layout: 'nonexistent' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('missing layout defaults to classic', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'T' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as { layout: string }).layout).toBe('classic')
+  })
+
+  it('response includes images object (empty when no images set)', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'T' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { images: Record<string, unknown> }
+    expect(typeof body.images).toBe('object')
+    expect(Object.keys(body.images)).toHaveLength(0)
+  })
+})
+
+describe('PUT /api/admin/teachers/:id — layout and images (failing until Group 2)', () => {
+  it('updates layout', async () => {
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))
+    ).json() as TeacherRow
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft', layout: 'night',
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as { layout: string }).layout).toBe('night')
+  })
+
+  it('invalid layout on PUT → 400', async () => {
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))
+    ).json() as TeacherRow
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft', layout: 'nope',
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('setting an image slot with a valid image id → 200', async () => {
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))
+    ).json() as TeacherRow
+    // Seed an image
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
+      .run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
+
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft',
+        images: { banner: imgId },
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { images: Record<string, { id: number; token: string }> }
+    expect(body.images['banner']?.token).toBe('imgabc1234567890')
+  })
+
+  it('setting an image slot with unknown image id → 400', async () => {
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))
+    ).json() as TeacherRow
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft',
+        images: { banner: 9999 },
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('setting images with an unknown slot name → 400', async () => {
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))
+    ).json() as TeacherRow
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
+      .run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft',
+        images: { badslot: imgId },
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('setting an image slot to null removes it', async () => {
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T' }), makeEnv(db))
+    ).json() as TeacherRow
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
+      .run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
+    // Set banner
+    await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft', images: { banner: imgId },
+      }),
+      makeEnv(db),
+    )
+    // Remove banner by setting to null
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
+        name: 'T', subject: '', message: '', status: 'draft', images: { banner: null },
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { images: Record<string, unknown> }
+    expect(body.images).not.toHaveProperty('banner')
+  })
+})
+
+// ===================================================================
+// Bulk create (failing until Group 2)
+// ===================================================================
+
+describe('POST /api/admin/teachers/bulk (failing until Group 2)', () => {
+  it('creates 3 teachers in one batch → 200 { created: [...] }', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ name: 'T1', subject: 'S1' }, { name: 'T2' }, { name: 'T3', subject: 'S3' }],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: unknown[] }
+    expect(Array.isArray(body.created)).toBe(true)
+    expect(body.created).toHaveLength(3)
+  })
+
+  it('0 items → 400', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items: [] }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('101 items → 400', async () => {
+    const items = Array.from({ length: 101 }, (_, i) => ({ name: `T${i}` }))
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('1 item → 200', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'Solo' }] }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('100 items → 200', async () => {
+    const items = Array.from({ length: 100 }, (_, i) => ({ name: `T${i}` }))
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { items }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('all-or-nothing: a bad row in the batch → no teachers inserted', async () => {
+    const countBefore = (
+      await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>()
+    )!.c
+
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [
+          { name: 'Good' },
+          { name: '' },  // empty name → validation error triggers rollback
+        ],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+
+    const countAfter = (
+      await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>()
+    )!.c
+    expect(countAfter).toBe(countBefore)  // nothing was inserted
+  })
+
+  it('body > 64 KB → 413 too_long', async () => {
+    const bigStream = new ReadableStream({
+      start(c) {
+        for (let i = 0; i < 65; i++) c.enqueue(new Uint8Array(1024).fill(0x20))
+        c.close()
+      },
+    })
+    const req = new Request('https://x/api/admin/teachers/bulk', {
+      method: 'POST',
+      headers: {
+        'X-Admin-Email': TEST_EMAIL,
+        'CF-Connecting-IP': '1.2.3.4',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'fetch',
+      },
+      body: bigStream,
+      duplex: 'half',
+    } as RequestInit)
+    const r = await handleAdmin(req, makeEnv(db))
+    expect(r.status).toBe(413)
+  })
+
+  it('shared layout applied to every teacher in bulk', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ name: 'T1' }, { name: 'T2' }],
+        layout: 'spring',
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: Array<{ layout: string }> }
+    for (const row of body.created) {
+      expect(row.layout).toBe('spring')
+    }
+  })
+
+  it('shared image applied to every teacher in bulk', async () => {
+    const now = new Date().toISOString()
+    await db
+      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
+      .run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
+
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ name: 'T1' }, { name: 'T2' }],
+        images: { banner: imgId },
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: Array<{ images: Record<string, { token: string }> }> }
+    for (const row of body.created) {
+      expect(row.images['banner']?.token).toBe('imgabc1234567890')
+    }
+  })
+
+  it('unique tokens for every teacher in bulk', async () => {
+    // Tokens must be distinct across all created teachers
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ name: 'T1' }, { name: 'T2' }, { name: 'T3' }],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: Array<{ token: string }> }
+    const tokens = body.created.map((row) => row.token)
+    expect(new Set(tokens).size).toBe(tokens.length)
+  })
+})
+
+// ===================================================================
+// Worker routing — /api/image/:token (failing until Group 2)
+// ===================================================================
+
+describe('worker routing — /api/image/:token (failing until Group 2)', () => {
+  it('routes /api/image/:token to the public image handler (unknown → 404)', async () => {
+    const r = await worker.fetch(
+      new Request('https://x/api/image/imgabc1234567890', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
+    expect(r.headers.get('Content-Type')).toContain('application/json')
   })
 })

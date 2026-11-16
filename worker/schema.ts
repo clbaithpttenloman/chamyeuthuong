@@ -1,10 +1,11 @@
 import type { D1 } from './types.ts'
+import { SEEDS } from './seed.ts'
 
-// DDL for the teacher, card, and admin tables, converted to CREATE TABLE IF NOT EXISTS
-// so each run is idempotent (a no-op when the tables already exist).
+// DDL for all tables, converted to CREATE TABLE IF NOT EXISTS so each run is idempotent.
 // SHORTCUT: idempotent CREATE only — IF NOT EXISTS cannot alter or drop existing columns;
 //   for the first column change, add a schema_version table or move to wrangler d1 migrations.
 export const SCHEMA: string[] = [
+  // ---- Original tables ----
   `CREATE TABLE IF NOT EXISTS teacher (
   id         INTEGER PRIMARY KEY,
   token      TEXT    UNIQUE NOT NULL,
@@ -25,6 +26,40 @@ export const SCHEMA: string[] = [
   created_by TEXT           NOT NULL,
   CHECK (email = lower(email) AND length(email) <= 254)
 )`,
+  // ---- New tables (Group 2) ----
+  `CREATE TABLE IF NOT EXISTS image (
+  id         INTEGER PRIMARY KEY,
+  token      TEXT    UNIQUE NOT NULL,
+  name       TEXT           NOT NULL,
+  mime       TEXT           NOT NULL CHECK (mime IN ('image/jpeg','image/png','image/webp')),
+  size       INTEGER        NOT NULL CHECK (size > 0 AND size <= 307200),
+  data       TEXT           NOT NULL,
+  created_at TEXT           NOT NULL,
+  created_by TEXT           NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS card_style (
+  teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  layout     TEXT    NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS card_image (
+  teacher_id INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+  slot       TEXT    NOT NULL CHECK (slot IN ('background','banner','photo')),
+  image_id   INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+  PRIMARY KEY (teacher_id, slot)
+)`,
+  `CREATE TABLE IF NOT EXISTS wish (
+  id         INTEGER PRIMARY KEY,
+  title      TEXT    NOT NULL,
+  body       TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  created_by TEXT    NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+)`,
+  // ---- Seeds: 12 example wishes + meta flag (run once, guarded by meta flag) ----
+  ...SEEDS,
 ]
 
 // Per-isolate cache: one Promise<void> per D1 binding object.
