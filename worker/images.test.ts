@@ -1160,6 +1160,26 @@ describe('decodeBase64 — both branches', () => {
     expect(new Uint8Array(await pubResp.arrayBuffer())).toEqual(original)
   })
 
+  it('upload encodes a ~290 KB image without relying on Buffer, round trip byte-exact', async () => {
+    // The encoder must not depend on Node's Buffer (the Workers runtime has no nodejs_compat flag here).
+    const head = makePNG(4, 4)
+    const big = new Uint8Array(290000)
+    big.set(head)
+    for (let i = head.length; i < big.length; i++) big[i] = (i * 31) & 0xff
+    const fromSpy = vi.spyOn(Buffer, 'from')
+    try {
+      const up = await handleImages(imageReq('POST', '/api/admin/images?name=big.png', big, 'image/png'), makeEnv(db), TEST_EMAIL)
+      expect(up.status).toBe(200)
+      const { token } = await up.json() as { token: string }
+      expect(fromSpy).not.toHaveBeenCalled()
+      fromSpy.mockRestore()
+      const row = await db.prepare('SELECT data FROM image WHERE token = ?').bind(token).first<{ data: string }>()
+      expect(Buffer.from(row!.data, 'base64').equals(Buffer.from(big))).toBe(true)
+    } finally {
+      fromSpy.mockRestore()
+    }
+  })
+
   it('Uint8Array.fromBase64 path is used when the runtime provides it', async () => {
     const original = makeJPEG(7, 7)
     const up = await handleImages(imageReq('POST', '/api/admin/images?name=f.jpg', original, 'image/jpeg'), makeEnv(db), TEST_EMAIL)

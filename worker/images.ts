@@ -167,6 +167,22 @@ function magicOk(mime: string, b: Uint8Array): boolean {
 // SHORTCUT: base64 in D1 TEXT — move to R2 binding when image library exceeds ~100 images
 //   or when first-deploy CPU measurement shows decoding is too slow (see docs/runbooks/admin.md).
 //   Upgrade path: add an R2 binding, store raw bytes there, store only the R2 key in D1.
+/**
+ * Base64 without Node's Buffer (no nodejs_compat in this Worker). Uses the native
+ * Uint8Array.prototype.toBase64 when the runtime has it, otherwise btoa over 32 KB chunks
+ * (fromCharCode.apply keeps the per-byte JS work small for ~300 KB inputs).
+ */
+function encodeBase64(bytes: Uint8Array): string {
+  const native = (bytes as unknown as { toBase64?: () => string }).toBase64
+  if (typeof native === 'function') return native.call(bytes)
+  const CHUNK = 0x8000
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)))
+  }
+  return btoa(bin)
+}
+
 function decodeBase64(b64: string): Uint8Array {
   if (typeof (Uint8Array as unknown as { fromBase64?: unknown }).fromBase64 === 'function') {
     return (Uint8Array as unknown as { fromBase64(s: string): Uint8Array }).fromBase64(b64)
@@ -241,14 +257,7 @@ async function uploadImage(
 
   // base64-encode for D1 TEXT storage
   // SHORTCUT: base64 in D1 TEXT — R2 upgrade path noted in decodeBase64 above
-  let b64: string
-  if (typeof Buffer !== 'undefined') {
-    b64 = Buffer.from(bytes).toString('base64')
-  } else {
-    let bin = ''
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-    b64 = btoa(bin)
-  }
+  const b64 = encodeBase64(bytes)
 
   const tok = newToken()
   const now = new Date().toISOString()
