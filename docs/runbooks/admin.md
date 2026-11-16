@@ -71,27 +71,9 @@ These steps are performed **once** in the Cloudflare dashboard (outside the repo
 
 The Worker will dynamically create the first admin based on the claim variables (see step 4 below). The Access policy gates _who can reach the endpoint_; the claim variables gate _who can become the first admin_ without needing to be in the DB yet.
 
-#### 2. Create the D1 database
+#### 2. D1 database
 
-On first deploy, Wrangler auto-provisions the D1 database. After deployment, capture the database ID and pin it in `wrangler.jsonc`:
-
-```bash
-npx wrangler deploy
-```
-
-After the deploy succeeds, Cloudflare displays the database ID. Update `wrangler.jsonc`:
-
-```jsonc
-"d1_databases": [
-  { "binding": "DB", "database_name": "cham-yeu-thuong", "database_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
-]
-```
-
-Then deploy again to pin it:
-
-```bash
-npx wrangler deploy
-```
+The database `cham-yeu-thuong` already exists and its ID (`9e58f935-fb6f-4c1f-be0b-21a9183ba483`) is pinned in `wrangler.jsonc`, so every deploy uses it. To use a different account or database, create one with `npx wrangler d1 create cham-yeu-thuong` and replace `database_id` in `wrangler.jsonc`.
 
 #### 3. Apply migrations
 

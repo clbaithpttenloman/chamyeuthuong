@@ -28,9 +28,9 @@
   },
   // Preview URLs would share the D1 binding and could write rows into the live DB (security review).
   "preview_urls": false,
-  // D1 without database_id: Wrangler auto-provisions on first deploy; pin the ID afterwards.
+  // Pinned so every deploy (Git or laptop) uses this same database. Not a secret: it only works with the account's credentials.
   "d1_databases": [
-    { "binding": "DB", "database_name": "cham-yeu-thuong" }
+    { "binding": "DB", "database_name": "cham-yeu-thuong", "database_id": "9e58f935-fb6f-4c1f-be0b-21a9183ba483" }
   ],
   // Per-IP rate limits. Counts are approximate and per Cloudflare location.
   // CARD_IP_LIMIT: blunts token scanners (school NAT shares one IP → 60 generous).
