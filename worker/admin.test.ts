@@ -11,6 +11,7 @@ import { handleAdmin } from './admin.ts'
 import worker from './index.ts'
 import { newToken } from './token.ts'
 import { testDb, type D1 } from './testDb.ts'
+import { ensureSchema } from './schema.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 
 type TeacherRow = {
@@ -1016,11 +1017,11 @@ describe('PUT /api/admin/teachers/:id — unknown id with layout/images (Fix Gro
     const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('racetoken0000001').first<{ id: number }>())!.id
     await db.prepare("INSERT INTO card (teacher_id,message,status,updated_at) VALUES (?,?,?,?)").bind(tid, '', 'draft', now).run()
     // Wrap the DB so the batch fails with the SQLite FK message, as D1 would after a concurrent delete.
-    const racyDb = {
-      ...db,
-      prepare: db.prepare.bind(db),
-      batch: async () => { throw new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT') },
-    }
+    // ensureSchema caches per DB object, so let the wrapper run the schema batch for real first,
+    // then make only the update batch fail with the SQLite FK message.
+    const racyDb = { prepare: db.prepare.bind(db), batch: db.batch.bind(db) }
+    await ensureSchema(racyDb as typeof db)
+    racyDb.batch = async () => { throw new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT') }
     await db
       .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
       .bind('raceimg000000001', 'r.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL).run()
