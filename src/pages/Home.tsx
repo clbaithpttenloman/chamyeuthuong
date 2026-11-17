@@ -16,6 +16,8 @@ type State =
   | { status: 'ok'; data: WallResponse }
   | { status: 'error' }
 
+const EMPTY: never[] = []
+
 export default function Home() {
   const [state, setState] = useState<State>({ status: 'loading' })
   const [search, setSearch] = useState('')
@@ -28,27 +30,8 @@ export default function Home() {
       .catch(() => setState({ status: 'error' }))
   }, [])
 
-  if (state.status === 'loading') {
-    return (
-      <section className="wall-hero">
-        <p className="kicker">{site.home.kicker}</p>
-        <h1>{site.home.heading}</h1>
-        <p className="lead admin-loading">Đang tải...</p>
-      </section>
-    )
-  }
-
-  if (state.status === 'error') {
-    return (
-      <section className="wall-hero">
-        <p className="kicker">{site.home.kicker}</p>
-        <h1>{site.home.heading}</h1>
-        <p className="lead">Không thể tải dữ liệu. Vui lòng tải lại trang.</p>
-      </section>
-    )
-  }
-
-  const { teachers, latest, totals } = state.data
+  // Hooks must run on every render, so derive from possibly-missing data before any early return.
+  const teachers = state.status === 'ok' ? state.data.teachers : EMPTY
 
   // Collect unique departments from the teacher list for the filter dropdown
   const departments = useMemo(() => {
@@ -76,6 +59,28 @@ export default function Home() {
       }),
     [teachers, search, deptFilter],
   )
+
+  if (state.status === 'loading') {
+    return (
+      <section className="wall-hero">
+        <p className="kicker">{site.home.kicker}</p>
+        <h1>{site.home.heading}</h1>
+        <p className="lead admin-loading">Đang tải...</p>
+      </section>
+    )
+  }
+
+  if (state.status === 'error') {
+    return (
+      <section className="wall-hero">
+        <p className="kicker">{site.home.kicker}</p>
+        <h1>{site.home.heading}</h1>
+        <p className="lead">Không thể tải dữ liệu. Vui lòng tải lại trang.</p>
+      </section>
+    )
+  }
+
+  const { latest, totals } = state.data
 
   return (
     <div>

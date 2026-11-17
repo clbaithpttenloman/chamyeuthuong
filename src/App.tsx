@@ -12,7 +12,7 @@ export default function App() {
     <>
       <header className="bar">
         <Link to="/">♥ {site.title}</Link>
-        <nav style={{ display: 'flex', gap: '1rem' }}>
+        <nav className="bar-nav">
           <Link to="/">Thầy cô</Link>
           <Link to="/gui-thiep">Gửi thiệp</Link>
           <Link to="/ve-clb-ai">Về CLB AI</Link>

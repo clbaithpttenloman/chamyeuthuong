@@ -460,8 +460,11 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 
 /* ── Platform header (bar) ───────────────────────────────────────────────── */
-.bar a:not(:first-child) { font-size: 0.9rem; font-weight: 400; color: #fecdd3; }
-.bar a:not(:first-child):hover { color: #fff; }
+.bar { flex-wrap: wrap; gap: 0.5rem 1rem; }
+.bar-nav { display: flex; gap: 1rem; }
+.bar-nav a { font-size: 0.9rem; font-weight: 400; color: #fecdd3; white-space: nowrap; }
+.bar-nav a:hover { color: #fff; }
+@media (max-width: 480px) { .bar { flex-direction: column; align-items: flex-start; } }
 
 /* ── Wall page ────────────────────────────────────────────────────────────── */
 .wall-hero h1 { text-wrap: balance; }
