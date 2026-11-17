@@ -1,69 +1,86 @@
 /**
- * TeacherPage — /mockup/thiep/:id
+ * TeacherPage — /mockup/thiep/:teacherId
  *
- * Renders the full CardView for the selected teacher, then a masonry wall
- * of approved student notes, and a CTA to write a wish.
+ * Header with Thầy/Cô name and subject.
+ * Grid of all approved cards for the teacher, each rendered with CardView
+ * using its own template layout and the student's message + signature.
+ * Empty state with CTA if no approved cards.
+ * Footer CTA: "Gửi thiệp cho {title} {name}" → /mockup/gui-thiep?thay=:id
  */
 import { Link, useParams } from 'react-router-dom'
 import CardView from '../components/CardView.tsx'
-import { NOTES, TEACHERS } from './data.ts'
+import { CARDS, TEACHERS, TEMPLATES, sigLine } from './data.ts'
 
 export default function TeacherPage() {
-  const { id } = useParams<{ id: string }>()
-  const teacher = TEACHERS.find((t) => t.id === Number(id))
+  const { teacherId } = useParams<{ teacherId: string }>()
+  const teacher = TEACHERS.find((t) => t.id === Number(teacherId))
 
   if (!teacher) {
-    return <p className="notfound">Không tìm thấy thiệp. Hãy quay lại trang chủ.</p>
+    return (
+      <p className="notfound">
+        Không tìm thấy thầy cô. Hãy quay lại trang chủ.
+      </p>
+    )
   }
 
-  const approvedNotes = NOTES.filter(
-    (n) => n.teacherId === teacher.id && n.status === 'approved',
+  const approvedCards = CARDS.filter(
+    (c) => c.teacherId === teacher.id && c.status === 'approved',
   )
 
   return (
     <div className="teacher-page">
-      {/* Full card — images={} means no image slots rendered */}
-      <CardView
-        card={{
-          name: teacher.name,
-          subject: teacher.subject,
-          message: teacher.message,
-          title: teacher.title,
-        }}
-        layout={teacher.layout}
-        images={{}}
-      />
+      {/* Header */}
+      <div className="teacher-page-header">
+        <h1>
+          {teacher.title} {teacher.name}
+        </h1>
+        <p className="teacher-page-meta">
+          {teacher.subject} · {teacher.department}
+        </p>
+      </div>
 
-      {/* Student wishes wall */}
-      <section className="teacher-notes-section">
-        <h2>Lời chúc từ học sinh ({approvedNotes.length})</h2>
+      {/* Approved cards */}
+      <section className="teacher-cards-section">
+        <h2>Thiệp từ học sinh ({approvedCards.length})</h2>
 
-        {approvedNotes.length === 0 ? (
-          <p style={{ color: '#78716c' }}>Chưa có lời chúc nào. Hãy là người đầu tiên!</p>
+        {approvedCards.length === 0 ? (
+          <div className="teacher-empty">
+            <p>Chưa có thiệp nào được duyệt. Hãy là người đầu tiên!</p>
+            <Link
+              to={`/mockup/gui-thiep?thay=${teacher.id}`}
+              className="btn-primary-link"
+            >
+              Gửi lời chúc đầu tiên
+            </Link>
+          </div>
         ) : (
-          <div className="notes-wall">
-            {approvedNotes.map((note) => (
-              <div
-                key={note.id}
-                className={`note-card note-card--${teacher.layout}`}
-              >
-                <p className="note-text">{note.text}</p>
-                <div className="note-meta">
-                  <span className="note-author">
-                    {note.displayName ?? 'Một bạn học sinh'} · {note.className}
-                  </span>
-                  <span className="note-time">{note.relativeTime}</span>
+          <div className="teacher-cards-grid">
+            {approvedCards.map((card) => {
+              const tpl = TEMPLATES.find((t) => t.id === card.templateId)
+              return (
+                <div key={card.id} className="teacher-card-wrap">
+                  <CardView
+                    card={{
+                      name: teacher.name,
+                      subject: teacher.subject,
+                      message: card.message,
+                      title: teacher.title,
+                    }}
+                    layout={tpl?.layout ?? 'classic'}
+                    images={{}}
+                    from={sigLine(card)}
+                  />
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 
         <Link
-          to={`/mockup/viet-loi-chuc?thiep=${teacher.id}`}
+          to={`/mockup/gui-thiep?thay=${teacher.id}`}
           className="write-cta"
         >
-          ✍ Viết lời chúc cho {teacher.title} {teacher.name}
+          ✍ Gửi thiệp cho {teacher.title} {teacher.name}
         </Link>
       </section>
     </div>

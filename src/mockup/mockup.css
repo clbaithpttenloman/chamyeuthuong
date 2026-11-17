@@ -586,3 +586,271 @@
   font-size: 0.78rem;
   color: #78716c;
 }
+
+/* ── Nav separator and label (Revision 2) ────────────────────────────────── */
+.mockup-nav-sep {
+  color: rgba(254, 205, 211, 0.4);
+  user-select: none;
+}
+.mockup-nav-label {
+  font-size: 0.8rem;
+  color: rgba(254, 205, 211, 0.6);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ── Mini card wrapper ────────────────────────────────────────────────────── */
+/* Visual size: 9rem × 12rem. The card-mini-inner renders the card at its    */
+/* natural width and CSS-transforms it to fit. overflow:hidden clips the rest. */
+.card-mini {
+  width: 9rem;
+  height: 9.5rem; /* scaled card height (~36rem × 0.265); avoids empty space under thumbnails */
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+  border-radius: 0.5rem;
+}
+.card-mini-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 34rem;
+  transform: scale(0.265);
+  transform-origin: top left;
+  pointer-events: none;
+}
+/* Override the card's auto-margin so it fills the absolute container */
+.card-mini-inner .card {
+  margin: 0;
+}
+
+/* ── Newest cards strip ───────────────────────────────────────────────────── */
+.newest-strip-wrap {
+  margin-bottom: 1.5rem;
+}
+.strip-heading {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  color: var(--rose-dark);
+}
+.newest-strip {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: #fda4af transparent;
+  scroll-snap-type: x mandatory;
+}
+.newest-strip::-webkit-scrollbar { height: 4px; }
+.newest-strip::-webkit-scrollbar-thumb { background: #fda4af; border-radius: 2px; }
+
+.strip-card-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-decoration: none;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+}
+.strip-card-label {
+  font-size: 0.75rem;
+  color: var(--rose-dark);
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Template gallery (Send flow step 1) ─────────────────────────────────── */
+.template-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.template-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 2px solid #e7e5e4;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  background: #fff;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.template-tile:hover {
+  border-color: var(--rose);
+  box-shadow: 0 4px 12px rgba(136, 19, 55, 0.1);
+}
+.template-tile--selected {
+  border-color: var(--rose-dark);
+  background: #fff1f2;
+  box-shadow: 0 4px 12px rgba(136, 19, 55, 0.12);
+}
+.template-tile-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+}
+
+/* ── Send flow: live preview card wrapper ─────────────────────────────────── */
+.write-preview-card {
+  transform: scale(0.75);
+  transform-origin: top center;
+}
+
+/* ── Teacher page ─────────────────────────────────────────────────────────── */
+.teacher-page-header {
+  margin-bottom: 1.5rem;
+}
+.teacher-page-header h1 {
+  margin: 0 0 0.25rem;
+}
+.teacher-page-meta {
+  margin: 0;
+  color: var(--gold);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.teacher-cards-section {
+  margin-top: 1rem;
+}
+
+.teacher-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+  gap: 1.5rem;
+}
+.teacher-card-wrap { min-width: 0; }
+/* Cards in a grid are narrower than the single-card page: keep the name readable, not one word per line. */
+.teacher-card-wrap .card-body h1 { font-size: clamp(1.5rem, 2.4vw, 2rem); text-wrap: balance; }
+
+.teacher-card-wrap .card {
+  margin: 0;
+  max-width: none;
+}
+
+.teacher-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #57534e;
+}
+.teacher-empty p { margin-bottom: 1rem; }
+
+/* ── QR page ──────────────────────────────────────────────────────────────── */
+.qr-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 2rem 0;
+}
+.qr-card-wrap {
+  width: 100%;
+  max-width: 34rem;
+}
+.qr-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.qr-empty {
+  max-width: 28rem;
+  padding: 2rem;
+  background: #fff;
+  border: 1px solid #fed7aa;
+  border-radius: 1rem;
+  text-align: center;
+}
+.qr-empty-sub {
+  margin: 0.25rem 0 1rem;
+  color: var(--gold);
+  font-weight: 600;
+}
+
+/* ── Admin templates page ─────────────────────────────────────────────────── */
+.template-grid-admin {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.template-admin-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 1rem 0.75rem;
+  background: #fff;
+  border: 1px solid #fed7aa;
+  border-radius: 0.75rem;
+  text-align: center;
+  transition: box-shadow 0.15s;
+}
+.template-admin-tile:hover {
+  box-shadow: 0 4px 12px rgba(136, 19, 55, 0.08);
+}
+.template-admin-tile--editing {
+  border-color: var(--rose-dark);
+  background: #fff1f2;
+}
+
+.template-admin-name {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--rose-dark);
+}
+.template-admin-count {
+  font-size: 0.75rem;
+  color: #78716c;
+  margin-bottom: 0.25rem;
+}
+
+.template-edit-form {
+  margin-top: 0;
+}
+
+.template-slot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #f5f5f4;
+}
+.template-slot-label {
+  font-size: 0.85rem;
+  color: #57534e;
+}
+
+/* ── Moderation update: card thumbnail layout ────────────────────────────── */
+.mod-item-layout {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+}
+.mod-card-thumb {
+  flex-shrink: 0;
+}
+.mod-item-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Keep the admin links together on narrow screens instead of leaving "ADMIN:" alone on a line. */
+.mockup-nav-admin { display: inline-flex; gap: 0.75rem; align-items: baseline; white-space: nowrap; }

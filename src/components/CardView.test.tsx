@@ -233,6 +233,50 @@ describe('CardView — teacher title in heading (failing until Group 2)', () => 
   })
 })
 
+// ===================================================================
+// from prop — custom signature line
+// ===================================================================
+
+describe('CardView — from prop (custom signature line)', () => {
+  it('shows "Học sinh" in the default signature when from is not provided', () => {
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{}} />,
+    )
+    expect(html).toContain('Học sinh')
+  })
+
+  it('renders the from prop text when provided', () => {
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{}} from="Minh Anh · 11A1" />,
+    )
+    expect(html).toContain('Minh Anh · 11A1')
+  })
+
+  it('from prop replaces default signature (no longer shows the default org text in the from paragraph)', () => {
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{}} from="Người gửi" />,
+    )
+    expect(html).toContain('Người gửi')
+    // The from paragraph is still present
+    expect(html).toContain('class="from"')
+  })
+
+  it('renders the from paragraph when from is an empty string', () => {
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{}} from="" />,
+    )
+    // paragraph element is still rendered
+    expect(html).toContain('class="from"')
+  })
+
+  it('renders "Một bạn học sinh" anonymous signature when from prop carries that string', () => {
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{}} from="Một bạn học sinh" />,
+    )
+    expect(html).toContain('Một bạn học sinh')
+  })
+})
+
 describe('CardView — photo alt text includes title (failing until Group 2)', () => {
   it('photo alt is "Ảnh đại diện của {title} {name}" when title is set', () => {
     const card: CardDataWithTitle = {

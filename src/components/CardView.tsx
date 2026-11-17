@@ -31,10 +31,13 @@ export default function CardView({
   card,
   layout,
   images = {},
+  from: fromOverride,
 }: {
   card: CardData
   layout: string
   images: ImageMap
+  /** Optional signature line. When provided, replaces the default "Học sinh {org} / {date}" text. */
+  from?: string
 }) {
   // Validate layout id against the closed list; never use arbitrary strings as class names.
   const layoutId = isLayout(layout) ? layout : DEFAULT_LAYOUT
@@ -73,9 +76,15 @@ export default function CardView({
         <hr />
         <p className="msg">{card.message}</p>
         <p className="from">
-          Học sinh {site.organization}
-          <br />
-          {site.date}
+          {fromOverride !== undefined ? (
+            fromOverride
+          ) : (
+            <>
+              Học sinh {site.organization}
+              <br />
+              {site.date}
+            </>
+          )}
         </p>
       </div>
     </article>
