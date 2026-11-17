@@ -330,6 +330,24 @@ describe('createTemplate atomicity', () => {
     expect(row).toBeNull()
   })
 
+  it('create with all three image slots attaches every image to the new template', async () => {
+    const a = await seedImage(db, 'imgslota00000001')
+    const b = await seedImage(db, 'imgslotb00000001')
+    const c = await seedImage(db, 'imgslotc00000001')
+    const r = await handleTemplates(
+      req('POST', '/api/admin/templates', { name: 'ThreeSlots', layout: 'night', images: { background: a, banner: b, photo: c } }),
+      makeEnv(db), TEST_EMAIL,
+    )
+    expect(r.status).toBe(200)
+    const t = await r.json() as { id: number }
+    const rows = await db.prepare('SELECT template_id, slot, image_id FROM template_image ORDER BY slot').all<{ template_id: number; slot: string; image_id: number }>()
+    expect(rows.results).toEqual([
+      { template_id: t.id, slot: 'background', image_id: a },
+      { template_id: t.id, slot: 'banner', image_id: b },
+      { template_id: t.id, slot: 'photo', image_id: c },
+    ])
+  })
+
   it('same-name templates created back to back return their own distinct rows', async () => {
     const r1 = await handleTemplates(
       req('POST', '/api/admin/templates', { name: 'DupName', layout: 'classic' }),

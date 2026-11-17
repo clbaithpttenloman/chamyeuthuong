@@ -129,9 +129,10 @@ async function createTemplate(request: Request, env: Env, email: string): Promis
   if (imageUpdates) {
     for (const [slot, val] of Object.entries(imageUpdates)) {
       if (val !== null) {
-        // (SELECT last_insert_rowid()) references the template row just inserted in this batch.
+        // The batch is one serial transaction, so the template inserted first is the newest row.
+        // (last_insert_rowid() would point at the previous template_image row from the 2nd image on.)
         stmts.push(
-          env.DB.prepare('INSERT INTO template_image (template_id, slot, image_id) VALUES ((SELECT last_insert_rowid()), ?, ?)')
+          env.DB.prepare('INSERT INTO template_image (template_id, slot, image_id) VALUES ((SELECT MAX(id) FROM template), ?, ?)')
             .bind(slot, val),
         )
       }
