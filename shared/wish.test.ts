@@ -193,3 +193,13 @@ describe('fillWish — special characters in replacements (no regex injection)',
     expect(fillWish('{tên}', { name: '{tên}' })).toBe('{tên}')
   })
 })
+
+describe('fillWish — empty title falls back like a missing title', () => {
+  it('empty-string title keeps the Thầy/Cô fallback in both placeholders', () => {
+    expect(fillWish('Kính chúc {Thầy/Cô} {tên}, cảm ơn {thầy/cô}.', { name: 'An', title: '' }))
+      .toBe('Kính chúc Thầy/Cô An, cảm ơn thầy/cô.')
+  })
+  it('$ in the name is inserted literally', () => {
+    expect(fillWish('{Thầy/Cô} {tên}', { name: '$& $1', title: 'Cô' })).toBe('Cô $& $1')
+  })
+})

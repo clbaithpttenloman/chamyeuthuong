@@ -111,14 +111,14 @@ export default function BulkCreate({
     setError(null)
     setSuccessCount(null)
 
-    const { items, invalidLines } = parseBulkInput(text)
+    const { items, invalidLines, overLimit } = parseBulkInput(text)
 
     if (invalidLines.length > 0) {
-      setError(`Các dòng sau thiếu danh xưng Thầy/Cô: ${invalidLines.join(', ')}`)
+      setError(`Các dòng sau thiếu danh xưng Thầy/Cô hoặc tên: ${invalidLines.join(', ')}`)
       return
     }
     if (items.length === 0) { setError('Danh sách trống.'); return }
-    if (items.length > 100) { setError('Tối đa 100 giáo viên.'); return }
+    if (overLimit > 0) { setError(`Tối đa 100 giáo viên mỗi lần; bớt ${overLimit} dòng rồi thử lại.`); return }
 
     // Build items with message from wish template (if set)
     const finalItems = items.map((item) => ({
@@ -201,7 +201,7 @@ export default function BulkCreate({
             onChange={(e) => setWishTemplate(e.target.value)}
             maxLength={600}
             rows={4}
-            placeholder="Kính chúc thầy/cô {tên} luôn mạnh khỏe và hạnh phúc!"
+            placeholder="Kính chúc {Thầy/Cô} {tên} luôn mạnh khỏe và hạnh phúc!"
           />
           <small>{wishTemplate.length}/600 ký tự</small>
         </label>

@@ -14,7 +14,7 @@ export function fillWish(
   vars: { name: string; subject?: string; title?: string },
 ): string {
   const subject = vars.subject ?? ''
-  const titleUpper = vars.title ?? null   // 'Thầy' | 'Cô' | null
+  const titleUpper = vars.title || null   // 'Thầy' | 'Cô' | null ('' counts as missing)
   const titleLower = titleUpper ? titleUpper.toLowerCase() : null
 
   let result = body

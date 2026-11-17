@@ -1,81 +1,56 @@
 /**
- * Pure, testable bulk-input parser (extracted from BulkCreate.tsx).
+ * Pure, testable bulk-input parser (used by BulkCreate.tsx).
  *
  * Format per line: `{Thầy|Cô} Name | Subject` (subject optional).
- * The title prefix is matched case-insensitively ('thầy', 'CÔ', etc.) and
- * normalised to 'Thầy' or 'Cô'.  Lines without a recognised prefix are
- * collected in `invalidLines` (1-indexed among non-empty lines); nothing is
- * returned for those lines.
- *
- * Result is capped at 100 items (excess lines beyond the first 100 valid ones
- * are silently dropped — same as the previous single-pass behaviour).
+ * The title prefix is matched case-insensitively ('thầy', 'CÔ', …) after Unicode NFC
+ * normalisation (text pasted from macOS can be decomposed) and stored as 'Thầy' or 'Cô'.
+ * Lines without a recognised prefix or name are reported in `invalidLines` using the line
+ * numbers shown in the textarea (blank lines are counted but ignored). At most 100 items
+ * are returned; `overLimit` counts the valid lines beyond that.
  */
 
-import { isTitle, type Title } from '../../../shared/honorific.ts'
+import type { Title } from '../../../shared/honorific.ts'
 
 export type ParsedItem = { name: string; subject?: string; title: Title }
 
 export type ParseResult = {
   items: ParsedItem[]
   invalidLines: number[]
+  overLimit: number
 }
 
-/** 'thầy ' prefix length in JS string units (characters, not bytes). */
-const THAY_PREFIX = 'thầy '
-/** 'cô ' prefix length. */
-const CO_PREFIX = 'cô '
+export const MAX_BULK_ITEMS = 100
+
+const PREFIXES: ReadonlyArray<[string, Title]> = [['thầy ', 'Thầy'], ['cô ', 'Cô']]
 
 export function parseBulkInput(raw: string): ParseResult {
   const items: ParsedItem[] = []
   const invalidLines: number[] = []
+  let overLimit = 0
 
-  // Split and filter empty lines; number non-empty lines from 1.
-  const nonEmpty = raw
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-
-  for (let i = 0; i < nonEmpty.length; i++) {
-    const lineNum = i + 1
-    const line = nonEmpty[i]
+  const lines = raw.normalize('NFC').split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
 
     const pipeIdx = line.indexOf('|')
     const namePart = (pipeIdx === -1 ? line : line.slice(0, pipeIdx)).trim()
-    const subjectRaw = pipeIdx === -1 ? '' : line.slice(pipeIdx + 1).trim()
+    const subject = pipeIdx === -1 ? '' : line.slice(pipeIdx + 1).trim()
 
     const lower = namePart.toLowerCase()
-
-    let title: Title | null = null
-    let name = ''
-
-    if (lower.startsWith(THAY_PREFIX)) {
-      title = 'Thầy'
-      name = namePart.slice(THAY_PREFIX.length).trim()
-    } else if (lower.startsWith(CO_PREFIX)) {
-      title = 'Cô'
-      name = namePart.slice(CO_PREFIX.length).trim()
-    }
-
-    if (title === null || name.length === 0) {
-      invalidLines.push(lineNum)
+    const match = PREFIXES.find(([prefix]) => lower.startsWith(prefix))
+    const name = match ? namePart.slice(match[0].length).trim() : ''
+    if (!match || !name) {
+      invalidLines.push(i + 1)
       continue
     }
 
-    if (!isTitle(title)) {
-      // Defensive: should never happen given the if/else above
-      invalidLines.push(lineNum)
+    if (items.length === MAX_BULK_ITEMS) {
+      overLimit++
       continue
     }
-
-    const item: ParsedItem = {
-      name,
-      title,
-      ...(subjectRaw ? { subject: subjectRaw } : {}),
-    }
-
-    items.push(item)
-    if (items.length === 100) break
+    items.push({ name, title: match[1], ...(subject ? { subject } : {}) })
   }
 
-  return { items, invalidLines }
+  return { items, invalidLines, overLimit }
 }

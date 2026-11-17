@@ -66,11 +66,11 @@ describe('parseBulkInput — title extraction', () => {
     expect(result.items).toHaveLength(100)
   })
 
-  it('empty lines are skipped, line numbers count only non-empty lines', () => {
-    // Line 1 (non-empty): valid, Line 2 (non-empty): invalid
+  it('empty lines are skipped, line numbers match the textarea (blank lines counted)', () => {
+    // Line 1 valid, line 2 blank, line 3 invalid
     const result = parseBulkInput('Thầy A | Toán\n\nTrần Thị B')
     expect(result.items).toHaveLength(1)
-    expect(result.invalidLines).toEqual([2])
+    expect(result.invalidLines).toEqual([3])
   })
 
   it('whitespace-only lines are treated as empty and skipped', () => {
@@ -107,5 +107,24 @@ describe('parseBulkInput — title extraction', () => {
     const result = parseBulkInput('')
     expect(result.items).toHaveLength(0)
     expect(result.invalidLines).toHaveLength(0)
+  })
+})
+
+describe('parseBulkInput — line numbers and Unicode forms', () => {
+  it('reports line numbers as seen in the textarea, counting blank lines', () => {
+    const r = parseBulkInput('Thầy An | Toán\n\nNguyễn Bình\nCô Chi')
+    expect(r.invalidLines).toEqual([3])
+    expect(r.items.map((i) => i.name)).toEqual(['An', 'Chi'])
+  })
+  it('accepts a decomposed (NFD) "Thầy" pasted from macOS', () => {
+    const r = parseBulkInput('Thầy An'.normalize('NFD'))
+    expect(r.invalidLines).toEqual([])
+    expect(r.items[0]).toMatchObject({ title: 'Thầy', name: 'An' })
+  })
+  it('reports lines beyond the 100-item limit instead of dropping them silently', () => {
+    const lines = Array.from({ length: 102 }, (_, i) => `Cô N${i}`).join('\n')
+    const r = parseBulkInput(lines)
+    expect(r.items).toHaveLength(100)
+    expect(r.overLimit).toBe(2)
   })
 })
