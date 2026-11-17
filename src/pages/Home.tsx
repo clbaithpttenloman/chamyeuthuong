@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { PublicCard, WallResponse, WallTeacher } from '../../shared/api.ts'
+import type { WallLatestCard, WallResponse, WallTeacher } from '../../shared/api.ts'
 import { getWall } from '../api'
 import CardView from '../components/CardView.tsx'
 import site from '../content/site.json'
@@ -154,9 +154,7 @@ export default function Home() {
 
 // ── Sub-components ────────────────────────────────────────────────────────
 
-type LatestWithTeacher = PublicCard & { teacher: { publicId: string; title: string | null; name: string } }
-
-function LatestCardLink({ card }: { card: LatestWithTeacher }) {
+function LatestCardLink({ card }: { card: WallLatestCard }) {
   const { teacher } = card
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
   return (
@@ -172,6 +170,7 @@ function LatestCardLink({ card }: { card: LatestWithTeacher }) {
             layout={card.layout}
             images={card.images}
             from={card.from}
+            headingLevel="h2"
           />
         </div>
       </div>

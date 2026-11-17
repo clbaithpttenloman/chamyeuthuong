@@ -16,6 +16,7 @@ import {
   deleteAdminTemplate,
   listAdminTemplates,
   listImages,
+  messageFor,
   updateAdminTemplate,
   uploadImage,
 } from '../../api'
@@ -84,7 +85,7 @@ export default function TemplateSection({
     setLoading(true)
     listAdminTemplates()
       .then(setTemplates)
-      .catch((e) => { if (!onAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi tải mẫu thiệp') })
+      .catch((e) => { if (!onAccessError(e)) setError(messageFor(e)) })
       .finally(() => setLoading(false))
   }, [onAccessError])
 
@@ -144,11 +145,11 @@ export default function TemplateSection({
       const uploaded = await uploadImage(compressed, name)
       setImages((prev) => [...prev, uploaded])
       setForm((f) => ({ ...f, images: { ...f.images, [slot]: { id: uploaded.id, token: uploaded.token } } }))
-    } catch (err) {
-      if (!onAccessError(err)) {
-        setUploadError(err instanceof ApiError && err.status === 409
+    } catch (e) {
+      if (!onAccessError(e)) {
+        setUploadError(e instanceof ApiError && e.status === 409
           ? 'Đã đạt giới hạn thư viện ảnh'
-          : err instanceof Error ? err.message : 'Lỗi tải ảnh lên')
+          : messageFor(e))
       }
     } finally {
       setUploadingSlot(null)
@@ -186,7 +187,7 @@ export default function TemplateSection({
       setEditing(null)
     } catch (err) {
       if (!onAccessError(err)) {
-        setError(err instanceof Error ? err.message : 'Lỗi lưu mẫu thiệp')
+        setError(messageFor(err))
       }
     } finally {
       setSaving(false)
@@ -205,7 +206,7 @@ export default function TemplateSection({
         if (err instanceof ApiError && err.status === 409) {
           setError('Mẫu đang được dùng — hãy tắt mẫu thay vì xóa')
         } else {
-          setError(err instanceof Error ? err.message : 'Lỗi xóa mẫu thiệp')
+          setError(messageFor(err))
         }
       }
     }

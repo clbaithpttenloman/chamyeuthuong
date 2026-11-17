@@ -230,3 +230,20 @@ describe('RESET', () => {
     expect(s).toEqual(initialState(null))
   })
 })
+
+// ── isTextValid — trimmed text validation ────────────────────────────
+
+describe('isTextValid — trimmed text', () => {
+  it('whitespace-only text is invalid', () => {
+    // Currently fails: [...'   '].length === 3 passes the cp >= 1 check
+    expect(isTextValid('   ')).toBe(false)
+  })
+
+  it('newlines-only text is invalid', () => {
+    expect(isTextValid('\n\n')).toBe(false)
+  })
+
+  it('text with leading/trailing whitespace is valid when non-empty content exists', () => {
+    expect(isTextValid('  hello  ')).toBe(true)
+  })
+})

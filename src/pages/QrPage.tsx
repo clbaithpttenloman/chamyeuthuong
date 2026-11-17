@@ -2,11 +2,14 @@
  * QrPage — `/t/:token`
  *
  * Shows a random approved card for the teacher whose private QR token matches.
- * "Thiệp khác" re-fetches (server picks a new random card).
+ * "Thiệp khác" re-fetches (server picks a new random card); if the same card
+ * comes back, auto-retries once before showing it.
  * "Xem tất cả N thiệp" links to the teacher's public page.
  * Empty state shows the CLB message and a CTA to send the first card.
+ * Stale responses (token or refetchKey changed before the previous fetch resolved)
+ * are silently dropped.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { QrResponse } from '../../shared/api.ts'
 import { ApiError, getQr } from '../api'
@@ -24,18 +27,38 @@ export default function QrPage() {
   const [state, setState] = useState<State>({ status: 'loading' })
   const [refetchKey, setRefetchKey] = useState(0)
 
+  // Track last-shown card to auto-retry once if the same card comes back
+  const prevCardId = useRef<string | null>(null)
+  const hasAutoRetried = useRef(false)
+
   useEffect(() => {
     if (!token) { setState({ status: 'notfound' }); return }
     setState({ status: 'loading' })
+    let cancelled = false
+
     getQr(token)
-      .then((data) => setState({ status: 'ok', data }))
+      .then((data) => {
+        if (cancelled) return
+        // If the same card came back and we haven't retried yet, retry once automatically
+        if (data.card && prevCardId.current === data.card.publicId && !hasAutoRetried.current) {
+          hasAutoRetried.current = true
+          setRefetchKey((k) => k + 1)
+          return
+        }
+        hasAutoRetried.current = false
+        if (data.card) prevCardId.current = data.card.publicId
+        setState({ status: 'ok', data })
+      })
       .catch((e) => {
-        if (e instanceof ApiError && e.status === 404) {
-          setState({ status: 'notfound' })
-        } else {
-          setState({ status: 'error' })
+        if (!cancelled) {
+          if (e instanceof ApiError && e.status === 404) {
+            setState({ status: 'notfound' })
+          } else {
+            setState({ status: 'error' })
+          }
         }
       })
+    return () => { cancelled = true }
   }, [token, refetchKey])
 
   if (state.status === 'loading') {
@@ -101,7 +124,10 @@ export default function QrPage() {
           <button
             type="button"
             className="btn-ghost"
-            onClick={() => setRefetchKey((k) => k + 1)}
+            onClick={() => {
+              hasAutoRetried.current = false  // allow one retry on the next fetch
+              setRefetchKey((k) => k + 1)
+            }}
           >
             🔀 Thiệp khác
           </button>

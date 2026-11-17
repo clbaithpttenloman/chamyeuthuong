@@ -187,6 +187,24 @@ describe('GET /api/admin/cards — paging cursors', () => {
     // Newest first within the page
     if (list.length >= 2) expect(list[0].id).toBeGreaterThan(list[1].id)
   })
+
+  it('?status=approved&after=<id> → 400 (wrong cursor type for status)', async () => {
+    const id = await seedCard({ status: 'approved', publicId: 'apr0000000000001' })
+    const r = await handleModeration(req('GET', `/api/admin/cards?status=approved&after=${id}`), makeEnv(db), TEST_EMAIL)
+    expect(r.status).toBe(400)
+  })
+
+  it('?status=hidden&after=<id> → 400 (wrong cursor type for status)', async () => {
+    const id = await seedCard({ status: 'hidden', publicId: 'hid0000000000001' })
+    const r = await handleModeration(req('GET', `/api/admin/cards?status=hidden&after=${id}`), makeEnv(db), TEST_EMAIL)
+    expect(r.status).toBe(400)
+  })
+
+  it('?status=pending&before=<id> → 400 (wrong cursor type for status)', async () => {
+    const id = await seedCard({ status: 'pending', publicId: 'pnd0000000000001' })
+    const r = await handleModeration(req('GET', `/api/admin/cards?status=pending&before=${id}`), makeEnv(db), TEST_EMAIL)
+    expect(r.status).toBe(400)
+  })
 })
 
 // ---- PUT /api/admin/cards/:id — single review ----

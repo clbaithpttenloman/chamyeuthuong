@@ -2,6 +2,7 @@
  * TeacherPage — `/thay-co/:publicId`
  *
  * Shows all approved cards for a teacher, plus a CTA to send a new card.
+ * Stale responses from previous publicId are silently dropped.
  */
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
@@ -22,15 +23,19 @@ export default function TeacherPage() {
   useEffect(() => {
     if (!publicId) { setState({ status: 'notfound' }); return }
     setState({ status: 'loading' })
+    let cancelled = false
     getTeacherPage(publicId)
-      .then((data) => setState({ status: 'ok', data }))
+      .then((data) => { if (!cancelled) setState({ status: 'ok', data }) })
       .catch((e) => {
-        if (e instanceof ApiError && e.status === 404) {
-          setState({ status: 'notfound' })
-        } else {
-          setState({ status: 'error' })
+        if (!cancelled) {
+          if (e instanceof ApiError && e.status === 404) {
+            setState({ status: 'notfound' })
+          } else {
+            setState({ status: 'error' })
+          }
         }
       })
+    return () => { cancelled = true }
   }, [publicId])
 
   if (state.status === 'loading') {
@@ -107,6 +112,7 @@ function CardWrap({ card, teacherName, teacherTitle }: {
         layout={card.layout}
         images={card.images}
         from={card.from}
+        headingLevel="h2"
       />
     </div>
   )

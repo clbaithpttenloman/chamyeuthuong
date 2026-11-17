@@ -153,6 +153,26 @@ describe('POST /api/admin/teachers', () => {
     expect(r.status).toBe(400)
   })
 
+  it('department > 80 chars → 400', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Valid', title: 'Thầy', department: 'D'.repeat(81) }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('showOnHome: 2 → 400 (strict 0|1 only)', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', showOnHome: 2 }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('showOnHome: true → 400 (strict 0|1 only)', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', showOnHome: true }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('showOnHome: "0" → 400 (strict 0|1 only)', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', showOnHome: '0' }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
   it('null body → 400 bad_request', async () => {
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', null), makeEnv(db))
     expect(r.status).toBe(400)
@@ -293,6 +313,37 @@ describe('PUT /api/admin/teachers/:id', () => {
     const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, []), makeEnv(db))
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
+  })
+
+  it('department > 80 chars in PUT → 400', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', department: 'D'.repeat(81) }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('PUT without showOnHome keeps existing showOnHome value', async () => {
+    // Create with showOnHome=0
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', showOnHome: 0 }), makeEnv(db))).json() as AdminTeacher
+    expect(created.showOnHome).toBe(0)
+    // PUT without showOnHome — existing 0 should be preserved
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T2', subject: '' }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).showOnHome).toBe(0)
+  })
+
+  it('PUT without department keeps existing department value', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', department: 'Khoa học' }), makeEnv(db))).json() as AdminTeacher
+    expect(created.department).toBe('Khoa học')
+    // PUT without department — existing value should be preserved
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T2', subject: '' }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).department).toBe('Khoa học')
+  })
+
+  it('PUT showOnHome: 2 → 400 (strict 0|1 only)', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', showOnHome: 2 }), makeEnv(db))
+    expect(r.status).toBe(400)
   })
 })
 
@@ -442,19 +493,18 @@ describe('PUT /api/admin/teachers/:id — title field', () => {
   })
 })
 
-// ---- Bulk create (new text-line format) — failing until Group 2 ----
+// ---- Bulk create (new structured items format) — failing until Fix Group 1 ----
 
-describe('POST /api/admin/teachers/bulk — text-line format (failing until Group 2)', () => {
-  // Format: { lines: ["Thầy Tên | Môn | Tổ", ...] }
-  // Each line: "{Title} {Name} | {Subject} | {Department}"
+describe('POST /api/admin/teachers/bulk — structured items format', () => {
+  // Format: { items: [{ title, name, subject?, department? }] }
 
   it('creates 3 teachers in one batch → 200 { created: [...] }', async () => {
     const r = await handleAdmin(
       adminReq('POST', '/api/admin/teachers/bulk', {
-        lines: [
-          'Thầy Nguyễn Văn A | Toán | Tổ Toán',
-          'Cô Trần Thị B | Lý',
-          'Thầy Lê Văn C | Hóa | Tổ Hóa-Sinh',
+        items: [
+          { title: 'Thầy', name: 'Nguyễn Văn A', subject: 'Toán', department: 'Tổ Toán' },
+          { title: 'Cô', name: 'Trần Thị B', subject: 'Lý' },
+          { title: 'Thầy', name: 'Lê Văn C', subject: 'Hóa', department: 'Tổ Hóa-Sinh' },
         ],
       }),
       makeEnv(db),
@@ -465,38 +515,51 @@ describe('POST /api/admin/teachers/bulk — text-line format (failing until Grou
     expect(body.created).toHaveLength(3)
   })
 
-  it('0 lines → 400', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines: [] }), makeEnv(db))
+  it('0 items → 400', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { items: [] }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
-  it('101 lines → 400', async () => {
-    const lines = Array.from({ length: 101 }, (_, i) => `${i % 2 === 0 ? 'Thầy' : 'Cô'} Teacher${i} | Môn${i}`)
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines }), makeEnv(db))
+  it('101 items → 400', async () => {
+    const items = Array.from({ length: 101 }, (_, i) => ({
+      title: i % 2 === 0 ? 'Thầy' : 'Cô',
+      name: `Teacher${i}`,
+      subject: `Môn${i}`,
+    }))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { items }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
-  it('1 line → 200', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines: ['Cô Trần Thị B | Văn'] }), makeEnv(db))
+  it('1 item → 200', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', {
+      items: [{ title: 'Cô', name: 'Trần Thị B', subject: 'Văn' }],
+    }), makeEnv(db))
     expect(r.status).toBe(200)
     const body = await r.json() as { created: AdminTeacher[] }
     expect(body.created).toHaveLength(1)
     expect(body.created[0].title).toBe('Cô')
   })
 
-  it('100 lines → 200', async () => {
-    const lines = Array.from({ length: 100 }, (_, i) => `${i % 2 === 0 ? 'Thầy' : 'Cô'} Teacher${i} | Môn${i}`)
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines }), makeEnv(db))
+  it('100 items → 200', async () => {
+    const items = Array.from({ length: 100 }, (_, i) => ({
+      title: i % 2 === 0 ? 'Thầy' : 'Cô',
+      name: `Teacher${i}`,
+      subject: `Môn${i}`,
+    }))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { items }), makeEnv(db))
     expect(r.status).toBe(200)
     const body = await r.json() as { created: AdminTeacher[] }
     expect(body.created).toHaveLength(100)
   })
 
-  it('missing title in line → 400, nothing inserted (all-or-nothing)', async () => {
+  it('invalid title in item → 400, nothing inserted (all-or-nothing)', async () => {
     const countBefore = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
     const r = await handleAdmin(
       adminReq('POST', '/api/admin/teachers/bulk', {
-        lines: ['Thầy Valid Teacher | Toán', 'Invalid Line | Môn'],  // second line has no title
+        items: [
+          { title: 'Thầy', name: 'Valid Teacher', subject: 'Toán' },
+          { title: 'invalid', name: 'Other', subject: 'Môn' },
+        ],
       }),
       makeEnv(db),
     )
@@ -508,7 +571,11 @@ describe('POST /api/admin/teachers/bulk — text-line format (failing until Grou
   it('unique tokens for every teacher in bulk', async () => {
     const r = await handleAdmin(
       adminReq('POST', '/api/admin/teachers/bulk', {
-        lines: ['Thầy T1 | Toán', 'Cô T2 | Lý', 'Thầy T3 | Hóa'],
+        items: [
+          { title: 'Thầy', name: 'T1', subject: 'Toán' },
+          { title: 'Cô', name: 'T2', subject: 'Lý' },
+          { title: 'Thầy', name: 'T3', subject: 'Hóa' },
+        ],
       }),
       makeEnv(db),
     )
@@ -518,10 +585,10 @@ describe('POST /api/admin/teachers/bulk — text-line format (failing until Grou
     expect(new Set(tokens).size).toBe(tokens.length)
   })
 
-  it('department is parsed from third | segment when present', async () => {
+  it('department is set from items when present', async () => {
     const r = await handleAdmin(
       adminReq('POST', '/api/admin/teachers/bulk', {
-        lines: ['Thầy Nguyễn Văn A | Toán | Tổ Toán-Lý'],
+        items: [{ title: 'Thầy', name: 'Nguyễn Văn A', subject: 'Toán', department: 'Tổ Toán-Lý' }],
       }),
       makeEnv(db),
     )
@@ -537,7 +604,7 @@ describe('POST /api/admin/teachers/bulk — text-line format (failing until Grou
         c.close()
       },
     })
-    const req = new Request('https://x/api/admin/teachers/bulk', {
+    const req2 = new Request('https://x/api/admin/teachers/bulk', {
       method: 'POST',
       headers: {
         'X-Admin-Email': TEST_EMAIL,
@@ -548,7 +615,7 @@ describe('POST /api/admin/teachers/bulk — text-line format (failing until Grou
       body: bigStream,
       duplex: 'half',
     } as RequestInit)
-    const r = await handleAdmin(req, makeEnv(db))
+    const r = await handleAdmin(req2, makeEnv(db))
     expect(r.status).toBe(413)
   })
 
@@ -563,12 +630,42 @@ describe('POST /api/admin/teachers/bulk — text-line format (failing until Grou
       .mockReturnValueOnce('newpublicid00001')   // publicId: success
 
     const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { lines: ['Cô Retry | Văn'] }),
+      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ title: 'Cô', name: 'Retry', subject: 'Văn' }] }),
       makeEnv(db),
     )
     expect(r.status).toBe(200)
     const body = await r.json() as { created: AdminTeacher[] }
     expect(body.created[0].token).toBe('newtoken000000001')
+  })
+
+  it('name > 80 chars in bulk item → 400', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ title: 'Thầy', name: 'A'.repeat(81), subject: 'Toán' }],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('subject > 80 chars in bulk item → 400', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ title: 'Thầy', name: 'Valid', subject: 'S'.repeat(81) }],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('department > 80 chars in bulk item → 400', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        items: [{ title: 'Thầy', name: 'Valid', subject: 'Toán', department: 'D'.repeat(81) }],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
   })
 })
 

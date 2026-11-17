@@ -13,61 +13,8 @@
 import { error, json } from './http.ts'
 import { isToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
-import { formatFrom } from '../shared/api.ts'
+import { cardWhere, teacherWhere, fetchTemplateImages, toPublicCard, type CardRow } from './publicSql.ts'
 import type { Env } from './types.ts'
-
-/** Shared SQL fragment for approved cards — single source of truth. */
-const PUBLIC_CARD_WHERE = "sc.status = 'approved'"
-/** Shared SQL fragment for visible teachers — single source of truth. */
-const PUBLIC_TEACHER_WHERE = "tp.show_on_home = 1"
-
-type CardRow = {
-  public_id: string
-  layout: string
-  message: string
-  from_name: string
-  from_class: string
-  anonymous: number
-  created_at: string
-  template_id: number
-}
-
-/** Fetch slot→token map for a set of template ids (one query, json_each). */
-async function fetchTemplateImages(
-  db: Env['DB'],
-  templateIds: number[],
-): Promise<Map<number, Record<string, string>>> {
-  if (templateIds.length === 0) return new Map()
-  const { results } = await db
-    .prepare(
-      'SELECT ti.template_id, ti.slot, i.token ' +
-      'FROM template_image ti JOIN image i ON i.id = ti.image_id ' +
-      'WHERE ti.template_id IN (SELECT value FROM json_each(?))',
-    )
-    .bind(JSON.stringify(templateIds))
-    .all<{ template_id: number; slot: string; token: string }>()
-  const map = new Map<number, Record<string, string>>()
-  for (const r of results) {
-    if (!map.has(r.template_id)) map.set(r.template_id, {})
-    map.get(r.template_id)![r.slot] = r.token
-  }
-  return map
-}
-
-function toPublicCard(row: CardRow, images: Record<string, string>) {
-  return {
-    publicId: row.public_id,
-    layout: row.layout,
-    images,
-    message: row.message,
-    from: formatFrom({
-      fromName: row.from_name,
-      fromClass: row.from_class,
-      anonymous: row.anonymous === 1,
-    }),
-    createdAt: row.created_at,
-  }
-}
 
 // ---- GET /api/wall ----
 
@@ -78,9 +25,9 @@ async function handleWall(db: Env['DB']): Promise<Response> {
       'SELECT tp.public_id AS publicId, tt.title, t.name, t.subject, tp.department, ' +
       'COUNT(sc.id) AS cardCount ' +
       'FROM teacher t ' +
-      `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${PUBLIC_TEACHER_WHERE} ` +
+      `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')} ` +
       'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
-      `LEFT JOIN student_card sc ON sc.teacher_id = t.id AND ${PUBLIC_CARD_WHERE} ` +
+      `LEFT JOIN student_card sc ON sc.teacher_id = t.id AND ${cardWhere('sc')} ` +
       'GROUP BY t.id, tp.public_id, tt.title, t.name, t.subject, tp.department ' +
       'ORDER BY t.id',
     )
@@ -94,13 +41,13 @@ async function handleWall(db: Env['DB']): Promise<Response> {
       'tp.public_id AS teacher_public_id, tt.title AS teacher_title, t.name AS teacher_name ' +
       'FROM student_card sc ' +
       'JOIN teacher t ON t.id = sc.teacher_id ' +
-      `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${PUBLIC_TEACHER_WHERE} ` +
+      `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')} ` +
       'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
       'JOIN template tmpl ON tmpl.id = sc.template_id ' +
-      `WHERE ${PUBLIC_CARD_WHERE} ` +
+      `WHERE ${cardWhere('sc')} ` +
       'AND sc.id = (' +
       '  SELECT sc2.id FROM student_card sc2 ' +
-      `  WHERE sc2.teacher_id = sc.teacher_id AND ${PUBLIC_CARD_WHERE.replace('sc.', 'sc2.')} ` +
+      `  WHERE sc2.teacher_id = sc.teacher_id AND ${cardWhere('sc2')} ` +
       '  ORDER BY sc2.created_at DESC, sc2.id DESC LIMIT 1' +
       ') ' +
       'ORDER BY sc.created_at DESC, sc.id DESC ' +
@@ -121,8 +68,8 @@ async function handleWall(db: Env['DB']): Promise<Response> {
   const totalsRow = await db
     .prepare(
       'SELECT ' +
-      `(SELECT COUNT(*) FROM teacher t JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${PUBLIC_TEACHER_WHERE}) AS teachers, ` +
-      `(SELECT COUNT(*) FROM student_card sc JOIN teacher t ON t.id = sc.teacher_id JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${PUBLIC_TEACHER_WHERE} WHERE ${PUBLIC_CARD_WHERE}) AS cards`,
+      `(SELECT COUNT(*) FROM teacher t JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')}) AS teachers, ` +
+      `(SELECT COUNT(*) FROM student_card sc JOIN teacher t ON t.id = sc.teacher_id JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')} WHERE ${cardWhere('sc')}) AS cards`,
     )
     .first<{ teachers: number; cards: number }>()
 
@@ -136,26 +83,19 @@ async function handleWall(db: Env['DB']): Promise<Response> {
 // ---- GET /api/teachers/:publicId ----
 
 async function handleTeacherPage(db: Env['DB'], publicId: string): Promise<Response> {
-  // Fetch teacher (any show_on_home value — teacher page is reachable regardless)
+  // Single query: teacher profile + teacher_id in one statement
   const teacherRow = await db
     .prepare(
-      'SELECT tp.public_id AS publicId, tt.title, t.name, t.subject, tp.department ' +
+      'SELECT tp.teacher_id, tp.public_id AS publicId, tt.title, t.name, t.subject, tp.department ' +
       'FROM teacher t ' +
       'JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
       'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
       'WHERE tp.public_id = ?',
     )
     .bind(publicId)
-    .first<{ publicId: string; title: string | null; name: string; subject: string; department: string }>()
+    .first<{ teacher_id: number; publicId: string; title: string | null; name: string; subject: string; department: string }>()
 
   if (!teacherRow) return error('not_found')
-
-  // Fetch teacher_id for card query
-  const tidRow = await db
-    .prepare('SELECT teacher_id FROM teacher_profile WHERE public_id = ?')
-    .bind(publicId)
-    .first<{ teacher_id: number }>()
-  if (!tidRow) return error('not_found')
 
   // Approved cards, newest first, capped at 200
   const { results: cardRows } = await db
@@ -164,17 +104,17 @@ async function handleTeacherPage(db: Env['DB'], publicId: string): Promise<Respo
       'sc.template_id, tmpl.layout ' +
       'FROM student_card sc ' +
       'JOIN template tmpl ON tmpl.id = sc.template_id ' +
-      `WHERE sc.teacher_id = ? AND ${PUBLIC_CARD_WHERE} ` +
+      `WHERE sc.teacher_id = ? AND ${cardWhere('sc')} ` +
       'ORDER BY sc.created_at DESC, sc.id DESC ' +
       'LIMIT 200',
     )
-    .bind(tidRow.teacher_id)
+    .bind(teacherRow.teacher_id)
     .all<CardRow>()
 
   // Total (without the 200 cap)
   const totalRow = await db
-    .prepare(`SELECT COUNT(*) AS total FROM student_card sc WHERE sc.teacher_id = ? AND ${PUBLIC_CARD_WHERE}`)
-    .bind(tidRow.teacher_id)
+    .prepare(`SELECT COUNT(*) AS total FROM student_card sc WHERE sc.teacher_id = ? AND ${cardWhere('sc')}`)
+    .bind(teacherRow.teacher_id)
     .first<{ total: number }>()
 
   const templateIds = [...new Set(cardRows.map((r) => r.template_id))]
@@ -183,7 +123,13 @@ async function handleTeacherPage(db: Env['DB'], publicId: string): Promise<Respo
   const cards = cardRows.map((row) => toPublicCard(row, imgMap.get(row.template_id) ?? {}))
 
   return json({
-    teacher: teacherRow,
+    teacher: {
+      publicId: teacherRow.publicId,
+      title: teacherRow.title,
+      name: teacherRow.name,
+      subject: teacherRow.subject,
+      department: teacherRow.department,
+    },
     cards,
     total: totalRow?.total ?? 0,
   })
@@ -200,7 +146,6 @@ async function handleTemplateList(db: Env['DB']): Promise<Response> {
 
   const templateIds = templates.map((t) => t.id)
   const imgMap = await fetchTemplateImages(db, templateIds)
-
   return json(
     templates.map((t) => ({
       id: t.id,

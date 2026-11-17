@@ -32,12 +32,15 @@ export default function CardView({
   layout,
   images = {},
   from: fromOverride,
+  headingLevel: Heading = 'h1',
 }: {
   card: CardData
   layout: string
   images: ImageMap
   /** Optional signature line. When provided, replaces the default "Học sinh {org} / {date}" text. */
   from?: string
+  /** Heading element for the teacher name. Use 'h2' when CardView appears in a list (default 'h1'). */
+  headingLevel?: 'h1' | 'h2'
 }) {
   // Validate layout id against the closed list; never use arbitrary strings as class names.
   const layoutId = isLayout(layout) ? layout : DEFAULT_LAYOUT
@@ -71,7 +74,7 @@ export default function CardView({
         )}
         <p className="kicker">{site.title}</p>
         <p className="to">Kính gửi</p>
-        <h1>{card.title ? `${card.title} ${card.name}` : card.name}</h1>
+        <Heading>{card.title ? `${card.title} ${card.name}` : card.name}</Heading>
         {card.subject && <p className="sub">{card.subject}</p>}
         <hr />
         <p className="msg">{card.message}</p>

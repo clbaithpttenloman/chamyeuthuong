@@ -137,6 +137,19 @@ export type AdminTeacherInput = {
   showOnHome?: 0 | 1
 }
 
+/** One item in a bulk teacher-add request (showOnHome defaults to 1 for all). */
+export type BulkTeacherInputItem = {
+  title: 'Thầy' | 'Cô'
+  name: string
+  subject?: string
+  department?: string
+}
+
+/** Request body for POST /api/admin/teachers/bulk */
+export type BulkTeacherRequest = {
+  items: BulkTeacherInputItem[]
+}
+
 /** Template record in admin API responses. */
 export type AdminTemplate = {
   id: number

@@ -166,21 +166,21 @@ describe('ensureSchema — batch rollback', () => {
     let runCount = 0
     const makeStmt = (sql: string): D1Stmt => ({
       bind: (..._v: unknown[]) => makeStmt(sql),
-      run: async (): Promise<{ success: boolean; meta: { changes: number } }> => {
+      run: async (): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }> => {
         runCount++
         if (runCount === 2) throw new Error('D1_ERROR: mid-batch')
         sqlite.prepare(sql).run()
-        return { success: true, meta: { changes: 1 } }
+        return { success: true, meta: { changes: 1, last_row_id: 0 } }
       },
       first: async <T>() => null as T | null,
       all: async <T>() => ({ results: [] as T[] }),
     })
     const db = {
       prepare: makeStmt,
-      batch: async (statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number } }[]> => {
+      batch: async (statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }[]> => {
         sqlite.exec('BEGIN')
         try {
-          const out: { success: boolean; meta: { changes: number } }[] = []
+          const out: { success: boolean; meta: { changes: number; last_row_id: number } }[] = []
           for (const s of statements) out.push(await s.run())
           sqlite.exec('COMMIT')
           return out

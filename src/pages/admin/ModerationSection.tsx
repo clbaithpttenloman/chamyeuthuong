@@ -4,15 +4,19 @@
  * Pending cards: oldest first, paging with after= cursor.
  * Approved/hidden: newest first, paging with before= cursor.
  * Filter by status and teacher.
- * Select + bulk approve/hide (≤ 200), single approve/hide/delete.
+ * Select + bulk approve/hide (≤ MAX_REVIEW_IDS), single approve/hide/delete.
+ * "Chọn tất cả" is capped at MAX_REVIEW_IDS with a Vietnamese notice.
  * Card thumbnail via CardView mini.
+ * Stale responses when tab/teacher filter changes are dropped via cancel flag.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AdminCard, AdminTeacher } from '../../../shared/api.ts'
+import { MAX_REVIEW_IDS, PAGE_SIZE, formatFrom } from '../../../shared/api.ts'
 import {
   bulkReviewCards,
   deleteAdminCard,
   listAdminCards,
+  messageFor,
   updateAdminCard,
 } from '../../api'
 import CardView from '../../components/CardView.tsx'
@@ -44,16 +48,20 @@ export default function ModerationSection({
   const [error, setError] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [selectionCapNotice, setSelectionCapNotice] = useState<string | null>(null)
 
-  const PAGE_SIZE = 200
   // cursor: for pending oldest-first (after=), for others newest-first (before=)
   const cursorRef = useRef<number | null>(null)
+  // Stale-response guard: each call captures its generation; state updates are
+  // dropped if another call has started since (tab / teacher-filter changed).
+  const loadGenRef = useRef(0)
 
   const loadCards = useCallback(async (
     status: Tab,
     teacher: number | '',
     append: boolean,
   ) => {
+    const gen = ++loadGenRef.current
     setLoading(true)
     setError(null)
     try {
@@ -64,23 +72,26 @@ export default function ModerationSection({
         else params.before = cursorRef.current
       }
       const data = await listAdminCards(params)
+      if (gen !== loadGenRef.current) return  // stale — a newer load superseded this one
       setCards((prev) => append ? [...prev, ...data] : data)
       setHasMore(data.length === PAGE_SIZE)
       if (data.length > 0) {
         cursorRef.current = data[data.length - 1].id
       }
     } catch (e) {
+      if (gen !== loadGenRef.current) return  // stale error from a superseded request
       if (!onAccessError(e)) {
-        setError(e instanceof Error ? e.message : 'Lỗi tải danh sách thiệp')
+        setError(messageFor(e))
       }
     } finally {
-      setLoading(false)
+      if (gen === loadGenRef.current) setLoading(false)
     }
   }, [onAccessError])
 
   // Reload when tab or teacher filter changes
   useEffect(() => {
     setSelected(new Set())
+    setSelectionCapNotice(null)
     cursorRef.current = null
     void loadCards(tab, teacherFilter, false)
   }, [tab, teacherFilter, loadCards])
@@ -99,10 +110,18 @@ export default function ModerationSection({
   }
 
   function toggleAll() {
-    if (selected.size === cards.length) {
+    if (selected.size === cards.length && cards.length > 0) {
       setSelected(new Set())
+      setSelectionCapNotice(null)
     } else {
-      setSelected(new Set(cards.map((c) => c.id)))
+      // Cap selection at MAX_REVIEW_IDS to prevent a 400 from bulk review
+      const ids = cards.map((c) => c.id).slice(0, MAX_REVIEW_IDS)
+      setSelected(new Set(ids))
+      if (cards.length > MAX_REVIEW_IDS) {
+        setSelectionCapNotice(`Chỉ có thể chọn tối đa ${MAX_REVIEW_IDS} thiệp cùng lúc. Đang chọn ${MAX_REVIEW_IDS} thiệp đầu tiên.`)
+      } else {
+        setSelectionCapNotice(null)
+      }
     }
   }
 
@@ -112,15 +131,14 @@ export default function ModerationSection({
     const ids = [...selected]
     try {
       await bulkReviewCards({ ids, status })
-      const delta = status === 'approved'
-        ? -ids.filter((id) => cards.find((c) => c.id === id)?.status === 'pending').length
-        : -ids.filter((id) => cards.find((c) => c.id === id)?.status === 'pending').length
+      const delta = -ids.filter((id) => cards.find((c) => c.id === id)?.status === 'pending').length
       onPendingCountChange(delta)
       setCards((prev) => prev.filter((c) => !selected.has(c.id)))
       setSelected(new Set())
+      setSelectionCapNotice(null)
     } catch (e) {
       if (!onAccessError(e)) {
-        setError(e instanceof Error ? e.message : 'Lỗi thao tác hàng loạt')
+        setError(messageFor(e))
       }
     }
   }
@@ -139,7 +157,7 @@ export default function ModerationSection({
       setSelected((prev) => { const next = new Set(prev); next.delete(card.id); return next })
     } catch (e) {
       if (!onAccessError(e)) {
-        setError(e instanceof Error ? e.message : 'Lỗi thao tác thiệp')
+        setError(messageFor(e))
       }
     }
   }
@@ -218,13 +236,18 @@ export default function ModerationSection({
           <input
             type="checkbox"
             id="mod-select-all"
-            checked={selected.size === cards.length && cards.length > 0}
+            checked={selected.size > 0 && selected.size === Math.min(cards.length, MAX_REVIEW_IDS)}
             onChange={toggleAll}
             aria-label="Chọn tất cả"
           />
           <label htmlFor="mod-select-all" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
             Chọn tất cả ({cards.length})
           </label>
+          {selectionCapNotice && (
+            <span className="admin-notice" role="status" style={{ fontSize: '0.8rem', color: '#a16207', marginLeft: '0.5rem' }}>
+              {selectionCapNotice}
+            </span>
+          )}
         </div>
       )}
 
@@ -273,6 +296,12 @@ function ModCard({
     ? `${teacher.title ? `${teacher.title} ` : ''}${teacher.name}`
     : '—'
 
+  const fromStr = formatFrom({
+    fromName: card.fromName,
+    fromClass: card.fromClass,
+    anonymous: card.anonymous,
+  })
+
   return (
     <div className={`mod-item${selected ? ' mod-item--selected' : ''}`}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
@@ -291,16 +320,14 @@ function ModCard({
               <CardView
                 card={{
                   name: teacher?.name ?? '?',
-                  subject: teacher ? '' : '',
+                  subject: '',
                   message: card.message,
                   title: (teacher?.title as 'Thầy' | 'Cô' | null) ?? null,
                 }}
                 layout={template?.layout ?? 'classic'}
                 images={{}}
-                from={card.anonymous || !card.fromName
-                  ? (card.fromClass ? `Một bạn học sinh · ${card.fromClass}` : 'Một bạn học sinh')
-                  : (card.fromClass ? `${card.fromName} · ${card.fromClass}` : card.fromName)
-                }
+                from={fromStr}
+                headingLevel="h2"
               />
             </div>
           </div>
@@ -311,9 +338,7 @@ function ModCard({
           <div className="mod-item-teacher">{displayTeacher}</div>
           <p className="mod-item-text">{card.message}</p>
           <div className="mod-item-meta">
-            {card.anonymous
-              ? (card.fromClass ? `Ẩn danh · ${card.fromClass}` : 'Ẩn danh')
-              : [card.fromName, card.fromClass].filter(Boolean).join(' · ') || '—'}
+            {fromStr}
             {' · '}
             {template?.name ?? '—'}
             {' · '}

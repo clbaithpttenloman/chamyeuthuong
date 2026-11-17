@@ -94,4 +94,13 @@ describe('checkHeaders', () => {
     const errors = checkHeaders(content)
     expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
   })
+
+  // ── Duplicate X-Robots-Tag rejection ─────────────────────────────────────
+
+  it('rejects duplicate X-Robots-Tag: noindex lines', () => {
+    // Duplicate should be an error — only one noindex line is allowed on /*
+    const content = VALID + '  X-Robots-Tag: noindex\n'
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('X-Robots-Tag'))).toBe(true)
+  })
 })

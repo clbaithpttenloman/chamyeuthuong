@@ -638,6 +638,21 @@ describe('GET /api/admin/images — list', () => {
     expect(typeof list[0].used_by).toBe('number')
     expect(list[0].used_by).toBe(0)
   })
+
+  it('list includes used_by count (1 when one template uses it)', async () => {
+    const now = new Date().toISOString()
+    await db.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
+      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL).run()
+    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
+    await db.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?,?,?,?,?)")
+      .bind('TUsed', 'classic', 1, now, TEST_EMAIL).run()
+    const tmplId = (await db.prepare('SELECT id FROM template WHERE name=?').bind('TUsed').first<{ id: number }>())!.id
+    await db.prepare("INSERT INTO template_image (template_id, slot, image_id) VALUES (?,?,?)").bind(tmplId, 'background', imgId).run()
+
+    const r = await handleImages(imageReq('GET', '/api/admin/images'), makeEnv(db), TEST_EMAIL)
+    const list = await r.json() as Array<{ used_by: number }>
+    expect(list[0].used_by).toBe(1)
+  })
 })
 
 // ===================================================================

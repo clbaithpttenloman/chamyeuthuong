@@ -120,29 +120,39 @@ async function createTemplate(request: Request, env: Env, email: string): Promis
   const { name, layout, active, imageUpdates } = await parseTemplateBody(request, env)
   const now = new Date().toISOString()
 
-  await env.DB
+  // Use last_row_id from INSERT to avoid re-select by name+created_at (wrong row on same-ms duplicates)
+  const result = await env.DB
     .prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
     .bind(name, layout, active, now, email)
     .run()
+  const templateId = result.meta.last_row_id
 
-  const row = await env.DB
-    .prepare('SELECT id, name, layout, active, created_at, created_by FROM template WHERE name = ? AND created_at = ?')
-    .bind(name, now)
-    .first<{ id: number; name: string; layout: string; active: number; created_at: string; created_by: string }>()
-  if (!row) throw new HttpError('unavailable' as never)
-
-  // Insert image slots
+  // Insert all image slots in one batch; map FK errors to 400
   if (imageUpdates) {
     const stmts: D1Stmt[] = []
     for (const [slot, val] of Object.entries(imageUpdates)) {
       if (val !== null) {
-        stmts.push(env.DB.prepare('INSERT INTO template_image (template_id, slot, image_id) VALUES (?, ?, ?)').bind(row.id, slot, val))
+        stmts.push(env.DB.prepare('INSERT INTO template_image (template_id, slot, image_id) VALUES (?, ?, ?)').bind(templateId, slot, val))
       }
     }
-    if (stmts.length > 0) await env.DB.batch(stmts)
+    if (stmts.length > 0) {
+      try {
+        await env.DB.batch(stmts)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : ''
+        if (msg.includes('FOREIGN KEY constraint failed')) throw new HttpError('bad_request')
+        throw e
+      }
+    }
   }
 
-  const images = await fetchImagesForTemplate(env.DB, row.id)
+  const row = await env.DB
+    .prepare('SELECT id, name, layout, active, created_at, created_by FROM template WHERE id = ?')
+    .bind(templateId)
+    .first<{ id: number; name: string; layout: string; active: number; created_at: string; created_by: string }>()
+  if (!row) throw new HttpError('unavailable')
+
+  const images = await fetchImagesForTemplate(env.DB, templateId)
   return json(toAdminTemplate(row, images))
 }
 

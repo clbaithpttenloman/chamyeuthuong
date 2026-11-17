@@ -5,13 +5,13 @@ import { SCHEMA } from './schema.ts'
 /** Minimal D1 binding types (no @cloudflare/workers-types). Matches worker/types.ts. */
 export type D1Stmt = {
   bind(...values: unknown[]): D1Stmt
-  run(): Promise<{ success: boolean; meta: { changes: number } }>
+  run(): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }>
   first<T = Record<string, unknown>>(column?: string): Promise<T | null>
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>
 }
 export type D1 = {
   prepare(sql: string): D1Stmt
-  batch(statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number } }[]>
+  batch(statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }[]>
 }
 
 /**
@@ -57,7 +57,7 @@ export function testDb(opts: { schema?: false } = {}) {
         exec(() => {
           const r = sqlite.prepare(sql).run(...args)
           state.writes += Number(r.changes)
-          return { success: true, meta: { changes: Number(r.changes) } }
+          return { success: true, meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid ?? 0) } }
         }),
       first: <T>(column?: string) =>
         exec(() => {
@@ -89,7 +89,7 @@ export function testDb(opts: { schema?: false } = {}) {
       if (state.fail) throw new Error('D1_ERROR: simulated failure')
       sqlite.exec('BEGIN')
       try {
-        const out: { success: boolean; meta: { changes: number } }[] = []
+        const out: { success: boolean; meta: { changes: number; last_row_id: number } }[] = []
         for (const s of statements) out.push(await s.run())
         sqlite.exec('COMMIT')
         return out

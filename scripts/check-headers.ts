@@ -35,10 +35,19 @@ const REQUIRED_LINES: readonly string[] = [
 export function checkHeaders(content: string): string[] {
   const errors: string[] = []
 
-  // 1. All required lines must be present (exact substring match).
+  // 1. All required lines must appear exactly once (counted, not just present).
   for (const line of REQUIRED_LINES) {
-    if (!content.includes(line)) {
+    // Count non-overlapping occurrences of `line` in `content`.
+    let count = 0
+    let start = 0
+    while ((start = content.indexOf(line, start)) !== -1) {
+      count++
+      start += line.length
+    }
+    if (count === 0) {
       errors.push(`missing: ${JSON.stringify(line)}`)
+    } else if (count > 1) {
+      errors.push(`duplicate (${count}×): ${JSON.stringify(line)}`)
     }
   }
 

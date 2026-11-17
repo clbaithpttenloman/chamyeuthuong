@@ -239,9 +239,16 @@ describe('POST /api/cards — message validation', () => {
 
   it('message with more than 5 newlines → 400', async () => {
     const { tmplId } = await seedTeacherAndTemplate(db)
-    const msg = 'a\nb\nc\nd\ne\nf'  // 6 newlines
+    const msg = 'a\nb\nc\nd\ne\nf\ng'  // 6 newlines (> MAX_NEWLINES=5)
     const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(400)
+  })
+
+  it('message with exactly 5 newlines → 201 (5 is the max allowed)', async () => {
+    const { tmplId } = await seedTeacherAndTemplate(db)
+    const msg = 'a\nb\nc\nd\ne\nf'  // 5 newlines = MAX_NEWLINES → accepted
+    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    expect(r.status).toBe(201)
   })
 
   it('message with control character (C0 except \\n) → 400', async () => {

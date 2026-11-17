@@ -7,14 +7,17 @@
  *   Step 3 — Viết lời chúc   (message, suggestion chips, identity, anonymous)
  *   Step 4 — Đã gửi          (pending, awaiting approval)
  *
- * Vietnamese error messages for 400/404/409/429.
+ * Load failures are shown per-request so users know which part failed.
+ * When ?thay refers to a hidden teacher (not on wall), falls back to
+ * GET /api/teachers/:publicId so the send flow still works.
+ * "Gửi thêm thiệp" dispatches RESET so the reducer returns to step 1.
  */
 import { useEffect, useMemo, useReducer, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { TeacherProfile, TemplatePublic, WallTeacher, WishPublic } from '../../shared/api.ts'
 import { formatFrom } from '../../shared/api.ts'
 import { fillWish } from '../../shared/wish.ts'
-import { ApiError, getPublicWishes, getTemplates, getWall, submitCard } from '../api'
+import { ApiError, getPublicWishes, getTeacherPage, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
 import { initialState, isTextValid, sendReducer } from './send/sendReducer.ts'
 
@@ -60,7 +63,6 @@ function submitErrorMessage(e: unknown): string {
 export default function SendPage() {
   const [searchParams] = useSearchParams()
   const thayParam = searchParams.get('thay')
-  // Treat the ?thay param as the initial preselected teacher public ID
   const preselected = thayParam ?? null
 
   const [state, dispatch] = useReducer(sendReducer, preselected, initialState)
@@ -70,6 +72,8 @@ export default function SendPage() {
   const [wallTeachers, setWallTeachers] = useState<WallTeacher[]>([])
   const [wishes, setWishes] = useState<WishPublic[]>([])
   const [loadingData, setLoadingData] = useState(true)
+  // Per-request load errors; non-null when at least one request failed
+  const [loadErrors, setLoadErrors] = useState<string | null>(null)
 
   // Teacher info once a teacher is selected
   const [teacherInfo, setTeacherInfo] = useState<TeacherProfile | null>(null)
@@ -82,17 +86,32 @@ export default function SendPage() {
 
   useEffect(() => {
     setLoadingData(true)
-    Promise.all([
+    setLoadErrors(null)
+
+    Promise.allSettled([
       getTemplates(),
       getWall(),
       getPublicWishes(),
-    ]).then(([tpls, wall, ws]) => {
-      setTemplates(tpls)
-      setWallTeachers(wall.teachers)
-      setWishes(ws)
-      // If ?thay was given, look up the teacher in the wall data
+    ]).then(async ([tplsRes, wallRes, wsRes]) => {
+      if (tplsRes.status === 'fulfilled') setTemplates(tplsRes.value)
+      if (wsRes.status === 'fulfilled') setWishes(wsRes.value)
+
+      let wallTeachersLoaded: WallTeacher[] = []
+      if (wallRes.status === 'fulfilled') {
+        wallTeachersLoaded = wallRes.value.teachers
+        setWallTeachers(wallTeachersLoaded)
+      }
+
+      // Report which requests failed
+      const failed: string[] = []
+      if (tplsRes.status === 'rejected') failed.push('mẫu thiệp')
+      if (wallRes.status === 'rejected') failed.push('danh sách thầy cô')
+      if (wsRes.status === 'rejected') failed.push('gợi ý lời chúc')
+      if (failed.length > 0) setLoadErrors(`Không thể tải: ${failed.join(', ')}.`)
+
+      // Resolve preselected teacher: check wall first, then fall back to teacher API
       if (preselected) {
-        const found = wall.teachers.find((t) => t.publicId === preselected)
+        const found = wallTeachersLoaded.find((t) => t.publicId === preselected)
         if (found) {
           setTeacherInfo({
             publicId: found.publicId,
@@ -101,13 +120,18 @@ export default function SendPage() {
             subject: found.subject,
             department: found.department,
           })
+        } else {
+          // Teacher may be hidden (showOnHome=0); fetch their profile directly
+          try {
+            const page = await getTeacherPage(preselected)
+            setTeacherInfo(page.teacher)
+          } catch {
+            // Teacher not found; leave teacherInfo null so the user picks manually
+          }
         }
       }
-    }).catch(() => {
-      // silent; pages render empty lists with an error state handled inline
     }).finally(() => setLoadingData(false))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [preselected])
 
   // When a teacher is selected in step 2, store their info
   function handleSelectTeacher(t: WallTeacher) {
@@ -123,9 +147,6 @@ export default function SendPage() {
 
   // When going back to step 1 (clear template), or to step 2 (keep template)
   function handleGoBack() {
-    if (state.step === 3 && state.preselectedTeacherId === null) {
-      // Keep teacher info but go back to teacher picker
-    }
     dispatch({ type: 'GO_BACK' })
   }
 
@@ -203,6 +224,7 @@ export default function SendPage() {
         <Stepper step={1} />
         <h2>Chọn mẫu thiệp</h2>
         {loadingData && <p className="admin-loading">Đang tải mẫu thiệp...</p>}
+        {loadErrors && <p className="admin-error" role="alert">{loadErrors}</p>}
         <div className="template-gallery">
           {templates.map((tpl) => (
             <button
@@ -218,6 +240,7 @@ export default function SendPage() {
                     card={PREVIEW_CARD}
                     layout={tpl.layout}
                     images={tpl.images}
+                    headingLevel="h2"
                   />
                 </div>
               </div>
@@ -264,6 +287,7 @@ export default function SendPage() {
         </div>
 
         {loadingData && <p className="admin-loading">Đang tải danh sách thầy cô...</p>}
+        {loadErrors && <p className="admin-error" role="alert">{loadErrors}</p>}
 
         <div className="teacher-grid">
           {filteredTeachers.map((t) => {
@@ -462,7 +486,9 @@ export default function SendPage() {
                 Xem thiệp của {teacherInfo.title ? `${teacherInfo.title} ${teacherInfo.name}` : teacherInfo.name}
               </Link>
             )}
-            <Link to="/gui-thiep" className="btn-link-ghost">
+            {/* Dispatch RESET before navigation so the reducer is at step 1 when the same
+                route re-renders (same-route Link does not remount the component). */}
+            <Link to="/gui-thiep" className="btn-link-ghost" onClick={() => dispatch({ type: 'RESET' })}>
               Gửi thêm thiệp
             </Link>
             <Link to="/" className="btn-link-ghost">

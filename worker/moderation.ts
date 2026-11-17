@@ -91,6 +91,11 @@ async function listCards(request: Request, env: Env): Promise<Response> {
   // pending → oldest first (id ASC); approved/hidden → newest first (id DESC)
   const isPending = status === 'pending'
   const orderDir = isPending ? 'ASC' : 'DESC'
+
+  // Validate cursor type: pending uses `after`, approved/hidden use `before`
+  if (isPending && beforeParam) return error('bad_request')
+  if (!isPending && afterParam) return error('bad_request')
+
   const cursorClause = isPending
     ? (afterParam ? ' AND sc.id > ?' : '')
     : (beforeParam ? ' AND sc.id < ?' : '')
@@ -100,7 +105,7 @@ async function listCards(request: Request, env: Env): Promise<Response> {
   const sql =
     CARD_SELECT +
     `WHERE sc.status = ?${teacherClause}${cursorClause} ` +
-    `ORDER BY sc.created_at ${orderDir}, sc.id ${orderDir} ` +
+    `ORDER BY sc.id ${orderDir} ` +
     'LIMIT 200'
 
   const args: (string | number)[] = [status]

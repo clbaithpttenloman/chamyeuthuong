@@ -9,7 +9,7 @@
 import { error, json } from './http.ts'
 import { isToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
-import { formatFrom } from '../shared/api.ts'
+import { cardWhere, fetchTemplateImages, toPublicCard } from './publicSql.ts'
 import type { Env } from './types.ts'
 
 export async function handleQr(request: Request, env: Env): Promise<Response> {
@@ -52,45 +52,22 @@ export async function handleQr(request: Request, env: Env): Promise<Response> {
       'sc.template_id, tmpl.layout ' +
       'FROM student_card sc ' +
       'JOIN template tmpl ON tmpl.id = sc.template_id ' +
-      "WHERE sc.teacher_id = ? AND sc.status = 'approved' " +
+      `WHERE sc.teacher_id = ? AND ${cardWhere('sc')} ` +
       'ORDER BY random() LIMIT 1',
     )
     .bind(teacherRow.teacher_id)
-    .first<{
-      public_id: string; message: string; from_name: string; from_class: string
-      anonymous: number; created_at: string; template_id: number; layout: string
-    }>()
+    .first<{ public_id: string; message: string; from_name: string; from_class: string; anonymous: number; created_at: string; template_id: number; layout: string }>()
 
   // Total approved cards for this teacher
   const totalRow = await env.DB
-    .prepare("SELECT COUNT(*) AS total FROM student_card WHERE teacher_id = ? AND status = 'approved'")
+    .prepare(`SELECT COUNT(*) AS total FROM student_card sc WHERE sc.teacher_id = ? AND ${cardWhere('sc')}`)
     .bind(teacherRow.teacher_id)
     .first<{ total: number }>()
 
   let card = null
   if (cardRow) {
-    // Fetch template images
-    const { results: imgRows } = await env.DB
-      .prepare(
-        'SELECT ti.slot, i.token FROM template_image ti JOIN image i ON i.id = ti.image_id WHERE ti.template_id = ?',
-      )
-      .bind(cardRow.template_id)
-      .all<{ slot: string; token: string }>()
-    const images: Record<string, string> = {}
-    for (const r of imgRows) images[r.slot] = r.token
-
-    card = {
-      publicId: cardRow.public_id,
-      layout: cardRow.layout,
-      images,
-      message: cardRow.message,
-      from: formatFrom({
-        fromName: cardRow.from_name,
-        fromClass: cardRow.from_class,
-        anonymous: cardRow.anonymous === 1,
-      }),
-      createdAt: cardRow.created_at,
-    }
+    const imgMap = await fetchTemplateImages(env.DB, [cardRow.template_id])
+    card = toPublicCard(cardRow, imgMap.get(cardRow.template_id) ?? {})
   }
 
   return json({

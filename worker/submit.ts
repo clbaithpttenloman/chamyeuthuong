@@ -105,9 +105,9 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
   if (REJECT_NAME_RE.test(rawFromName)) return error('bad_request')
   if (REJECT_NAME_RE.test(rawFromClass)) return error('bad_request')
 
-  // 12. Newline count (MAX_NEWLINES is the limit — reject if at or above)
+  // 12. Newline count (MAX_NEWLINES is the max allowed — reject if above)
   const newlines = (rawMessage.match(/\n/g) ?? []).length
-  if (newlines >= MAX_NEWLINES) return error('bad_request')
+  if (newlines > MAX_NEWLINES) return error('bad_request')
 
   // 13. ensureSchema
   await ensureSchema(env.DB)

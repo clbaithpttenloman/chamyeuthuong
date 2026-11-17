@@ -56,8 +56,9 @@ export function initialState(preselectedTeacherId: string | null): SendState {
 
 /** Returns true when the current text passes all constraints. */
 export function isTextValid(text: string): boolean {
+  if (!text.trim()) return false  // empty or whitespace-only after trim
   const cp = [...text].length
-  if (cp < 1 || cp > MAX_MESSAGE) return false
+  if (cp > MAX_MESSAGE) return false
   const newlines = (text.match(/\n/g) ?? []).length
   return newlines <= MAX_NEWLINES
 }

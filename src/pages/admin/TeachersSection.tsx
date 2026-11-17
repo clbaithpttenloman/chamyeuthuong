@@ -9,12 +9,13 @@
  */
 import { useState } from 'react'
 import QRCode from 'qrcode'
-import type { AdminTeacher, AdminTeacherInput } from '../../../shared/api.ts'
+import type { AdminTeacher, AdminTeacherInput, BulkTeacherInputItem } from '../../../shared/api.ts'
 import {
   ApiError,
   bulkAdminTeachers,
   createAdminTeacher,
   deleteAdminTeacher,
+  messageFor,
   rotateAdminTeacher,
   updateAdminTeacher,
 } from '../../api'
@@ -93,7 +94,7 @@ function BulkAddPanel({
 
     setSubmitting(true)
     try {
-      const inputs: AdminTeacherInput[] = items.map((item) => ({
+      const inputs: BulkTeacherInputItem[] = items.map((item) => ({
         title: item.title,
         name: item.name,
         ...(item.subject ? { subject: item.subject } : {}),
@@ -106,7 +107,7 @@ function BulkAddPanel({
       if (err instanceof ApiError && err.status === 400) {
         setError('Dữ liệu không hợp lệ. Kiểm tra lại danh sách.')
       } else {
-        setError(err instanceof Error ? err.message : 'Lỗi thêm hàng loạt')
+        setError(messageFor(err))
       }
     } finally {
       setSubmitting(false)
@@ -206,7 +207,7 @@ export default function TeachersSection({
         if (err instanceof ApiError && err.status === 400) {
           setError('Không thể lưu: kiểm tra lại các trường.')
         } else {
-          setError(err instanceof Error ? err.message : 'Lỗi lưu giáo viên')
+          setError(messageFor(err))
         }
       }
     } finally {
@@ -224,7 +225,7 @@ export default function TeachersSection({
       if (qrData?.teacher.id === t.id) setQrData(null)
     } catch (err) {
       if (!onAccessError(err)) {
-        setError(err instanceof Error ? err.message : 'Lỗi xóa giáo viên')
+        setError(messageFor(err))
       }
     }
   }
@@ -243,7 +244,7 @@ export default function TeachersSection({
       }
     } catch (err) {
       if (!onAccessError(err)) {
-        setError(err instanceof Error ? err.message : 'Lỗi đổi mã QR')
+        setError(messageFor(err))
       }
     }
   }

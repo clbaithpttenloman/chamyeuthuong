@@ -5,8 +5,7 @@
  *   teacher + teacher_title + teacher_profile created in one batch.
  *   Admin list uses LEFT JOINs so teachers without a profile still show.
  *
- * Bulk format: { lines: ["Thầy Name | Subject | Dept", ...] }
- *   First word is title (Thầy/Cô), rest of first pipe-segment is name.
+ * Bulk format: { items: [{ title, name, subject?, department? }] } (1–100 items).
  *
  * Routes to: handleTemplates, handleModeration, handleAdmins, handleImages, handleWishes.
  */
@@ -22,7 +21,16 @@ import { isTitle } from '../shared/honorific.ts'
 import type { Env } from './types.ts'
 import type { D1Stmt } from './types.ts'
 
-// ---- Teacher row shape ----
+// ---- Input validation helpers ----
+
+/** Strictly parses 0 or 1; returns null for any other value. */
+function parseBit(val: unknown): 0 | 1 | null {
+  if (val === 0) return 0
+  if (val === 1) return 1
+  return null
+}
+
+
 
 type RawTeacherRow = {
   id: number
@@ -88,18 +96,23 @@ async function listTeachers(env: Env): Promise<Response> {
 
 // ---- Create teacher ----
 
-async function createTeacher(request: Request, env: Env, _email: string): Promise<Response> {
+async function createTeacher(request: Request, env: Env): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 4096)
 
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
   const department = typeof body.department === 'string' ? body.department.trim() : ''
-  const showOnHome = body.showOnHome === 0 ? 0 : 1
   const rawTitle = body.title
 
   if (!name || name.length > 80) throw new HttpError('bad_request')
   if (subject.length > 80) throw new HttpError('bad_request')
+  if (department.length > 80) throw new HttpError('bad_request')
   if (typeof rawTitle !== 'string' || !isTitle(rawTitle)) throw new HttpError('bad_request')
+
+  // Strict 0|1 for showOnHome; default to 1 when omitted
+  const rawShowOnHome = 'showOnHome' in body ? parseBit(body.showOnHome) : (1 as 0 | 1)
+  if (rawShowOnHome === null) throw new HttpError('bad_request')
+  const showOnHome: 0 | 1 = rawShowOnHome
 
   const now = new Date().toISOString()
 
@@ -136,33 +149,47 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   const body = await readJson<Record<string, unknown>>(request, 4096)
 
   const name = typeof body.name === 'string' ? body.name.trim() : ''
-  const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
-  const department = typeof body.department === 'string' ? body.department.trim() : ''
-  const showOnHome = body.showOnHome === 0 ? 0 : 1
   const rawTitle = body.title
 
   if (!name || name.length > 80) throw new HttpError('bad_request')
-  if (subject.length > 80) throw new HttpError('bad_request')
+
   if (rawTitle !== undefined && (typeof rawTitle !== 'string' || !isTitle(rawTitle))) {
     throw new HttpError('bad_request')
   }
 
+  // Strict 0|1 for showOnHome when provided
+  if ('showOnHome' in body && parseBit(body.showOnHome) === null) throw new HttpError('bad_request')
+
   const existing = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
 
-  // Get existing publicId (stable across updates)
+  // Fetch existing profile values to keep when fields are omitted in body
   const profileRow = await env.DB
-    .prepare('SELECT public_id FROM teacher_profile WHERE teacher_id = ?')
+    .prepare('SELECT public_id, department, show_on_home FROM teacher_profile WHERE teacher_id = ?')
     .bind(id)
-    .first<{ public_id: string }>()
+    .first<{ public_id: string; department: string | null; show_on_home: number | null }>()
   const publicId = profileRow?.public_id ?? newToken()
 
+  // Keep existing values when fields are omitted
+  const subject = 'subject' in body ? (typeof body.subject === 'string' ? body.subject.trim() : '') : undefined
+  const finalSubject = subject !== undefined ? subject : ''
+  if (finalSubject.length > 80) throw new HttpError('bad_request')
+
+  const finalDepartment = 'department' in body
+    ? (typeof body.department === 'string' ? body.department.trim() : '')
+    : (profileRow?.department ?? '')
+  if (finalDepartment.length > 80) throw new HttpError('bad_request')
+
+  const finalShowOnHome: 0 | 1 = 'showOnHome' in body
+    ? parseBit(body.showOnHome)!
+    : ((profileRow?.show_on_home as 0 | 1 | null) ?? 1) as 0 | 1
+
   const stmts: D1Stmt[] = [
-    env.DB.prepare('UPDATE teacher SET name = ?, subject = ? WHERE id = ?').bind(name, subject, id),
+    env.DB.prepare('UPDATE teacher SET name = ?, subject = ? WHERE id = ?').bind(name, finalSubject, id),
     env.DB.prepare(
       'INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?) ' +
       'ON CONFLICT(teacher_id) DO UPDATE SET department = excluded.department, show_on_home = excluded.show_on_home',
-    ).bind(id, publicId, department, showOnHome),
+    ).bind(id, publicId, finalDepartment, finalShowOnHome),
   ]
 
   if (rawTitle !== undefined) {
@@ -212,39 +239,34 @@ async function deleteTeacher(env: Env, id: number): Promise<Response> {
   return json({ success: true })
 }
 
-// ---- Bulk create (line format: "Title Name | Subject | Dept") ----
-
-type ParsedLine = { title: string; name: string; subject: string; department: string }
-
-function parseBulkLine(line: string): ParsedLine | null {
-  const parts = line.split('|').map((s) => s.trim())
-  const firstPart = parts[0] ?? ''
-  const spaceIdx = firstPart.indexOf(' ')
-  if (spaceIdx === -1) return null
-  const title = firstPart.slice(0, spaceIdx)
-  const name = firstPart.slice(spaceIdx + 1).trim()
-  if (!isTitle(title) || !name) return null
-  return {
-    title,
-    name,
-    subject: (parts[1] ?? '').trim(),
-    department: (parts[2] ?? '').trim(),
-  }
-}
+// ---- Bulk create ({ items: [{ title, name, subject?, department? }] }) ----
 
 async function createBulk(request: Request, env: Env): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 65536)
 
-  const rawLines = body.lines
-  if (!Array.isArray(rawLines) || rawLines.length === 0 || rawLines.length > 100) {
+  const rawItems = body.items
+  if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 100) {
     throw new HttpError('bad_request')
   }
 
-  const items: ParsedLine[] = rawLines.map((line: unknown) => {
-    if (typeof line !== 'string') throw new HttpError('bad_request')
-    const parsed = parseBulkLine(line)
-    if (!parsed) throw new HttpError('bad_request')
-    return parsed
+  type ParsedItem = { title: string; name: string; subject: string; department: string }
+  const items: ParsedItem[] = rawItems.map((item: unknown) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError('bad_request')
+    const obj = item as Record<string, unknown>
+
+    const rawTitle = obj.title
+    if (typeof rawTitle !== 'string' || !isTitle(rawTitle)) throw new HttpError('bad_request')
+
+    const name = typeof obj.name === 'string' ? obj.name.trim() : ''
+    if (!name || name.length > 80) throw new HttpError('bad_request')
+
+    const subject = typeof obj.subject === 'string' ? obj.subject.trim() : ''
+    if (subject.length > 80) throw new HttpError('bad_request')
+
+    const department = typeof obj.department === 'string' ? obj.department.trim() : ''
+    if (department.length > 80) throw new HttpError('bad_request')
+
+    return { title: rawTitle, name, subject, department }
   })
 
   const now = new Date().toISOString()
@@ -331,7 +353,7 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
 
     if (parts.length === 3 && parts[2] === 'teachers') {
       if (method === 'GET') return await listTeachers(env)
-      if (method === 'POST') return await createTeacher(request, env, email)
+      if (method === 'POST') return await createTeacher(request, env)
       return error('method')
     }
 

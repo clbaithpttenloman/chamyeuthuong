@@ -10,6 +10,8 @@ import type {
   AdminTeacherInput,
   AdminTemplate,
   AdminTemplateInput,
+  BulkTeacherInputItem,
+  BulkTeacherRequest,
   QrResponse,
   ReviewRequest,
   SubmitCardRequest,
@@ -20,6 +22,7 @@ import type {
 } from '../shared/api.ts'
 
 export type { AdminCard, AdminTeacher, AdminTeacherInput, AdminTemplate, AdminTemplateInput,
+  BulkTeacherInputItem, BulkTeacherRequest,
   QrResponse, ReviewRequest, SubmitCardRequest, TemplatePublic, TeacherPageResponse,
   WallResponse, WishPublic }
 
@@ -57,6 +60,23 @@ export class ApiError extends Error {
   ) {
     super(`${status}: ${code}`)
   }
+}
+
+/**
+ * Map an ApiError (or any caught value) to a user-facing Vietnamese message.
+ * Use this everywhere raw error.message would otherwise surface to the UI.
+ */
+export function messageFor(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 400) return 'Dữ liệu không hợp lệ. Vui lòng kiểm tra lại.'
+    if (e.status === 401 || e.status === 403) return 'Bạn không có quyền thực hiện thao tác này.'
+    if (e.status === 404) return 'Không tìm thấy dữ liệu.'
+    if (e.status === 409) return 'Dữ liệu đã tồn tại hoặc xung đột.'
+    if (e.status === 429) return 'Quá nhiều yêu cầu. Vui lòng thử lại sau.'
+    if (e.status >= 500) return 'Lỗi máy chủ. Vui lòng thử lại sau.'
+  }
+  if (e instanceof Error) return e.message
+  return 'Có lỗi xảy ra. Vui lòng thử lại.'
 }
 
 // ── sessionStorage email helpers ─────────────────────────────────────────
@@ -162,11 +182,11 @@ export async function rotateAdminTeacher(id: number): Promise<{ token: string }>
   }))).json() as Promise<{ token: string }>
 }
 
-export async function bulkAdminTeachers(items: AdminTeacherInput[]): Promise<{ created: AdminTeacher[] }> {
+export async function bulkAdminTeachers(items: BulkTeacherInputItem[]): Promise<{ created: AdminTeacher[] }> {
   return (await expectOk(await apiFetch('/api/admin/teachers/bulk', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items } satisfies BulkTeacherRequest),
   }))).json() as Promise<{ created: AdminTeacher[] }>
 }
 

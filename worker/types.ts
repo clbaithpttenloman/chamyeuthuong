@@ -1,14 +1,14 @@
 /** Minimal D1 binding types (no @cloudflare/workers-types). */
 export type D1Stmt = {
   bind(...values: unknown[]): D1Stmt
-  run(): Promise<{ success: boolean; meta: { changes: number } }>
+  run(): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }>
   first<T = Record<string, unknown>>(column?: string): Promise<T | null>
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>
 }
 
 export type D1 = {
   prepare(sql: string): D1Stmt
-  batch(statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number } }[]>
+  batch(statements: D1Stmt[]): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }[]>
 }
 
 export type RateLimit = {
