@@ -51,10 +51,12 @@ For each slot:
 ### Step 3: Pick a Wish Template
 
 Open the **wish picker** and select one from the **Thư viện lời chúc** (Wish library). If the wish contains placeholders:
+- `{Thầy/Cô}` → `Thầy` or `Cô` (capitalised; use it before a name or at the start of a sentence)
+- `{thầy/cô}` → `thầy` or `cô` (mid-sentence)
 - `{tên}` → teacher's name
 - `{môn}` → subject
 
-they are automatically replaced. If no wish matches, click **Custom** to type a message directly.
+they are automatically replaced. Choose **Thầy** or **Cô** for every teacher first (the field is required); until you do, the preview shows "Thầy/Cô". The card heading shows the prefix too, for example "Kính gửi Thầy Nguyễn Văn A". If no wish matches, click **Custom** to type a message directly.
 
 ### Step 4: Live Preview
 
@@ -78,18 +80,19 @@ Create many cards at once from a list of names and subjects.
 Open **Tạo hàng loạt** section. In the textarea, paste one teacher per line in the format:
 
 ```
-Tên | Môn
-Tên | Môn
+Thầy Tên | Môn
+Cô Tên | Môn
 ```
 
 Example:
 ```
-Nguyễn Văn A | Toán
-Trần Thị B | Văn
-Lê Văn C | Tiếng Anh
+Thầy Nguyễn Văn A | Toán
+Cô Trần Thị B | Văn
+Thầy Lê Văn C | Tiếng Anh
 ```
 
-- **Limit**: 1–100 rows, body ≤ 64 KB
+- **Thầy/Cô is required** at the start of every line (upper or lower case). Lines without it are listed by line number and nothing is created until they are fixed.
+- **Limit**: 1–100 rows, body ≤ 64 KB; extra lines are reported, not silently dropped
 - **Required**: name (before `|`)
 - **Optional**: subject (after `|`); if omitted, the card has no subject
 
@@ -120,13 +123,13 @@ Maintain a library of example wishes and custom messages for the cards.
 
 Open **Thư viện lời chúc**. The list shows title, body, created info, and how many cards use each wish.
 
-Click a wish to use it in a card editor or bulk create. Wishes with placeholders `{tên}` and `{môn}` are personalized per teacher when applied.
+Click a wish to use it in a card editor or bulk create. Wishes with placeholders `{Thầy/Cô}`, `{thầy/cô}`, `{tên}` and `{môn}` are personalized per teacher when applied.
 
 ### Add a New Wish
 
 1. Click **+ Thêm** (Add)
 2. Enter **Title** (≤ 80 chars)
-3. Enter **Body** (≤ 600 chars; can include `{tên}` and `{môn}` placeholders)
+3. Enter **Body** (≤ 600 chars; can include `{Thầy/Cô}`, `{thầy/cô}`, `{tên}` and `{môn}` placeholders)
 4. Click **Lưu** (Save)
 
 **Limit**: 200 wishes per instance.

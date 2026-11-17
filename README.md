@@ -53,7 +53,7 @@ Access `/admin` in the browser. A form asks for the admin's email; once verified
 
 ### Tạo hàng loạt (Bulk Create)
 
-- Paste a list: one `Tên | Môn` (Name | Subject) pair per line, up to 100 rows, body ≤ 64 KB
+- Paste a list: one `Thầy Tên | Môn` or `Cô Tên | Môn` per line (Thầy/Cô required), up to 100 rows, body ≤ 64 KB
 - Pick a shared **wish template** (auto-fills message for all created cards via `fillWish` placeholder replacement)
 - Pick a shared **layout** and **image set** (same images applied to every card)
 - Create as drafts or publish all at once
@@ -62,18 +62,17 @@ Access `/admin` in the browser. A form asks for the admin's email; once verified
 
 ### Thư viện lời chúc (Wish Library)
 
-- **List**: 12 example wishes (Vietnamese, Teachers' Day theme, some with `{tên}` and `{môn}` placeholders for personalization)
+- **List**: 12 example wishes (Vietnamese, Teachers' Day theme, with `{Thầy/Cô}`, `{thầy/cô}`, `{tên}` and `{môn}` placeholders for personalization)
 - **Create**: title (≤ 80 chars), body (≤ 600 chars, non-empty)
 - **Edit**: update title or body
 - **Delete**: remove (always allowed, even if used by published cards)
 - **Cap**: max 200 wishes per instance
 
 Example wishes include:
-- "Cảm ơn thầy/cô!" (Thank you, teacher!)
-- "Chúc {tên} ngày Nhà giáo Việt Nam hạnh phúc" (Happy Teachers' Day, {name})
-- "Tri ân sự dạy dỗ của {tên} trong môn {môn}" (Thank you for teaching {subject}, {name})
+- "Kính chúc {Thầy/Cô} {tên} sức khỏe dồi dào và hạnh phúc…"
+- "Chúc {thầy/cô} {tên} dạy môn {môn} luôn tràn đầy năng lượng…"
 
-The `fillWish(body, { name, subject })` function replaces `{tên}` and `{môn}` (case-insensitive, all occurrences) with the teacher's name and subject; missing subject becomes empty and surrounding double spaces are collapsed.
+Every teacher has a required **Thầy/Cô** title, shown before the name on the card ("Kính gửi Thầy Nguyễn Văn A") and in the admin list. `fillWish(body, { name, subject, title })` replaces `{Thầy/Cô}` with `Thầy`/`Cô`, `{thầy/cô}` with `thầy`/`cô` (exact case; `Thầy/Cô` / `thầy/cô` when no title is set yet), and `{tên}`, `{môn}` (case-insensitive) with the name and subject; a missing subject becomes empty and double spaces are collapsed.
 
 ### Thư viện ảnh (Image Library)
 
@@ -134,7 +133,7 @@ Admins are stored in D1; on first deploy, the person who types the bootstrap ema
 
 | Endpoint | Method | Auth | Response |
 |----------|--------|------|----------|
-| `/api/card/:token` | GET | none | `{ name, subject, message, layout, images: { [slot]: <token> } }` for published card, or 404 |
+| `/api/card/:token` | GET | none | `{ title, name, subject, message, layout, images: { [slot]: <token> } }` for published card (`title` is `Thầy`, `Cô` or `null`), or 404 |
 | `/api/image/:token` | GET | none | raw image bytes (JPEG/PNG/WebP) with `Cache-Control: public, max-age=31536000, immutable` or 404 |
 
 **Public image response headers:**
@@ -154,11 +153,11 @@ Admins are stored in D1; on first deploy, the person who types the bootstrap ema
 | Endpoint | Method | Purpose | Body / Notes |
 |----------|--------|---------|------|
 | `/api/admin/teachers` | GET | List all teachers with card data | — |
-| `/api/admin/teachers` | POST | Create one teacher + draft card | `{ name, subject?, message?, layout?, images?, status? }` — status defaults to `draft`; `published` requires non-empty message |
-| `/api/admin/teachers/:id` | PUT | Update teacher and card | `{ name, subject, message, status, layout?, images? }` — layout/images omitted = no change; `images` keys present set the value (null = remove, number = set existing image id); unknown id → 400 |
+| `/api/admin/teachers` | POST | Create one teacher + draft card | `{ title, name, subject?, message?, layout?, images?, status? }` — `title` (`Thầy` or `Cô`) required; status defaults to `draft`; `published` requires non-empty message |
+| `/api/admin/teachers/:id` | PUT | Update teacher and card | `{ name, subject, message, status, title?, layout?, images? }` — title/layout/images omitted = no change; `images` keys present set the value (null = remove, number = set existing image id); unknown id → 400 |
 | `/api/admin/teachers/:id` | DELETE | Delete teacher (cascades layout, images) | — |
 | `/api/admin/teachers/:id/rotate` | POST | Issue new token | — |
-| `/api/admin/teachers/bulk` | POST | Create 1–100 teachers atomically | `{ items: [{ name, subject?, message? }], layout?, images?, status? }` — all-or-nothing; body ≤ 64 KB; shared layout and images applied to every created card |
+| `/api/admin/teachers/bulk` | POST | Create 1–100 teachers atomically | `{ items: [{ title, name, subject?, message? }], layout?, images?, status? }` — `title` (`Thầy`/`Cô`) required per item; all-or-nothing; body ≤ 64 KB; shared layout and images applied to every created card |
 
 **Images:**
 
