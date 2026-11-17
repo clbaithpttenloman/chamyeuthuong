@@ -42,7 +42,7 @@ export default function CardPage() {
   const { card } = state
   return (
     <CardView
-      card={{ name: card.name, subject: card.subject, message: card.message }}
+      card={{ name: card.name, subject: card.subject, message: card.message, title: card.title }}
       layout={card.layout ?? DEFAULT_LAYOUT}
       images={card.images ?? {}}
     />

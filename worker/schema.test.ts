@@ -2,6 +2,7 @@
 // Tests for worker/schema.ts
 import { describe, it, expect } from 'vitest'
 import { SCHEMA, ensureSchema } from './schema.ts'
+import { SEEDS } from './seed.ts'
 import { testDb } from './testDb.ts'
 import type { D1Stmt } from './types.ts'
 
@@ -562,5 +563,143 @@ describe('SCHEMA seeds — 12 example wishes (failing until Group 2)', () => {
     // All SCHEMA entries (CREATE TABLE + seeds) must be counted
     expect(state.ddl).toBe(SCHEMA.length)
     expect(state.prepares).toBe(0)
+  })
+})
+
+// ===================================================================
+// New for honorific plan: teacher_title table (failing until Group 2)
+// ===================================================================
+
+describe('teacher_title table exists (failing until Group 2)', () => {
+  it('ensureSchema creates teacher_title table on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const rows = sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('teacher_title')
+  })
+
+  it('SCHEMA covers teacher_title', () => {
+    const names = SCHEMA.map((s) => {
+      const m = s.match(/CREATE TABLE IF NOT EXISTS\s+(\w+)/i)
+      return m?.[1]?.toLowerCase() ?? ''
+    })
+    expect(names).toContain('teacher_title')
+  })
+})
+
+describe('teacher_title CHECK and FK constraints (failing until Group 2)', () => {
+  it('title CHECK accepts Thầy', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .run()
+    const tid = (
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+    ).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'Thầy')`).run()
+    }).not.toThrow()
+  })
+
+  it('title CHECK accepts Cô', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .run()
+    const tid = (
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+    ).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'Cô')`).run()
+    }).not.toThrow()
+  })
+
+  it('title CHECK rejects lowercase thầy', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .run()
+    const tid = (
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+    ).id
+    // Should throw CHECK violation (or "no such table" until Group 2 adds the table)
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'thầy')`).run()
+    }).toThrow()
+  })
+
+  it('title CHECK rejects lowercase cô', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .run()
+    const tid = (
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+    ).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'cô')`).run()
+    }).toThrow()
+  })
+
+  it('title CHECK rejects empty string', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .run()
+    const tid = (
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+    ).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, '')`).run()
+    }).toThrow()
+  })
+
+  it('deleting a teacher cascades to teacher_title row', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .run()
+    const tid = (
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+    ).id
+    sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'Thầy')`).run()
+    sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
+    const row = sqlite.prepare(`SELECT * FROM teacher_title WHERE teacher_id=${tid}`).get()
+    expect(row).toBeUndefined()
+  })
+})
+
+// ===================================================================
+// New for honorific plan: seed content (failing until Group 2)
+// ===================================================================
+
+describe('Seeds — no hard-coded thầy/cô before name placeholder (failing until Group 2)', () => {
+  it('no seed SQL contains "thầy {tên}" (lowercase thầy hard-coded before name)', () => {
+    for (const sql of SEEDS) {
+      expect(sql, sql.slice(0, 80)).not.toContain('thầy {tên}')
+    }
+  })
+
+  it('no seed SQL contains "cô {tên}" (lowercase cô hard-coded before name)', () => {
+    for (const sql of SEEDS) {
+      expect(sql, sql.slice(0, 80)).not.toContain('cô {tên}')
+    }
+  })
+
+  it('every seed that uses {tên} also uses {Thầy/Cô} or {thầy/cô}', () => {
+    for (const sql of SEEDS) {
+      if (sql.includes('{tên}')) {
+        const hasTitle = sql.includes('{Thầy/Cô}') || sql.includes('{thầy/cô}')
+        expect(hasTitle, `seed missing title placeholder: ${sql.slice(0, 80)}`).toBe(true)
+      }
+    }
   })
 })

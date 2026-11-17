@@ -170,3 +170,91 @@ describe('CardView — slot coverage', () => {
     }
   })
 })
+
+// ===================================================================
+// New for honorific plan: title in heading and photo alt text
+// (failing until Group 2 adds title support to CardView)
+// ===================================================================
+
+type CardDataWithTitle = {
+  name: string
+  subject: string
+  message: string
+  title?: 'Thầy' | 'Cô' | null
+}
+
+describe('CardView — teacher title in heading (failing until Group 2)', () => {
+  it('heading shows "{title} {name}" when title is Thầy', () => {
+    const card: CardDataWithTitle = {
+      name: 'Nguyễn Văn A',
+      subject: 'Toán',
+      message: 'Chúc mừng!',
+      title: 'Thầy',
+    }
+    const html = renderToString(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <CardView card={card as any} layout="classic" images={{}} />,
+    )
+    expect(html).toContain('Thầy Nguyễn Văn A')
+  })
+
+  it('heading shows "{title} {name}" when title is Cô', () => {
+    const card: CardDataWithTitle = {
+      name: 'Trần Thị B',
+      subject: 'Văn',
+      message: 'Chúc mừng!',
+      title: 'Cô',
+    }
+    const html = renderToString(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <CardView card={card as any} layout="classic" images={{}} />,
+    )
+    expect(html).toContain('Cô Trần Thị B')
+  })
+
+  it('heading shows name only when title is null', () => {
+    const card: CardDataWithTitle = { name: 'Lê Văn C', subject: '', message: '', title: null }
+    const html = renderToString(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <CardView card={card as any} layout="classic" images={{}} />,
+    )
+    expect(html).toContain('Lê Văn C')
+    expect(html).not.toMatch(/Thầy Lê Văn C/)
+    expect(html).not.toMatch(/Cô Lê Văn C/)
+  })
+
+  it('heading shows name only when title is undefined (backward compat)', () => {
+    const card: CardDataWithTitle = { name: 'Phạm Văn D', subject: '', message: '' }
+    const html = renderToString(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <CardView card={card as any} layout="classic" images={{}} />,
+    )
+    expect(html).toContain('Phạm Văn D')
+  })
+})
+
+describe('CardView — photo alt text includes title (failing until Group 2)', () => {
+  it('photo alt is "Ảnh đại diện của {title} {name}" when title is set', () => {
+    const card: CardDataWithTitle = {
+      name: 'Nguyễn Văn A',
+      subject: '',
+      message: '',
+      title: 'Thầy',
+    }
+    const html = renderToString(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <CardView card={card as any} layout="classic" images={{ photo: validToken }} />,
+    )
+    expect(html).toContain('Ảnh đại diện của Thầy Nguyễn Văn A')
+  })
+
+  it('photo alt is "Ảnh đại diện của {name}" when title is null', () => {
+    const card: CardDataWithTitle = { name: 'Lê Thị C', subject: '', message: '', title: null }
+    const html = renderToString(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <CardView card={card as any} layout="classic" images={{ photo: validToken }} />,
+    )
+    expect(html).toContain('Ảnh đại diện của Lê Thị C')
+    expect(html).not.toContain('null')
+  })
+})

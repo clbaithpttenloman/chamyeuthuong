@@ -41,6 +41,10 @@ export const SCHEMA: string[] = [
   teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
   layout     TEXT    NOT NULL
 )`,
+  `CREATE TABLE IF NOT EXISTS teacher_title (
+  teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  title      TEXT    NOT NULL CHECK (title IN ('Thầy','Cô'))
+)`,
   `CREATE TABLE IF NOT EXISTS card_image (
   teacher_id INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
   slot       TEXT    NOT NULL CHECK (slot IN ('background','banner','photo')),

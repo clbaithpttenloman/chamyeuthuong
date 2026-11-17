@@ -10,6 +10,7 @@ type PublishedCard = {
   message: string
   layout: string
   images: Record<string, string>
+  title: 'Thầy' | 'Cô' | null
 }
 
 /**
@@ -35,14 +36,15 @@ export async function handleCard(request: Request, env: Pick<Env, 'DB' | 'CARD_I
 
   const row = await env.DB.prepare(
     'SELECT t.name, t.subject, c.message, t.id AS teacher_id, ' +
-    `COALESCE(cs.layout, '${DEFAULT_LAYOUT}') AS layout ` +
+    `COALESCE(cs.layout, '${DEFAULT_LAYOUT}') AS layout, tt.title ` +
     'FROM teacher t ' +
     'JOIN card c ON c.teacher_id = t.id ' +
     'LEFT JOIN card_style cs ON cs.teacher_id = t.id ' +
+    'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
     "WHERE t.token = ? AND c.status = 'published'",
   )
     .bind(token)
-    .first<{ name: string; subject: string; message: string; teacher_id: number; layout: string }>()
+    .first<{ name: string; subject: string; message: string; teacher_id: number; layout: string; title: string | null }>()
 
   if (!row) return error('not_found')
 
@@ -70,6 +72,7 @@ export async function handleCard(request: Request, env: Pick<Env, 'DB' | 'CARD_I
     subject: row.subject,
     message: row.message,
     layout: row.layout,
+    title: (row.title ?? null) as 'Thầy' | 'Cô' | null,
     images,
   } satisfies PublishedCard)
 }

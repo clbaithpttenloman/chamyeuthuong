@@ -12,6 +12,7 @@ export type TeacherRow = {
   status: 'draft' | 'published'
   created_at: string
   layout: string
+  title: 'Thầy' | 'Cô' | null
   images: Partial<Record<string, { id: number; token: string }>>
 }
 
@@ -20,6 +21,7 @@ export type CardData = {
   subject: string
   message: string
   layout: string
+  title: 'Thầy' | 'Cô' | null
   images: Partial<Record<string, string>>  // slot → image token
 }
 
@@ -117,6 +119,7 @@ export async function createTeacher(data: {
   layout?: string
   images?: Partial<Record<string, number>>
   status?: string
+  title: 'Thầy' | 'Cô'
 }): Promise<TeacherRow> {
   return (await expectOk(await apiFetch('/api/admin/teachers', {
     method: 'POST',
@@ -135,6 +138,7 @@ export async function updateTeacher(
     status: string
     layout?: string
     images?: Partial<Record<string, number | null>>
+    title?: 'Thầy' | 'Cô'
   },
 ): Promise<TeacherRow> {
   return (await expectOk(await apiFetch(`/api/admin/teachers/${id}`, {
@@ -246,7 +250,7 @@ export async function deleteWish(id: number): Promise<void> {
 
 /** Create up to 100 teachers in a single batch (all-or-nothing). */
 export async function bulkCreateTeachers(data: {
-  items: Array<{ name: string; subject?: string; message?: string }>
+  items: Array<{ name: string; subject?: string; message?: string; title: 'Thầy' | 'Cô' }>
   layout?: string
   images?: Partial<Record<string, number>>
   status?: string

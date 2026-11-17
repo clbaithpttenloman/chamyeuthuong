@@ -1,7 +1,9 @@
 /**
  * BulkCreate — create up to 100 teacher cards from a pasted list.
  *
- * Input format: one "Tên | Môn" per line.
+ * Input format: one "Thầy/Cô Name | Subject" per line.
+ * Lines without a valid title prefix (Thầy/Cô, case-insensitive) are listed
+ * in the error message and nothing is created.
  * Shared layout, images, and wish template are applied to every card.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -18,8 +20,7 @@ import {
 import { LAYOUTS, SLOTS, type Slot, DEFAULT_LAYOUT } from '../../../shared/layouts.ts'
 import { fillWish } from '../../../shared/wish.ts'
 import { compressImage } from '../../imageCompress.ts'
-
-type SlotImages = Partial<Record<Slot, { id: number; token: string } | null>>
+import { parseBulkInput } from './bulkParse.ts'
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const SLOT_LABELS: Record<Slot, string> = {
@@ -28,22 +29,7 @@ const SLOT_LABELS: Record<Slot, string> = {
   photo: 'Ảnh tròn (trên tên)',
 }
 
-function parseBulkInput(raw: string): Array<{ name: string; subject?: string }> {
-  return raw
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const idx = line.indexOf('|')
-      if (idx === -1) return { name: line.trim() }
-      return {
-        name: line.slice(0, idx).trim(),
-        subject: line.slice(idx + 1).trim() || undefined,
-      }
-    })
-    .filter((item) => item.name.length > 0)
-    .slice(0, 100)
-}
+type SlotImages = Partial<Record<Slot, { id: number; token: string } | null>>
 
 export default function BulkCreate({
   onAccessError,
@@ -125,15 +111,22 @@ export default function BulkCreate({
     setError(null)
     setSuccessCount(null)
 
-    const items = parseBulkInput(text)
+    const { items, invalidLines } = parseBulkInput(text)
+
+    if (invalidLines.length > 0) {
+      setError(`Các dòng sau thiếu danh xưng Thầy/Cô: ${invalidLines.join(', ')}`)
+      return
+    }
     if (items.length === 0) { setError('Danh sách trống.'); return }
     if (items.length > 100) { setError('Tối đa 100 giáo viên.'); return }
 
     // Build items with message from wish template (if set)
     const finalItems = items.map((item) => ({
-      ...item,
+      name: item.name,
+      title: item.title,
+      subject: item.subject,
       message: wishTemplate.trim()
-        ? fillWish(wishTemplate.trim(), { name: item.name, subject: item.subject })
+        ? fillWish(wishTemplate.trim(), { name: item.name, subject: item.subject, title: item.title })
         : undefined,
     }))
 
@@ -171,7 +164,7 @@ export default function BulkCreate({
     }
   }
 
-  const items = parseBulkInput(text)
+  const { items } = parseBulkInput(text)
 
   return (
     <div>
@@ -189,12 +182,12 @@ export default function BulkCreate({
       <form className="admin-form" onSubmit={(e) => { void handleSubmit(e) }}>
         <label>
           Danh sách giáo viên <span aria-hidden="true">*</span>
-          <small>Mỗi dòng: Tên | Môn (tối đa 100 dòng)</small>
+          <small>Mỗi dòng: Thầy/Cô Tên | Môn (tối đa 100 dòng)</small>
           <textarea
             value={text}
             onChange={(e) => { setText(e.target.value); setSuccessCount(null) }}
             rows={8}
-            placeholder={'Nguyễn Văn A | Toán\nTrần Thị B | Văn\nLê Văn C'}
+            placeholder={'Thầy Nguyễn Văn A | Toán\nCô Trần Thị B | Văn\nThầy Lê Văn C'}
             required
           />
           <small>{items.length} giáo viên</small>
@@ -202,7 +195,7 @@ export default function BulkCreate({
 
         <label>
           Lời chúc dùng chung (tùy chọn)
-          <small>Dùng {'{tên}'} và {'{môn}'} để điền tự động cho từng thầy cô</small>
+          <small>Dùng {'{Thầy/Cô}'}, {'{thầy/cô}'}, {'{tên}'} và {'{môn}'} để điền tự động</small>
           <textarea
             value={wishTemplate}
             onChange={(e) => setWishTemplate(e.target.value)}

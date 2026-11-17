@@ -14,7 +14,7 @@
 import { LAYOUTS, DEFAULT_LAYOUT, isLayout } from '../../shared/layouts.ts'
 import site from '../content/site.json'
 
-type CardData = { name: string; subject: string; message: string }
+type CardData = { name: string; subject: string; message: string; title?: 'Thầy' | 'Cô' | null }
 type ImageMap = Partial<Record<string, string>>
 
 // Accepts exactly 16 lowercase alphanumeric chars — the generated token length.
@@ -63,12 +63,12 @@ export default function CardView({
           <img
             className="card-photo"
             src={photoUrl}
-            alt={`Ảnh đại diện của ${card.name}`}
+            alt={`Ảnh đại diện của ${card.title ? `${card.title} ` : ''}${card.name}`}
           />
         )}
         <p className="kicker">{site.title}</p>
         <p className="to">Kính gửi</p>
-        <h1>{card.name}</h1>
+        <h1>{card.title ? `${card.title} ${card.name}` : card.name}</h1>
         {card.subject && <p className="sub">{card.subject}</p>}
         <hr />
         <p className="msg">{card.message}</p>

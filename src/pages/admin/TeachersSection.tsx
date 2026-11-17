@@ -35,6 +35,7 @@ type EditDraft = {
   message: string
   status: string
   layout: string
+  title: string
   images: SlotImages
 }
 
@@ -45,6 +46,7 @@ function emptyDraft(t?: TeacherRow): EditDraft {
     message: t?.message ?? '',
     status: t?.status ?? 'draft',
     layout: t?.layout ?? DEFAULT_LAYOUT,
+    title: t?.title ?? '',
     images: (t?.images as SlotImages | undefined) ?? {},
   }
 }
@@ -143,11 +145,13 @@ function WishPicker({
   wishes,
   name,
   subject,
+  title,
   onPick,
 }: {
   wishes: WishRow[]
   name: string
   subject: string
+  title?: 'Thầy' | 'Cô'
   onPick: (body: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -167,7 +171,7 @@ function WishPicker({
               <button
                 type="button"
                 className="wish-pick-btn"
-                onClick={() => { onPick(fillWish(w.body, { name, subject })); setOpen(false) }}
+                onClick={() => { onPick(fillWish(w.body, { name, subject, title })); setOpen(false) }}
               >
                 <strong>{w.title}</strong>
                 <span>{w.body.slice(0, 80)}{w.body.length > 80 ? '…' : ''}</span>
@@ -269,6 +273,18 @@ function TeacherForm({
             />
           </label>
           <label>
+            Danh xưng <span aria-hidden="true">*</span>
+            <select
+              value={draft.title}
+              onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+              required
+            >
+              <option value="" disabled>Chọn Thầy/Cô</option>
+              <option value="Thầy">Thầy</option>
+              <option value="Cô">Cô</option>
+            </select>
+          </label>
+          <label>
             Môn dạy
             <input
               type="text"
@@ -287,6 +303,7 @@ function TeacherForm({
                 wishes={wishes}
                 name={draft.name}
                 subject={draft.subject}
+                title={draft.title as 'Thầy' | 'Cô' | undefined}
                 onPick={(body) => setDraft((d) => ({ ...d, message: body }))}
               />
             )}
@@ -357,6 +374,7 @@ function TeacherForm({
                 name: draft.name || '(Họ tên)',
                 subject: draft.subject,
                 message: draft.message || '(Lời chúc)',
+                title: (draft.title as 'Thầy' | 'Cô') || null,
               }}
               layout={draft.layout}
               images={previewImages}
@@ -497,9 +515,14 @@ export default function TeachersSection({
           status: draft.status,
           layout: draft.layout,
           images: imagesPayload,
+          ...(draft.title ? { title: draft.title as 'Thầy' | 'Cô' } : {}),
         })
         onTeachersChange((ts) => ts.map((t) => (t.id === saved.id ? saved : t)))
       } else {
+        if (!draft.title || (draft.title !== 'Thầy' && draft.title !== 'Cô')) {
+          setError('Vui lòng chọn danh xưng Thầy hoặc Cô.')
+          return
+        }
         saved = await createTeacher({
           name: draft.name,
           subject: draft.subject || undefined,
@@ -511,6 +534,7 @@ export default function TeachersSection({
               .map(([k, v]) => [k, v as number]),
           ),
           status: draft.status,
+          title: draft.title as 'Thầy' | 'Cô',
         })
         onTeachersChange((ts) => [...ts, saved])
       }
@@ -642,6 +666,7 @@ export default function TeachersSection({
           <table className="admin-table">
             <thead>
               <tr>
+                <th>Danh xưng</th>
                 <th>Họ tên</th>
                 <th>Môn</th>
                 <th>Bố cục</th>
@@ -655,6 +680,7 @@ export default function TeachersSection({
                   key={t.id}
                   className={editTeacher?.id === t.id ? 'row-active' : undefined}
                 >
+                  <td>{t.title ?? '—'}</td>
                   <td>{t.name}</td>
                   <td>{t.subject || '—'}</td>
                   <td>{LAYOUTS.find((l) => l.id === t.layout)?.name ?? t.layout}</td>

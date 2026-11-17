@@ -2,6 +2,84 @@
 import { describe, it, expect } from 'vitest'
 import { fillWish } from './wish.ts'
 
+// ===================================================================
+// New for honorific plan: {Thầy/Cô} and {thầy/cô} placeholders
+// (failing until Group 2 adds title support to fillWish)
+// ===================================================================
+
+describe('fillWish — {Thầy/Cô} placeholder (failing until Group 2)', () => {
+  it('{Thầy/Cô} replaced with title when title is Thầy', () => {
+    expect(fillWish('{Thầy/Cô} ơi', { name: 'A', title: 'Thầy' })).toBe('Thầy ơi')
+  })
+
+  it('{Thầy/Cô} replaced with title when title is Cô', () => {
+    expect(fillWish('{Thầy/Cô} ơi', { name: 'A', title: 'Cô' })).toBe('Cô ơi')
+  })
+
+  it('{Thầy/Cô} falls back to Thầy/Cô literal when no title provided', () => {
+    expect(fillWish('{Thầy/Cô} ơi', { name: 'A' })).toBe('Thầy/Cô ơi')
+  })
+
+  it('{Thầy/Cô} replaced all occurrences', () => {
+    expect(fillWish('{Thầy/Cô} và {Thầy/Cô}', { name: 'A', title: 'Cô' })).toBe('Cô và Cô')
+  })
+
+  it('exact-case match — {THẦY/CÔ} (wrong case) is NOT replaced', () => {
+    expect(fillWish('{THẦY/CÔ}', { name: 'A', title: 'Thầy' })).toBe('{THẦY/CÔ}')
+  })
+
+  it('{Thầy/Cô} with {tên} together', () => {
+    expect(fillWish('Kính gửi {Thầy/Cô} {tên}', { name: 'Nguyễn Văn A', title: 'Cô' }))
+      .toBe('Kính gửi Cô Nguyễn Văn A')
+  })
+
+  it('{Thầy/Cô} with {tên} and {môn} together', () => {
+    expect(
+      fillWish('{Thầy/Cô} {tên} dạy môn {môn}', { name: 'Nam', subject: 'Toán', title: 'Thầy' }),
+    ).toBe('Thầy Nam dạy môn Toán')
+  })
+
+  it('$ in title value is treated literally via replacer function', () => {
+    // isTitle guards mean title is always Thầy/Cô from the closed list,
+    // but fillWish itself must use a replacer function to be safe.
+    expect(fillWish('{Thầy/Cô}', { name: 'A', title: 'Thầy' })).toBe('Thầy')
+  })
+})
+
+describe('fillWish — {thầy/cô} placeholder (failing until Group 2)', () => {
+  it('{thầy/cô} replaced with lowercase title when title is Thầy', () => {
+    expect(fillWish('kính chào {thầy/cô}', { name: 'A', title: 'Thầy' })).toBe('kính chào thầy')
+  })
+
+  it('{thầy/cô} replaced with cô when title is Cô', () => {
+    expect(fillWish('kính chào {thầy/cô}', { name: 'A', title: 'Cô' })).toBe('kính chào cô')
+  })
+
+  it('{thầy/cô} falls back to thầy/cô literal when no title provided', () => {
+    expect(fillWish('kính chào {thầy/cô}', { name: 'A' })).toBe('kính chào thầy/cô')
+  })
+
+  it('{thầy/cô} replaced all occurrences', () => {
+    expect(fillWish('{thầy/cô} và {thầy/cô}', { name: 'A', title: 'Thầy' })).toBe('thầy và thầy')
+  })
+
+  it('exact-case match — {Thầy/Cô} (capitalized) does not match {thầy/cô} pattern', () => {
+    // {thầy/cô} and {Thầy/Cô} are independent placeholders
+    expect(fillWish('{Thầy/Cô}', { name: 'A', title: 'Thầy' })).toBe('Thầy')
+    expect(fillWish('{thầy/cô}', { name: 'A', title: 'Thầy' })).toBe('thầy')
+  })
+
+  it('both {Thầy/Cô} and {thầy/cô} in one body', () => {
+    expect(
+      fillWish('{Thầy/Cô} {tên} dạy {môn}, kính chào {thầy/cô}', {
+        name: 'Nam',
+        subject: 'Toán',
+        title: 'Thầy',
+      }),
+    ).toBe('Thầy Nam dạy Toán, kính chào thầy')
+  })
+})
+
 describe('fillWish — basic substitution', () => {
   it('replaces {tên} with name', () => {
     expect(fillWish('Kính gửi {tên}', { name: 'Nguyễn Văn A' })).toBe('Kính gửi Nguyễn Văn A')

@@ -261,3 +261,52 @@ describe('GET /api/card/:token — layout and images (failing until Group 2)', (
     expect(r.status).toBe(404)
   })
 })
+
+// ===================================================================
+// New for honorific plan: title field in public card JSON
+// (failing until Group 2 adds title to cards handler)
+// ===================================================================
+
+describe('GET /api/card/:token — title field (failing until Group 2)', () => {
+  it('published card with title row returns title in JSON', async () => {
+    const { id } = await seedTeacher(db, { status: 'published' })
+    // Insert teacher_title row (throws "no such table" until Group 2 adds the table to SCHEMA)
+    await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(id, 'Thầy').run()
+
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { title?: string | null }
+    expect(body.title).toBe('Thầy')
+  })
+
+  it('published card for teacher with title=Cô returns title=Cô', async () => {
+    const TOKEN_B = 'bbbbbbbbbbbbbbb1'
+    const { id } = await seedTeacher(db, { token: TOKEN_B, status: 'published' })
+    await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(id, 'Cô').run()
+
+    const r = await handleCard(
+      new Request(`https://x/api/card/${TOKEN_B}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { title?: string | null }
+    expect(body.title).toBe('Cô')
+  })
+
+  it('published card without teacher_title row returns title=null', async () => {
+    await seedTeacher(db, { status: 'published' })
+    // No teacher_title row inserted
+    const r = await handleCard(
+      new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { title?: string | null }
+    // title field must be present and null (not undefined)
+    expect(body).toHaveProperty('title')
+    expect(body.title).toBeNull()
+  })
+})

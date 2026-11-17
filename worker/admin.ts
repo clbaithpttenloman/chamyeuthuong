@@ -5,6 +5,7 @@ import { handleImages } from './images.ts'
 import { handleWishes } from './wishes.ts'
 import { newToken } from './token.ts'
 import { isLayout, isSlot, DEFAULT_LAYOUT } from '../shared/layouts.ts'
+import { isTitle } from '../shared/honorific.ts'
 import type { Env } from './types.ts'
 import type { D1Stmt } from './types.ts'
 
@@ -16,6 +17,7 @@ type TeacherRow = {
   created_at: string
   message: string
   status: string
+  title: 'Thầy' | 'Cô' | null
 }
 
 type ImageSlot = { id: number; token: string }
@@ -23,13 +25,14 @@ type TeacherFull = TeacherRow & { layout: string; images: Record<string, ImageSl
 
 // ---- Helpers ----
 
-/** SELECT for teacher + card + layout. */
+/** SELECT for teacher + card + layout + title. */
 const TEACHER_SQL =
   'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status, ' +
-  `COALESCE(cs.layout, '${DEFAULT_LAYOUT}') AS layout ` +
+  `COALESCE(cs.layout, '${DEFAULT_LAYOUT}') AS layout, tt.title ` +
   'FROM teacher t ' +
   'JOIN card c ON c.teacher_id = t.id ' +
-  'LEFT JOIN card_style cs ON cs.teacher_id = t.id '
+  'LEFT JOIN card_style cs ON cs.teacher_id = t.id ' +
+  'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id '
 
 async function fetchImages(db: Env['DB'], teacherId: number): Promise<Record<string, ImageSlot>> {
   const { results } = await db
@@ -96,12 +99,16 @@ async function createTeacher(request: Request, env: Env, _email: string): Promis
   const status = rawStatus === 'published' ? 'published' : 'draft'
   const rawLayout = body.layout
   const layout = typeof rawLayout === 'string' ? rawLayout : null
+  const rawTitle = body.title
 
   if (name.length === 0 || name.length > 80) throw new HttpError('bad_request')
   if (subject.length > 80) throw new HttpError('bad_request')
   if (message.length > 600) throw new HttpError('bad_request')
   if (status === 'published' && message.length === 0) throw new HttpError('bad_request')
   if (layout !== null && !isLayout(layout)) throw new HttpError('bad_request')
+  // title is required on create
+  if (typeof rawTitle !== 'string' || !isTitle(rawTitle)) throw new HttpError('bad_request')
+  const title = rawTitle
 
   // Validate images
   const rawImages = body.images
@@ -132,6 +139,7 @@ async function createTeacher(request: Request, env: Env, _email: string): Promis
     const stmts: D1Stmt[] = [
       env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(tok, name, subject, now),
       env.DB.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)').bind(message, status, now),
+      env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, title),
     ]
     if (layout !== null) {
       stmts.push(env.DB.prepare('INSERT INTO card_style (teacher_id, layout) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, effectiveLayout))
@@ -161,6 +169,7 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   const status = body.status
   const rawLayout = body.layout
   const layout = typeof rawLayout === 'string' ? rawLayout : undefined
+  const rawTitle = body.title
 
   if (name.length === 0 || name.length > 80) throw new HttpError('bad_request')
   if (subject.length > 80) throw new HttpError('bad_request')
@@ -168,6 +177,11 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   if (status !== 'draft' && status !== 'published') throw new HttpError('bad_request')
   if (status === 'published' && message.length === 0) throw new HttpError('bad_request')
   if (layout !== undefined && !isLayout(layout)) throw new HttpError('bad_request')
+  // title on PUT: absent → unchanged; present → must be valid
+  if (rawTitle !== undefined && (typeof rawTitle !== 'string' || !isTitle(rawTitle))) {
+    throw new HttpError('bad_request')
+  }
+  const titleToUpdate = rawTitle !== undefined ? (rawTitle as string) : undefined
 
   // Parse images update: { [slot]: number | null }
   const rawImages = body.images
@@ -201,6 +215,9 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   ]
   if (layout !== undefined) {
     stmts.push(env.DB.prepare('INSERT OR REPLACE INTO card_style (teacher_id, layout) VALUES (?, ?)').bind(id, layout))
+  }
+  if (titleToUpdate !== undefined) {
+    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(id, titleToUpdate))
   }
   if (imageUpdates) {
     for (const [slot, val] of Object.entries(imageUpdates)) {
@@ -262,10 +279,13 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
     const name = typeof obj.name === 'string' ? obj.name.trim() : ''
     const subject = typeof obj.subject === 'string' ? obj.subject.trim() : ''
     const message = typeof obj.message === 'string' ? obj.message.trim() : ''
+    const rawItemTitle = obj.title
     if (name.length === 0 || name.length > 80) throw new HttpError('bad_request')
     if (subject.length > 80) throw new HttpError('bad_request')
     if (message.length > 600) throw new HttpError('bad_request')
-    return { name, subject, message }
+    // title is required on each bulk item
+    if (typeof rawItemTitle !== 'string' || !isTitle(rawItemTitle)) throw new HttpError('bad_request')
+    return { name, subject, message, title: rawItemTitle }
   })
 
   // Parse shared layout
@@ -313,6 +333,7 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
       const tok = tokens[i]
       stmts.push(env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(tok, item.name, item.subject, now))
       stmts.push(env.DB.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(tok, item.message, status, now))
+      stmts.push(env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, item.title))
       if (layout !== null) {
         stmts.push(env.DB.prepare('INSERT INTO card_style (teacher_id, layout) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, effectiveLayout))
       }
