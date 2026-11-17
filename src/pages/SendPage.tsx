@@ -20,6 +20,7 @@ import { fillWish } from '../../shared/wish.ts'
 import { ApiError, getPublicWishes, getTeacherPage, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
 import { initialState, isTextValid, sendReducer } from './send/sendReducer.ts'
+import { resolveTeacher } from './send/resolveTeacher.ts'
 
 const PREVIEW_CARD = {
   name: 'Tên thầy cô',
@@ -111,23 +112,9 @@ export default function SendPage() {
 
       // Resolve preselected teacher: check wall first, then fall back to teacher API
       if (preselected) {
-        const found = wallTeachersLoaded.find((t) => t.publicId === preselected)
-        if (found) {
-          setTeacherInfo({
-            publicId: found.publicId,
-            title: found.title,
-            name: found.name,
-            subject: found.subject,
-            department: found.department,
-          })
-        } else {
-          // Teacher may be hidden (showOnHome=0); fetch their profile directly
-          try {
-            const page = await getTeacherPage(preselected)
-            setTeacherInfo(page.teacher)
-          } catch {
-            // Teacher not found; leave teacherInfo null so the user picks manually
-          }
+        const profile = await resolveTeacher(preselected, wallTeachersLoaded, getTeacherPage)
+        if (profile) {
+          setTeacherInfo(profile)
         }
       }
     }).finally(() => setLoadingData(false))

@@ -300,3 +300,68 @@ describe('DELETE /api/admin/templates/:id', () => {
     expect(r.status).toBe(404)
   })
 })
+
+// ---- Item (1) atomicity and FK-mapping tests ----
+
+describe('createTemplate atomicity', () => {
+  it('FK in batch → 400 and no orphan template row left', async () => {
+    // Seed an image so parseTemplateBody pre-validation passes, then monkey-patch
+    // the batch to simulate an FK failure (race: image deleted between validation and batch)
+    const imgId = await seedImage(db)
+    ;(db as unknown as Record<string, unknown>).batch = async () => {
+      throw new Error('FOREIGN KEY constraint failed')
+    }
+
+    const r = await handleTemplates(
+      req('POST', '/api/admin/templates', { name: 'OrphanCheck', layout: 'classic', images: { background: imgId } }),
+      makeEnv(db), TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+
+    // With the fix (template INSERT in the same batch), no row is committed on rollback.
+    // Before the fix (separate .run() + batch), the template row IS created → assertion fails.
+    const row = await db.prepare('SELECT id FROM template WHERE name = ?').bind('OrphanCheck').first()
+    expect(row).toBeNull()
+  })
+
+  it('same-name templates created back to back return their own distinct rows', async () => {
+    const r1 = await handleTemplates(
+      req('POST', '/api/admin/templates', { name: 'DupName', layout: 'classic' }),
+      makeEnv(db), TEST_EMAIL,
+    )
+    const r2 = await handleTemplates(
+      req('POST', '/api/admin/templates', { name: 'DupName', layout: 'lotus' }),
+      makeEnv(db), TEST_EMAIL,
+    )
+    expect(r1.status).toBe(200)
+    expect(r2.status).toBe(200)
+    const t1 = await r1.json() as { id: number; name: string; layout: string }
+    const t2 = await r2.json() as { id: number; name: string; layout: string }
+    expect(t1.id).not.toBe(t2.id)
+    expect(t1.name).toBe('DupName')
+    expect(t1.layout).toBe('classic')
+    expect(t2.name).toBe('DupName')
+    expect(t2.layout).toBe('lotus')
+  })
+})
+
+describe('updateTemplate FK mapping', () => {
+  it('batch FK error in updateTemplate → 400 (not unhandled throw)', async () => {
+    const created = await (
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+    ).json() as { id: number }
+
+    // Monkey-patch batch to simulate FK error (race: image deleted between validation and batch)
+    ;(db as unknown as Record<string, unknown>).batch = async () => {
+      throw new Error('FOREIGN KEY constraint failed')
+    }
+
+    const r = await handleTemplates(
+      req('PUT', `/api/admin/templates/${created.id}`, { name: 'Updated', layout: 'lotus' }),
+      makeEnv(db), TEST_EMAIL,
+    )
+    // Before fix: unhandled error propagates → test throws (not 400).
+    // After fix: FK → HttpError('bad_request') → 400.
+    expect(r.status).toBe(400)
+  })
+})

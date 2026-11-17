@@ -51,6 +51,13 @@ export function checkHeaders(content: string): string[] {
     }
   }
 
+  // 1b. Count every occurrence of "X-Robots-Tag" (any value) — only one is allowed.
+  //     This catches lines like "X-Robots-Tag: index" that differ from the required value.
+  const allRobotsTagCount = (content.match(/X-Robots-Tag/gi) ?? []).length
+  if (allRobotsTagCount > 1) {
+    errors.push(`duplicate (${allRobotsTagCount}×): X-Robots-Tag appears more than once (all values combined)`)
+  }
+
   // 2. Any accounts.google.com origin is forbidden — Google Sign-In was removed
   //    and this rule prevents accidental re-introduction.
   if (/accounts\.google\.com/.test(content)) {

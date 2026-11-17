@@ -8,6 +8,7 @@ import {
   ApiError,
   addAdmin,
   listAdmins,
+  messageFor,
   removeAdmin,
 } from '../../api'
 
@@ -43,7 +44,7 @@ export default function AdminsSection({
       .then((rows) => { setAdmins(rows) })
       .catch((e) => {
         if (!onAccessError(e)) {
-          setError(e instanceof Error ? e.message : 'Lỗi tải danh sách quản trị viên')
+          setError(messageFor(e))
         }
       })
       .finally(() => { setLoading(false) })
@@ -68,7 +69,7 @@ export default function AdminsSection({
         } else if (err instanceof ApiError && err.status === 400) {
           setError('Email không hợp lệ')
         } else {
-          setError(err instanceof Error ? err.message : 'Lỗi thêm quản trị viên')
+          setError(messageFor(err))
         }
       }
     }
@@ -85,7 +86,7 @@ export default function AdminsSection({
         if (err instanceof ApiError && err.status === 409) {
           setError('Không thể xóa quản trị viên cuối cùng')
         } else {
-          setError(err instanceof Error ? err.message : 'Lỗi xóa quản trị viên')
+          setError(messageFor(err))
         }
       }
     }

@@ -3,7 +3,7 @@
  * Images are compressed client-side before upload (max 1280 px, ≤ 300 KB).
  */
 import { useEffect, useRef, useState } from 'react'
-import { type ImageRow, ApiError, deleteImage, listImages, uploadImage } from '../../api'
+import { type ImageRow, ApiError, deleteImage, listImages, messageFor, uploadImage } from '../../api'
 import { compressImage } from '../../imageCompress.ts'
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
@@ -14,8 +14,7 @@ function uploadErrorMessage(err: unknown): string {
     if (err.status === 400) return 'Ảnh không hợp lệ. Vui lòng chọn ảnh JPEG, PNG hoặc WebP nhỏ hơn 300 KB.'
     if (err.status === 413) return 'Ảnh quá lớn. Vui lòng chọn ảnh nhỏ hơn 300 KB.'
   }
-  if (err instanceof Error) return err.message
-  return 'Lỗi tải ảnh lên'
+  return messageFor(err)
 }
 
 export type ImageLibraryHandle = {
@@ -39,7 +38,7 @@ export default function ImageLibrary({
       setImages(await listImages())
     } catch (e) {
       if (!onAccessError(e)) {
-        setError(e instanceof Error ? e.message : 'Lỗi tải thư viện ảnh')
+        setError(messageFor(e))
       }
     } finally {
       setLoading(false)
@@ -94,7 +93,7 @@ export default function ImageLibrary({
         if (err instanceof ApiError && err.status === 409) {
           setError(`Ảnh "${img.name}" đang được dùng trong thiệp, không thể xóa.`)
         } else {
-          setError(err instanceof Error ? err.message : 'Lỗi xóa ảnh')
+          setError(messageFor(err))
         }
       }
     }

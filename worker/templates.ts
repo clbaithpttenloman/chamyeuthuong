@@ -120,30 +120,32 @@ async function createTemplate(request: Request, env: Env, email: string): Promis
   const { name, layout, active, imageUpdates } = await parseTemplateBody(request, env)
   const now = new Date().toISOString()
 
-  // Use last_row_id from INSERT to avoid re-select by name+created_at (wrong row on same-ms duplicates)
-  const result = await env.DB
-    .prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
-    .bind(name, layout, active, now, email)
-    .run()
-  const templateId = result.meta.last_row_id
+  // All inserts in ONE batch so a FK error on any image slot leaves no orphan template row.
+  const stmts: D1Stmt[] = [
+    env.DB.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
+      .bind(name, layout, active, now, email),
+  ]
 
-  // Insert all image slots in one batch; map FK errors to 400
   if (imageUpdates) {
-    const stmts: D1Stmt[] = []
     for (const [slot, val] of Object.entries(imageUpdates)) {
       if (val !== null) {
-        stmts.push(env.DB.prepare('INSERT INTO template_image (template_id, slot, image_id) VALUES (?, ?, ?)').bind(templateId, slot, val))
+        // (SELECT last_insert_rowid()) references the template row just inserted in this batch.
+        stmts.push(
+          env.DB.prepare('INSERT INTO template_image (template_id, slot, image_id) VALUES ((SELECT last_insert_rowid()), ?, ?)')
+            .bind(slot, val),
+        )
       }
     }
-    if (stmts.length > 0) {
-      try {
-        await env.DB.batch(stmts)
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : ''
-        if (msg.includes('FOREIGN KEY constraint failed')) throw new HttpError('bad_request')
-        throw e
-      }
-    }
+  }
+
+  let templateId: number
+  try {
+    const results = await env.DB.batch(stmts)
+    templateId = results[0].meta.last_row_id
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : ''
+    if (msg.includes('FOREIGN KEY constraint failed')) throw new HttpError('bad_request')
+    throw e
   }
 
   const row = await env.DB
@@ -178,7 +180,13 @@ async function updateTemplate(request: Request, env: Env, id: number): Promise<R
     }
   }
 
-  await env.DB.batch(stmts)
+  try {
+    await env.DB.batch(stmts)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : ''
+    if (msg.includes('FOREIGN KEY constraint failed')) throw new HttpError('bad_request')
+    throw e
+  }
 
   const row = await env.DB
     .prepare('SELECT id, name, layout, active, created_at, created_by FROM template WHERE id = ?')

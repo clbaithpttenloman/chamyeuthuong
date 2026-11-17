@@ -20,6 +20,7 @@ import {
   updateAdminCard,
 } from '../../api'
 import CardView from '../../components/CardView.tsx'
+import { toggleAll, toggleOne } from './moderationSelection.ts'
 
 type Status = 'pending' | 'approved' | 'hidden'
 type Tab = Status
@@ -100,29 +101,16 @@ export default function ModerationSection({
     void loadCards(tab, teacherFilter, true)
   }
 
-  function toggleSelect(id: number) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  function handleToggleSelect(id: number) {
+    const result = toggleOne(id, selected)
+    setSelected(result.selected)
+    if (result.notice) setSelectionCapNotice(result.notice)
   }
 
-  function toggleAll() {
-    if (selected.size === cards.length && cards.length > 0) {
-      setSelected(new Set())
-      setSelectionCapNotice(null)
-    } else {
-      // Cap selection at MAX_REVIEW_IDS to prevent a 400 from bulk review
-      const ids = cards.map((c) => c.id).slice(0, MAX_REVIEW_IDS)
-      setSelected(new Set(ids))
-      if (cards.length > MAX_REVIEW_IDS) {
-        setSelectionCapNotice(`Chỉ có thể chọn tối đa ${MAX_REVIEW_IDS} thiệp cùng lúc. Đang chọn ${MAX_REVIEW_IDS} thiệp đầu tiên.`)
-      } else {
-        setSelectionCapNotice(null)
-      }
-    }
+  function handleToggleAll() {
+    const result = toggleAll(cards.map((c) => c.id), selected)
+    setSelected(result.selected)
+    setSelectionCapNotice(result.capNotice)
   }
 
   async function handleBulk(status: 'approved' | 'hidden') {
@@ -135,8 +123,7 @@ export default function ModerationSection({
       onPendingCountChange(delta)
       setCards((prev) => prev.filter((c) => !selected.has(c.id)))
       setSelected(new Set())
-      setSelectionCapNotice(null)
-    } catch (e) {
+      setSelectionCapNotice(null)    } catch (e) {
       if (!onAccessError(e)) {
         setError(messageFor(e))
       }
@@ -154,8 +141,7 @@ export default function ModerationSection({
         if (card.status === 'pending') onPendingCountChange(-1)
       }
       setCards((prev) => prev.filter((c) => c.id !== card.id))
-      setSelected((prev) => { const next = new Set(prev); next.delete(card.id); return next })
-    } catch (e) {
+      setSelected((prev) => { const next = new Set(prev); next.delete(card.id); return next })    } catch (e) {
       if (!onAccessError(e)) {
         setError(messageFor(e))
       }
@@ -237,7 +223,7 @@ export default function ModerationSection({
             type="checkbox"
             id="mod-select-all"
             checked={selected.size > 0 && selected.size === Math.min(cards.length, MAX_REVIEW_IDS)}
-            onChange={toggleAll}
+            onChange={handleToggleAll}
             aria-label="Chọn tất cả"
           />
           <label htmlFor="mod-select-all" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>
@@ -262,7 +248,7 @@ export default function ModerationSection({
               key={card.id}
               card={card}
               selected={selected.has(card.id)}
-              onToggle={() => toggleSelect(card.id)}
+              onToggle={() => handleToggleSelect(card.id)}
               onAction={(action) => { void handleSingle(card, action) }}
             />
           ))}

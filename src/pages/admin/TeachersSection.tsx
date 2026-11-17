@@ -9,7 +9,7 @@
  */
 import { useState } from 'react'
 import QRCode from 'qrcode'
-import type { AdminTeacher, AdminTeacherInput, BulkTeacherInputItem } from '../../../shared/api.ts'
+import type { AdminTeacher, AdminTeacherInput } from '../../../shared/api.ts'
 import {
   ApiError,
   bulkAdminTeachers,
@@ -20,6 +20,7 @@ import {
   updateAdminTeacher,
 } from '../../api'
 import { parseBulkInput } from './bulkParse.ts'
+import { toBulkItems } from './bulkMap.ts'
 
 type TeacherForm = {
   title: 'Thầy' | 'Cô' | ''
@@ -94,12 +95,7 @@ function BulkAddPanel({
 
     setSubmitting(true)
     try {
-      const inputs: BulkTeacherInputItem[] = items.map((item) => ({
-        title: item.title,
-        name: item.name,
-        ...(item.subject ? { subject: item.subject } : {}),
-        ...(item.department ? { department: item.department } : {}),
-      }))
+      const inputs = toBulkItems({ items, invalidLines, overLimit })
       const { created } = await bulkAdminTeachers(inputs)
       onAdd(created)
       onClose()

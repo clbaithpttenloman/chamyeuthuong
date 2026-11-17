@@ -340,6 +340,23 @@ describe('PUT /api/admin/teachers/:id', () => {
     expect((await r.json() as AdminTeacher).department).toBe('Khoa học')
   })
 
+  it('PUT without subject keeps existing subject value', async () => {
+    // Create with a non-empty subject
+    const created = await (
+      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', subject: 'Toán' }), makeEnv(db))
+    ).json() as AdminTeacher
+    expect(created.subject).toBe('Toán')
+
+    // PUT omitting subject — 'Toán' must be preserved
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T2' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    // Before fix: finalSubject falls back to '' → subject reset. After fix: 'Toán' kept.
+    expect((await r.json() as AdminTeacher).subject).toBe('Toán')
+  })
+
   it('PUT showOnHome: 2 → 400 (strict 0|1 only)', async () => {
     const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', showOnHome: 2 }), makeEnv(db))

@@ -8,6 +8,7 @@ import {
   createWish,
   deleteWish,
   listWishes,
+  messageFor,
   updateWish,
 } from '../../api'
 
@@ -33,7 +34,7 @@ export default function WishLibrary({
       .then(setWishes)
       .catch((e) => {
         if (!onAccessError(e)) {
-          setError(e instanceof Error ? e.message : 'Lỗi tải thư viện lời chúc')
+          setError(messageFor(e))
         }
       })
       .finally(() => { setLoading(false) })
@@ -85,7 +86,7 @@ export default function WishLibrary({
         if (err instanceof ApiError && err.status === 409) {
           setError('Đã đạt giới hạn thư viện lời chúc (200 lời chúc)')
         } else {
-          setError(err instanceof Error ? err.message : 'Lỗi lưu lời chúc')
+          setError(messageFor(err))
         }
       }
     }
@@ -100,7 +101,7 @@ export default function WishLibrary({
       if (editId === w.id) cancelForm()
     } catch (err) {
       if (!onAccessError(err)) {
-        setError(err instanceof Error ? err.message : 'Lỗi xóa lời chúc')
+        setError(messageFor(err))
       }
     }
   }

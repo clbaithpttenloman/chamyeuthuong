@@ -65,6 +65,7 @@ export class ApiError extends Error {
 /**
  * Map an ApiError (or any caught value) to a user-facing Vietnamese message.
  * Use this everywhere raw error.message would otherwise surface to the UI.
+ * Non-ApiError (network errors, TypeError, etc.) → generic connection-error message.
  */
 export function messageFor(e: unknown): string {
   if (e instanceof ApiError) {
@@ -75,8 +76,7 @@ export function messageFor(e: unknown): string {
     if (e.status === 429) return 'Quá nhiều yêu cầu. Vui lòng thử lại sau.'
     if (e.status >= 500) return 'Lỗi máy chủ. Vui lòng thử lại sau.'
   }
-  if (e instanceof Error) return e.message
-  return 'Có lỗi xảy ra. Vui lòng thử lại.'
+  return 'Lỗi kết nối, vui lòng thử lại.'
 }
 
 // ── sessionStorage email helpers ─────────────────────────────────────────

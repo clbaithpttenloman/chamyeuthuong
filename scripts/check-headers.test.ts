@@ -103,4 +103,14 @@ describe('checkHeaders', () => {
     const errors = checkHeaders(content)
     expect(errors.some((e) => e.includes('X-Robots-Tag'))).toBe(true)
   })
+
+  it('rejects extra X-Robots-Tag line with a different value (e.g. index)', () => {
+    // Adding X-Robots-Tag: index on top of the required noindex is also invalid —
+    // only ONE X-Robots-Tag line (noindex) is allowed, any other value included.
+    // Before fix: checkHeaders only counts the exact "X-Robots-Tag: noindex" string
+    // so the extra "X-Robots-Tag: index" line goes undetected → no error reported.
+    const content = VALID + '  X-Robots-Tag: index\n'
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('X-Robots-Tag'))).toBe(true)
+  })
 })

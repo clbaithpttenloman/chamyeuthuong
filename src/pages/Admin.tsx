@@ -16,6 +16,7 @@ import {
   clearAdminEmail,
   getAdminEmail,
   listAdminTeachers,
+  messageFor,
   setAdminEmail,
 } from '../api'
 import AdminsSection from './admin/AdminsSection.tsx'
@@ -148,7 +149,7 @@ export default function Admin() {
         if (e instanceof ApiError && e.status === 401) {
           setEmailError('Email này chưa có quyền quản trị')
         } else {
-          setEmailError(e instanceof Error ? e.message : 'Lỗi kết nối, thử lại')
+          setEmailError(messageFor(e))
         }
       })
       .finally(() => { if (!cancelled) setChecking(false) })

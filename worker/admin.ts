@@ -163,7 +163,12 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   const existing = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
 
-  // Fetch existing profile values to keep when fields are omitted in body
+  // Fetch existing teacher + profile values to preserve when fields are omitted in body
+  const teacherRow = await env.DB
+    .prepare('SELECT subject FROM teacher WHERE id = ?')
+    .bind(id)
+    .first<{ subject: string }>()
+
   const profileRow = await env.DB
     .prepare('SELECT public_id, department, show_on_home FROM teacher_profile WHERE teacher_id = ?')
     .bind(id)
@@ -171,8 +176,9 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   const publicId = profileRow?.public_id ?? newToken()
 
   // Keep existing values when fields are omitted
-  const subject = 'subject' in body ? (typeof body.subject === 'string' ? body.subject.trim() : '') : undefined
-  const finalSubject = subject !== undefined ? subject : ''
+  const finalSubject = 'subject' in body
+    ? (typeof body.subject === 'string' ? body.subject.trim() : '')
+    : (teacherRow?.subject ?? '')
   if (finalSubject.length > 80) throw new HttpError('bad_request')
 
   const finalDepartment = 'department' in body
