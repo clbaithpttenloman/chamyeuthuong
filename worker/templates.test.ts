@@ -16,6 +16,7 @@ vi.mock('./token.ts', () => ({
 
 // This import fails until Group 2 creates the module → all tests fail
 import { handleTemplates } from './templates.ts'
+import { ensureSchema } from './schema.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 
@@ -308,8 +309,13 @@ describe('createTemplate atomicity', () => {
     // Seed an image so parseTemplateBody pre-validation passes, then monkey-patch
     // the batch to simulate an FK failure (race: image deleted between validation and batch)
     const imgId = await seedImage(db)
-    ;(db as unknown as Record<string, unknown>).batch = async () => {
-      throw new Error('FOREIGN KEY constraint failed')
+    // Real race: the image disappears after validation, so the REAL batch hits SQLite's FK check
+    // and must roll back the template row it inserted earlier in the same batch.
+    await ensureSchema(db)
+    const realBatch = db.batch.bind(db)
+    ;(db as unknown as { batch: typeof db.batch }).batch = async (stmts) => {
+      await db.prepare('DELETE FROM image WHERE id = ?').bind(imgId).run()
+      return realBatch(stmts)
     }
 
     const r = await handleTemplates(
