@@ -1,208 +1,833 @@
-# AI - Chạm yêu thương
+# Chạm yêu thương — AI Club Student Cards Platform
 
-**Thông điệp:** Công nghệ tạo lời chúc - Tình cảm tạo nên ý nghĩa.
-**Đơn vị thực hiện:** CLB AI - THPT Ten Lơ Man
-**Ngày:** 20/11/2026
+**Mission:** Technology creates wishes; emotion creates meaning.  
+**Built by:** CLB AI — THPT Ten Lơ Man  
+**Date:** 20/11/2026
 
-Website gửi lời chúc cho thầy cô (Vite + React + TypeScript, Cloudflare Workers + D1). Each teacher has a personalized card with a custom layout, images, and a wish message. Admins can manage cards individually or in bulk, maintain a library of wishes, and curate the image library.
+A platform where students send personalized cards to teachers. Admins create card **templates** (layout + images); students pick a template, choose a teacher, and write a wish. Every card is pending until approved. Teachers get a QR code that opens a random approved card.
 
-## Three site parts
+**Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
 
-| Route | Content |
+## Site Structure
+
+| Route | Purpose |
 |---|---|
-| `/` | Home — shared welcome for all teachers |
-| `/t/:token` | Card page — individual teacher's card with layout, images, and message (fetched from API) |
-| `/ve-clb-ai` | About — club introduction and project timeline |
-| `/admin` | Admin dashboard — manage thiệp (cards), wish library, image library, and admins (requires typed email verification) |
+| `/` | Home — wall showing latest approved cards (one per teacher, 6 total), teacher count, card count |
+| `/thay-co/:publicId` | Teacher page — all approved cards for one teacher, newest first, capped at 200 |
+| `/gui-thiep` | Student send flow — pick teacher → pick template → write wish → submit (4 steps) |
+| `/t/:token` | QR page — teacher's private QR token opens a random approved card, "View all", empty state |
+| `/ve-clb-ai` | About — club info and project timeline |
+| `/admin` | Admin dashboard — templates, moderation, teachers, wishes, images, admins (email verified, risk R1) |
 
-Home and About text are in `src/content/site.json`.
+All text is in `/src/content/site.json` (home, about, admin sections).
 
-## Layouts and Image Slots
+---
 
-Each card renders one of **five preset layouts** in `shared/layouts.ts`:
+## How It Works
 
-| Layout ID | Vietnamese Name |
-|-----------|-----------------|
-| `classic` | Cổ điển |
-| `lotus` | Hoa sen |
-| `spring` | Mùa xuân |
-| `night` | Đêm sao |
-| `minimal` | Tối giản |
+### Student Journey
 
-Every layout renders **three optional image slots** — the admin can upload custom images for each slot:
+1. **Visit home** (`/`) — see the teacher wall (latest approved cards, all teachers with `show_on_home = 1`)
+2. **Click "Gửi thiệp"** → send flow at `/gui-thiep?thay=<publicId>` or start from scratch
+3. **Pick a teacher** — from the dropdown (only `show_on_home = 1` teachers)
+4. **Pick a template** — from active templates (layout + image set)
+5. **Write a message** — 1–300 characters, max 5 newlines, trimmed, no control characters
+6. **Optional: name and class** — `anonymous` is on by default; turn it off to show `"Name · Class"` or `"Name"` on the card
+7. **Submit** → `POST /api/cards` sends the card as **pending**
+8. Confirmation: "Đã gửi thành công!"
+9. **Card is hidden** until an admin approves it
+10. **Approved**: appears on the wall and teacher's page; visible via QR
 
-- **`background`** — full-card cover image; the text sits on a translucent panel for contrast
-- **`banner`** — wide image at the top of the card
-- **`photo`** — round photo positioned above the teacher's name
+### Admin Workflow (Setup Order)
 
-Layout styling is in `src/styles.css` (`.card--<id>` classes); image URLs are built from unguessable 16-character tokens.
+1. **Deploy** the site
+2. **Claim admin** — go to `/admin`, type the bootstrap email (or set `ALLOW_FIRST_CLAIM=1`)
+3. **Add teachers** — bulk paste list `Thầy|Cô Tên | Môn | Tổ` (1–100) or add one at a time
+4. **Upload images** — JPG/PNG/WebP, max 1280 px, ≤ 300 KB (browser compresses, strips EXIF)
+5. **Create templates** — pick layout, assign images to slots (background, banner, photo), set active
+6. **Print QR codes** — from the Thầy cô section; `Rotate` gives a new token (old QR becomes invalid)
+7. **Share the site link** (`/`) — students send cards
+8. **Moderate on 20/11** — approve or hide pending cards in "Duyệt thiệp"; bulk approve up to 200 at once
 
-## Admin Dashboard
+### Admin Moderation
 
-Access `/admin` in the browser. A form asks for the admin's email; once verified, the dashboard displays five sections:
+**Duyệt thiệp** (Review cards):
+- Default tab shows **pending** cards, oldest first
+- Filter by status: pending, approved, hidden
+- Filter by teacher
+- Approve or hide one card, or **select up to 200** and bulk approve/hide
+- **Delete** removes a card entirely
+- **Hide** keeps it in D1 but removes it from all public queries (does not count against the pending cap)
+- **Delete spam** instead of hiding (pending cap is 2000 global, 200 per teacher; hidden cards stay stored but don't count)
+- **409 Conflict**: "đang có quá nhiều thiệp chờ duyệt" means the cap is hit; delete old spam to free space
 
-### Thiệp (Cards)
+---
 
-- **List**: show all teachers, card status (draft/published), current layout, and token
-- **Create**: pick a layout, choose images from the library (slot pickers show thumbnails), select a wish template or write custom text, preview with **CardView**, then publish or save as draft
-- **Edit**: update layout, images, or message; toggle status
-- **Copy URL**: show the public card URL (`/t/:token`)
-- **Show QR**: display the QR code (generated client-side, no upload)
-- **Rotate token**: issue a new 16-char token; old URL returns 404
-- **Delete**: remove the teacher and all associated data (cascades to layout, images, wishes)
+## Admin Dashboard Sections
 
-### Tạo hàng loạt (Bulk Create)
+### **Duyệt thiệp** (Review Cards)
 
-- Paste a list: one `Thầy Tên | Môn` or `Cô Tên | Môn` per line (Thầy/Cô required), up to 100 rows, body ≤ 64 KB
-- Pick a shared **wish template** (auto-fills message for all created cards via `fillWish` placeholder replacement)
-- Pick a shared **layout** and **image set** (same images applied to every card)
-- Create as drafts or publish all at once
-- Returns: list of created teachers with tokens
-- All-or-nothing atomicity: if any row fails, nothing is inserted
+- **List**: pending (oldest first), approved, hidden — filter by status and teacher
+- **Single action**: approve, hide, or delete one card
+- **Bulk action**: select up to 200 cards and approve/hide all at once
+- **Card preview**: thumbnail (layout + images), student name (anonymous shows "Một bạn học sinh"), class, and message excerpt
 
-### Thư viện lời chúc (Wish Library)
+### **Mẫu thiệp** (Templates)
 
-- **List**: 12 example wishes (Vietnamese, Teachers' Day theme, with `{Thầy/Cô}`, `{thầy/cô}`, `{tên}` and `{môn}` placeholders for personalization)
-- **Create**: title (≤ 80 chars), body (≤ 600 chars, non-empty)
+- **Create**: name (≤ 60 chars), pick layout (5 presets), assign images to slots (background, banner, photo), active flag
+- **List**: grid of active templates only; click to edit
+- **Edit**: update name, layout, images, toggle active
+- **Delete**: 409 if any card uses it; deactivate instead to hide from students while keeping existing cards rendering
+- **Active/inactive**: students pick active only; inactive cards stay rendered in approved cards
+
+**Layouts** (from `shared/layouts.ts`):
+- `lotus` — Hoa sen (Lotus)
+- `spring` — Mùa xuân (Spring)
+- `night` — Đêm sao (Starry night)
+- `classic` — Cổ điển (Classic)
+- `minimal` — Tối giản (Minimal)
+
+**Image Slots**:
+- `background` — full-card cover; text sits on translucent panel
+- `banner` — wide image at the top
+- `photo` — round photo above teacher name
+
+### **Thầy cô** (Teachers)
+
+- **List**: all teachers with card counts (pending, approved, hidden), `show_on_home` toggle, QR display
+- **Create**: title (Thầy/Cô, required), name, subject, department, `show_on_home` toggle
+- **Bulk add**: paste list `Thầy|Cô Tên | Môn | Tổ` (1–100 rows, all-or-nothing); all created with `show_on_home = 1`
+- **Edit**: name, subject, department, toggle `show_on_home`
+- **Rotate QR**: generates new `token` (old QR invalid; public page URL stays the same because it uses `public_id`)
+- **Delete**: removes teacher and all their cards (cascade)
+- **Show on home**: toggle to hide/show on the wall and latest cards
+
+### **Thư viện lời chúc** (Wish Library)
+
+- **List**: 12 example wishes seeded; title, body, usage count
+- **Create**: title (≤ 80 chars), body (≤ 600 chars, can include placeholders `{Thầy/Cô}`, `{thầy/cô}`, `{tên}`, `{môn}`)
 - **Edit**: update title or body
-- **Delete**: remove (always allowed, even if used by published cards)
-- **Cap**: max 200 wishes per instance
+- **Delete**: always allowed (existing cards keep their stored message)
+- **Cap**: 200 wishes per instance
 
-Example wishes include:
-- "Kính chúc {Thầy/Cô} {tên} sức khỏe dồi dào và hạnh phúc…"
-- "Chúc {thầy/cô} {tên} dạy môn {môn} luôn tràn đầy năng lượng…"
+**Placeholder replacement** (`fillWish`):
+- `{Thầy/Cô}` → "Thầy" or "Cô" (capitalized, before name or sentence start)
+- `{thầy/cô}` → "thầy" or "cô" (mid-sentence)
+- `{tên}` → teacher's name
+- `{môn}` → subject (or empty if missing)
 
-Every teacher has a required **Thầy/Cô** title, shown before the name on the card ("Kính gửi Thầy Nguyễn Văn A") and in the admin list. `fillWish(body, { name, subject, title })` replaces `{Thầy/Cô}` with `Thầy`/`Cô`, `{thầy/cô}` with `thầy`/`cô` (exact case; `Thầy/Cô` / `thầy/cô` when no title is set yet), and `{tên}`, `{môn}` (case-insensitive) with the name and subject; a missing subject becomes empty and double spaces are collapsed.
+### **Thư viện ảnh** (Image Library)
 
-### Thư viện ảnh (Image Library)
+- **Upload**: JPEG/PNG/WebP, browser compresses max 1280 px and ≤ 300 KB
+  - Server validates: magic bytes match type, pixel dims ≤ 4096 each, ≤ 8 MP total, ≤ 300 KB
+  - Metadata (EXIF, GPS) stripped by browser re-encoding
+  - Name: 1–80 chars, no control characters
+- **List**: thumbnails with name, MIME, size, usage count, creation date
+- **Delete**: 409 if used by any card; remove reference first
+- **Limits**: 200 images max, 40 MB total (base64 D1 storage ~1.33× size)
 
-- **Upload**: drag-and-drop or click to select JPEG/PNG/WebP
-  - Browser compresses: max 1280 px, ≤ 300 KB (WebP with JPEG fallback, shrinking quality then size)
-  - Metadata (Exif) is stripped by re-encoding through canvas
-  - Server-side validation: magic bytes must match declared type, pixel dimensions ≤ 4096 each, total pixels ≤ 8 MP, body ≤ 300 KB counted on bytes read, name 1–80 chars, no control characters
-  - Upload failure messages in Vietnamese (type, size, quota, in-use)
-- **List**: thumbnails, name, size, mime, created date, `used_by` count (image metadata only, never the raw bytes)
-- **Delete**: fails with 409 `conflict` if any published card uses the image; remove the image reference from the card first
-- **Limits**: 200 images max, 40 MB total (raw size; base64 D1 storage is ~1.33× larger)
+### **Quản trị viên** (Admins)
 
-#### Privacy Note
+- **List**: all admins with email, sign-up date, added by
+- **Add**: type email, click Add; email is normalized (trim, lowercase)
+- **Remove**: cannot remove the last admin; blocked with 409
 
-Photos may carry GPS or other metadata in EXIF. Browser-side re-encoding via canvas drops metadata. The server cannot enforce this (URLs are public anyway), so document privacy expectations in the school's Terms of Use.
+---
 
-### Quản trị viên (Admins)
+## Public API
 
-- **List**: all admins with email, sign-up date, and who added them
-- **Add**: type an email, click **Thêm** (add); email is normalised (trimmed, lowercased)
-- **Remove**: click **Xóa** next to an admin (blocked if it is the last admin)
+All JSON endpoints; rate limit first, before DB.
 
-To change email or sign out, click **Đổi email** — the stored email is cleared and the form appears again.
+### GET /api/wall
+Rate limit: **120/60 s per IP**
 
-## Architecture
+Returns: `{ teachers: [...], latest: [...], totals: {...} }`
 
-**Frontend (React + Vite):** static assets served by Cloudflare Workers.
-
-**Worker (`worker/`) + D1:**
-- Public API: `GET /api/card/:token` (card JSON with layout and image tokens) and `GET /api/image/:token` (image bytes with immutable caching)
-- Admin API: `/api/admin/teachers` (CRUD + bulk create), `/api/admin/images` (upload/list/delete), `/api/admin/wishes` (CRUD), `/api/admin/admins` (list/add/remove)
-- All admin endpoints require `X-Admin-Email` header (checked against D1 admin list)
-- Rate limits:
-  - **CARD_IP_LIMIT**: 60 requests per 60 s per IP for `GET /api/card/*` (school NAT = many viewers on one IP)
-  - **ADMIN_FAIL_LIMIT**: 60 requests per 60 s per IP for all `/api/admin/*` endpoints (upload sessions make many calls; also the only brake on guessing admin emails — accepted risk R1)
-  - **IMAGE_IP_LIMIT**: 300 requests per 60 s per IP for `GET /api/image/*` (fast card loads + edge caching blunt scanners)
-
-**Database:** Tables are created automatically on the first request via `ensureSchema` in `worker/schema.ts` (idempotent `CREATE TABLE IF NOT EXISTS`).
-
-```sql
-teacher (id, token UNIQUE, name, subject, created_at)
-card (teacher_id, message, status ∈ {draft, published}, updated_at)
-card_style (teacher_id PRIMARY KEY, layout)
-card_image (teacher_id, slot ∈ {background,banner,photo}, image_id, PRIMARY KEY (teacher_id, slot))
-image (id, token UNIQUE, name, mime ∈ {image/jpeg,image/png,image/webp}, size ≤ 300 KB, data as base64 TEXT)
-wish (id, title, body, created_at, created_by)
-admin (id, email UNIQUE, created_at, created_by)
-meta (key PRIMARY KEY, value) — tracks schema seeding
+```json
+{
+  "teachers": [
+    {
+      "publicId": "j801z7t0npju2m8g",
+      "title": "Thầy",
+      "name": "Nguyễn Văn Khoa",
+      "subject": "Toán",
+      "department": "Tổ Toán - Tin",
+      "cardCount": 5
+    }
+  ],
+  "latest": [
+    {
+      "publicId": "gzz8y7pvsmkrc6mc",
+      "layout": "lotus",
+      "images": {
+        "background": "uuy01p4h10is8946",
+        "banner": "aaz02p5i11jt9j57"
+      },
+      "message": "Em cảm ơn thầy...",
+      "from": "Minh Anh · 11A1",
+      "createdAt": "2026-11-17T15:15:25Z",
+      "teacher": {
+        "publicId": "j801z7t0npju2m8g",
+        "title": "Thầy",
+        "name": "Nguyễn Văn Khoa"
+      }
+    }
+  ],
+  "totals": {
+    "teachers": 15,
+    "cards": 42
+  }
+}
 ```
 
-Each teacher has one card. The card has one optional layout and 0–3 images (one per slot). Image data is stored as base64 TEXT in D1 (no R2 required). Seeds: 12 example wishes inserted once on first deploy.
+- Only `show_on_home = 1` teachers and `status = 'approved'` cards
+- `latest`: ≤ 6 items, one per teacher (newest approved), newest first
+- `from` is built server-side: `anonymous || !name → "Một bạn học sinh"` + ` · class` if present, else `"name"` + ` · class` if present
 
-Admins are stored in D1; on first deploy, the person who types the bootstrap email becomes the first admin.
+### GET /api/teachers/:publicId
+Rate limit: **120/60 s per IP**
 
-## API
+Returns: `{ teacher: {...}, cards: [...], total: ... }`
 
-### Public
+```json
+{
+  "teacher": {
+    "publicId": "j801z7t0npju2m8g",
+    "title": "Thầy",
+    "name": "Nguyễn Văn Khoa",
+    "subject": "Toán",
+    "department": "Tổ Toán - Tin"
+  },
+  "cards": [
+    {
+      "publicId": "gzz8y7pvsmkrc6mc",
+      "layout": "lotus",
+      "images": {
+        "background": "uuy01p4h10is8946",
+        "banner": "aaz02p5i11jt9j57"
+      },
+      "message": "Em cảm ơn thầy dạy em yêu môn Toán.",
+      "from": "Minh Anh · 11A1",
+      "createdAt": "2026-11-17T15:15:25Z"
+    }
+  ],
+  "total": 42
+}
+```
 
-| Endpoint | Method | Auth | Response |
-|----------|--------|------|----------|
-| `/api/card/:token` | GET | none | `{ title, name, subject, message, layout, images: { [slot]: <token> } }` for published card (`title` is `Thầy`, `Cô` or `null`), or 404 |
-| `/api/image/:token` | GET | none | raw image bytes (JPEG/PNG/WebP) with `Cache-Control: public, max-age=31536000, immutable` or 404 |
+- Only `status = 'approved'` cards, newest first, max 200
+- Unknown/malformed `publicId` → 404
+- Teachers with `show_on_home = 0` are reachable (needed after sending a card) but not listed on the wall
 
-**Public image response headers:**
-- `Content-Type`: derived from the stored image mime (never user-controlled)
+### GET /api/templates
+Rate limit: **120/60 s per IP**
+
+Returns: array of active templates
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Hoa sen hồng",
+    "layout": "lotus",
+    "images": {
+      "background": "uuy01p4h10is8946",
+      "banner": "aaz02p5i11jt9j57"
+    }
+  }
+]
+```
+
+- Only `active = 1` templates
+- Images: slot → 16-char token
+
+### GET /api/wishes
+Rate limit: **120/60 s per IP**
+
+Returns: array of all wishes
+
+```json
+[
+  {
+    "id": 1,
+    "title": "Chúc Mừng 20/11",
+    "body": "Kính chúc {Thầy/Cô} {tên} sức khỏe dồi dào…"
+  }
+]
+```
+
+- Never includes `created_by` (admin only)
+
+### GET /api/qr/:token
+Rate limit: **60/60 s per IP** (blunts QR scanners)
+
+Private teacher QR token → random approved card + teacher info
+
+```json
+{
+  "teacher": {
+    "publicId": "j801z7t0npju2m8g",
+    "title": "Thầy",
+    "name": "Nguyễn Văn Khoa",
+    "subject": "Toán",
+    "department": "Tổ Toán - Tin"
+  },
+  "card": {
+    "publicId": "gzz8y7pvsmkrc6mc",
+    "layout": "lotus",
+    "images": { "background": "...", "banner": "..." },
+    "message": "Em cảm ơn thầy...",
+    "from": "Một bạn học sinh · 11A1",
+    "createdAt": "2026-11-17T15:15:25Z"
+  },
+  "total": 5
+}
+```
+
+- `card: null` and `total: 0` if no approved cards for this teacher
+- Unknown/malformed token → 404 (isToken check before DB)
+- Private `token` never appears in any public response
+
+### GET /api/image/:token
+Rate limit: **300/60 s per IP**
+
+Raw image bytes (JPEG/PNG/WebP)
+
+**Headers:**
+- `Content-Type: image/jpeg | image/png | image/webp`
 - `Cache-Control: public, max-age=31536000, immutable`
 - `X-Content-Type-Options: nosniff`
 - `Content-Security-Policy: default-src 'none'; sandbox`
 - `Cross-Origin-Resource-Policy: same-origin`
 - `X-Robots-Tag: noindex`
 
-**Cached images stay in browser/edge caches for up to one year after deletion.** To replace an image, upload a new one and switch the card's reference (the old URL will remain cached).
+- Cached at Cloudflare edge (immutable, 1-year TTL)
+- Deleting an image does not purge caches (up to 1 year stale)
+- Unknown/malformed token → 404
 
-### Admin (all endpoints require `X-Admin-Email` header)
+### POST /api/cards
+Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler.jsonc if needed)
 
-**Teachers:**
+**Request:**
+```json
+{
+  "teacherPublicId": "j801z7t0npju2m8g",
+  "templateId": 1,
+  "message": "Em cảm ơn thầy đã dạy em.",
+  "fromName": "Minh Anh",
+  "fromClass": "11A1",
+  "anonymous": false
+}
+```
 
-| Endpoint | Method | Purpose | Body / Notes |
-|----------|--------|---------|------|
-| `/api/admin/teachers` | GET | List all teachers with card data | — |
-| `/api/admin/teachers` | POST | Create one teacher + draft card | `{ title, name, subject?, message?, layout?, images?, status? }` — `title` (`Thầy` or `Cô`) required; status defaults to `draft`; `published` requires non-empty message |
-| `/api/admin/teachers/:id` | PUT | Update teacher and card | `{ name, subject, message, status, title?, layout?, images? }` — title/layout/images omitted = no change; `images` keys present set the value (null = remove, number = set existing image id); unknown id → 400 |
-| `/api/admin/teachers/:id` | DELETE | Delete teacher (cascades layout, images) | — |
-| `/api/admin/teachers/:id/rotate` | POST | Issue new token | — |
-| `/api/admin/teachers/bulk` | POST | Create 1–100 teachers atomically | `{ items: [{ title, name, subject?, message? }], layout?, images?, status? }` — `title` (`Thầy`/`Cô`) required per item; all-or-nothing; body ≤ 64 KB; shared layout and images applied to every created card |
+**Response:**
+```json
+{
+  "status": "pending"
+}
+```
 
-**Images:**
+- Status code: **201** on success; **never returns the card**
+- `Content-Type` must be `application/json` (optional `; charset=utf-8`), else **400**
+- Body ≤ 2 KB
+- `message`: 1–300 code points, max 5 newlines, required
+- `fromName`: ≤ 40 code points, optional; if `anonymous = true` stored as empty
+- `fromClass`: ≤ 10 code points, optional
+- `anonymous`: boolean, optional, defaults false
+- Strings: NFC-normalized, trimmed
+- Rejected: control characters (except `\n` in message), zero-width characters, format characters, lone surrogates
+- Unknown `teacherPublicId` → **404**
+- Inactive/unknown template → **400**
+- Global pending cap (2000) or per-teacher cap (200) hit → **409** `"đang có quá nhiều thiệp chờ duyệt"`
+- Rate limit exceeded → **429**
+- Other errors: **400**
 
-| Endpoint | Method | Purpose | Details |
-|----------|--------|---------|---------|
-| `/api/admin/images` | GET | List image metadata (never data) | Returns array of `{ id, token, name, mime, size, created_at, created_by, used_by }` (used_by = count of cards using this image) |
-| `/api/admin/images?name=<name>` | POST | Upload a new image | Body = raw bytes; `Content-Type: image/jpeg\|image/png\|image/webp` (exact); name ≤ 80 chars, no control chars; validation: magic bytes must match type, pixel dims ≤ 4096 each, ≤ 8 MP total, body ≤ 300 KB; caps: 200 images, 40 MB total → 409 `conflict` when exceeded |
-| `/api/admin/images/:id` | DELETE | Delete image | 409 `conflict` if any card uses it; 200 if unused or unknown (no permission check on unknown) |
+---
 
-**Wishes:**
+## Admin API
 
-| Endpoint | Method | Purpose | Notes |
-|----------|--------|---------|-------|
-| `/api/admin/wishes` | GET | List wishes | 12 examples seeded; never deleted on restart |
-| `/api/admin/wishes` | POST | Create wish | title ≤ 80, body ≤ 600 (both non-empty); cap 200 wishes → 409 `conflict` |
-| `/api/admin/wishes/:id` | PUT | Update wish | title, body same rules |
-| `/api/admin/wishes/:id` | DELETE | Delete wish | allowed always (even if used by cards) |
+All endpoints behind `requireAdmin` (typed email sent as `X-Admin-Email` header, checked against D1).
 
-**Admins:**
+Rate limit: **60/60 s per IP** (ADMIN_FAIL_LIMIT; doubled from 30/60 s to allow upload sessions).
 
-| Endpoint | Method | Purpose | Notes |
-|----------|--------|---------|-------|
-| `/api/admin/admins` | GET | List all admins | `{ id, email, created_at, created_by }` |
-| `/api/admin/admins` | POST | Add new admin | body `{ email }` — normalised; must match email pattern |
-| `/api/admin/admins/:id` | DELETE | Remove admin | 409 `conflict` if last admin |
+All admin endpoints require `X-Requested-With: fetch` header (CSRF defense).
 
-**Error responses** are JSON `{ error: "<code>" }`:
+### Teachers
+
+#### GET /api/admin/teachers
+List all teachers with card counts.
+
+```json
+[
+  {
+    "id": 1,
+    "token": "xus7sivp0zztkyv7",
+    "publicId": "j801z7t0npju2m8g",
+    "title": "Thầy",
+    "name": "Nguyễn Văn Khoa",
+    "subject": "Toán",
+    "department": "Tổ Toán - Tin",
+    "showOnHome": 1,
+    "cardCounts": {
+      "pending": 2,
+      "approved": 5,
+      "hidden": 1
+    },
+    "created_at": "2026-11-17T15:14:38Z"
+  }
+]
+```
+
+#### POST /api/admin/teachers
+Create one teacher.
+
+**Request:**
+```json
+{
+  "title": "Thầy",
+  "name": "Nguyễn Văn A",
+  "subject": "Tiếng Anh",
+  "department": "Tổ Tiếng Anh",
+  "showOnHome": 1
+}
+```
+
+- `title` (Thầy/Cô): **required**
+- Others: optional
+- `showOnHome` defaults to 1
+
+#### PUT /api/admin/teachers/:id
+Update teacher.
+
+**Request:**
+```json
+{
+  "name": "Nguyễn Văn A",
+  "subject": "Tiếng Anh",
+  "department": "Tổ Tiếng Anh",
+  "showOnHome": 0,
+  "title": "Thầy"
+}
+```
+
+- Unknown teacher ID → **400**
+
+#### DELETE /api/admin/teachers/:id
+Remove teacher and cascade all their cards.
+
+#### POST /api/admin/teachers/:id/rotate
+Generate new QR token.
+
+```json
+{
+  "token": "abc1234567890xyz"
+}
+```
+
+- Old QR invalid; public page link (via `public_id`) stays the same
+
+#### POST /api/admin/teachers/bulk
+Create 1–100 teachers atomically.
+
+**Request:**
+```json
+{
+  "items": [
+    { "title": "Thầy", "name": "Nguyễn Văn A", "subject": "Toán", "department": "Tổ Toán - Tin" },
+    { "title": "Cô", "name": "Trần Thị B", "subject": "Văn" }
+  ],
+  "layout": "lotus",
+  "images": { "background": 1, "banner": 2 },
+  "showOnHome": 1
+}
+```
+
+- 1–100 items, body ≤ 64 KB
+- `title` (Thầy/Cô): **required** per item
+- `layout` (optional): applied to first card of each teacher
+- `images` (optional): slot → image ID mapping
+- `showOnHome` (optional): defaults to 1 for all
+- All-or-nothing: any error → nothing inserted
+
+### Templates
+
+#### GET /api/admin/templates
+List all templates.
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Hoa sen hồng",
+    "layout": "lotus",
+    "active": 1,
+    "images": {
+      "background": { "id": 1, "token": "uuy01p4h10is8946" },
+      "banner": { "id": 2, "token": "aaz02p5i11jt9j57" }
+    },
+    "created_at": "2026-11-17T15:15:25Z",
+    "created_by": "clbaithpttenloman@gmail.com"
+  }
+]
+```
+
+#### POST /api/admin/templates
+Create template.
+
+**Request:**
+```json
+{
+  "name": "Hoa sen hồng",
+  "layout": "lotus",
+  "active": 1,
+  "images": {
+    "background": 1,
+    "banner": 2,
+    "photo": null
+  }
+}
+```
+
+- `name`: ≤ 60 chars, required
+- `layout`: one of lotus, spring, night, classic, minimal; required
+- `active`: 0 or 1, defaults to 1
+- `images`: object mapping slot → image ID (1–200) or null (empty slot)
+- Returns created template with full image metadata
+
+#### PUT /api/admin/templates/:id
+Update template.
+
+**Request:** same shape as POST
+
+#### DELETE /api/admin/templates/:id
+Delete template.
+
+- **409** if any card uses it
+- Deactivate (`active = 0`) instead to hide from students
+
+### Moderation
+
+#### GET /api/admin/cards?status=pending|approved|hidden[&teacher=<id>][&after=<id>|&before=<id>]
+List cards with raw student fields.
+
+```json
+[
+  {
+    "id": 1,
+    "publicId": "gzz8y7pvsmkrc6mc",
+    "teacherId": 1,
+    "templateId": 1,
+    "message": "Em cảm ơn thầy dạy em yêu môn Toán.\nChúc thầy 20/11 lạ lùng!",
+    "fromName": "Minh Anh",
+    "fromClass": "11A1",
+    "anonymous": false,
+    "status": "pending",
+    "createdAt": "2026-11-17T15:15:25Z",
+    "reviewedAt": null,
+    "reviewedBy": null,
+    "teacher": {
+      "id": 1,
+      "publicId": "j801z7t0npju2m8g",
+      "name": "Nguyễn Văn Khoa",
+      "title": "Thầy"
+    },
+    "template": {
+      "id": 1,
+      "name": "Hoa sen hồng",
+      "layout": "lotus"
+    }
+  }
+]
+```
+
+- `status=pending` ordered oldest first (to handle backlog)
+- `status=approved|hidden` ordered newest first
+- `teacher` filter: optional, single teacher ID
+- Cursor paging: `after=<id>` (for pending) or `before=<id>` (for approved/hidden)
+- Max 200 per page
+
+#### PUT /api/admin/cards/:id
+Change card status.
+
+**Request:**
+```json
+{
+  "status": "approved"
+}
+```
+
+- Status: `pending`, `approved`, or `hidden`
+- Sets `reviewed_at` and `reviewed_by` (email)
+
+#### POST /api/admin/cards/review
+Bulk approve/hide (up to 200).
+
+**Request:**
+```json
+{
+  "ids": [1, 2, 5],
+  "status": "approved"
+}
+```
+
+- Max 200 IDs
+- Uses `json_each` to avoid 100-parameter bind limit
+- Sets `reviewed_at` and `reviewed_by` for all
+- Unknown/invalid status → **400**
+
+#### DELETE /api/admin/cards/:id
+Remove card (not reversible).
+
+### Images
+
+#### GET /api/admin/images
+List image metadata (not bytes).
+
+```json
+[
+  {
+    "id": 1,
+    "token": "uuy01p4h10is8946",
+    "name": "banner.png",
+    "mime": "image/png",
+    "size": 136,
+    "created_at": "2026-11-17T15:14:38Z",
+    "created_by": "clbaithpttenloman@gmail.com",
+    "used_by": 3
+  }
+]
+```
+
+- `used_by`: count of template_image rows (not cards)
+
+#### POST /api/admin/images?name=<name>
+Upload image.
+
+**Request:** raw bytes with `Content-Type: image/jpeg | image/png | image/webp`
+
+**Response:**
+```json
+{
+  "id": 1,
+  "token": "uuy01p4h10is8946",
+  "name": "banner.png",
+  "mime": "image/png",
+  "size": 136,
+  "created_at": "2026-11-17T15:14:38Z",
+  "created_by": "clbaithpttenloman@gmail.com"
+}
+```
+
+- Server validation:
+  - Magic bytes must match declared MIME
+  - Pixel dimensions: each ≤ 4096 px, total ≤ 8 MP
+  - Body ≤ 300 KB counted on bytes read
+  - Name 1–80 chars ASCII, no control chars
+  - EXIF/eXIf/EXIF chunks rejected (privacy)
+- Caps: 200 images, 40 MB total → **409** if exceeded
+- Browser strips EXIF via re-encoding (canvas)
+
+#### DELETE /api/admin/images/:id
+Delete image.
+
+- **409** if used by any template or in any card; remove references first
+- Unknown ID → **200** (no permission check)
+
+### Wishes
+
+#### GET /api/admin/wishes
+List wishes (12 example seeds included).
+
+```json
+[
+  {
+    "id": 1,
+    "title": "Chúc Mừng 20/11",
+    "body": "Kính chúc {Thầy/Cô} {tên} sức khỏe dồi dào…",
+    "created_at": "2026-11-17T15:14:38Z",
+    "created_by": "bootstrap"
+  }
+]
+```
+
+#### POST /api/admin/wishes
+Create wish.
+
+**Request:**
+```json
+{
+  "title": "Mới",
+  "body": "Em chúc {thầy/cô} dạy vui vẻ."
+}
+```
+
+- `title`, `body`: required, non-empty
+- `title` ≤ 80 chars, `body` ≤ 600 chars
+- Cap: 200 wishes → **409**
+
+#### PUT /api/admin/wishes/:id
+Update wish.
+
+**Request:** same as POST
+
+#### DELETE /api/admin/wishes/:id
+Delete wish.
+
+- Always allowed (even if used by cards; they keep stored copy)
+
+### Admins
+
+#### GET /api/admin/admins
+List admins.
+
+```json
+[
+  {
+    "id": 1,
+    "email": "clbaithpttenloman@gmail.com",
+    "created_at": "2026-11-17T15:14:38Z",
+    "created_by": "bootstrap"
+  }
+]
+```
+
+#### POST /api/admin/admins
+Add admin.
+
+**Request:**
+```json
+{
+  "email": "admin@example.com"
+}
+```
+
+- Email normalized (trim, lowercase, ASCII, ≤254 chars, exactly one @)
+- Duplicate → **409**
+
+#### DELETE /api/admin/admins/:id
+Remove admin.
+
+- Cannot remove last admin → **409**
+
+---
+
+## Error Responses
+
+All errors: `{ error: "<code>" }`
 
 | Status | Code | Reason |
 |--------|------|--------|
-| 400 | `bad_request` | Invalid or missing fields, unknown image/wish id, invalid layout/slot, published with empty message |
-| 401 | `unauthorized` | Missing, invalid, or unknown email |
-| 403 | `forbidden` | Cross-site or missing `X-Requested-With: fetch` header |
-| 404 | `not_found` | Teacher/admin/image/wish ID not found |
-| 409 | `conflict` | Duplicate email (add admin), last admin (remove), in-use image (delete), or caps exceeded (200 images, 40 MB, 200 wishes) |
-| 413 | `payload_too_large` | Request body exceeds limit (4 KB for JSON, 300 KB for images, 64 KB for bulk) |
-| 414 | `too_long` | Request body declared Content-Length exceeds limit before any read |
+| 400 | `bad_request` | Invalid fields, unknown template/image/wish, inactive template, empty message on publish, wrong Content-Type, body too large, extra JSON keys |
+| 401 | `unauthorized` | Missing/invalid/unknown admin email |
+| 403 | `forbidden` | Missing `X-Requested-With: fetch` header or cross-site request |
+| 404 | `not_found` | Teacher/card/image/wish/admin not found; malformed public ID or token |
+| 405 | `method` | HTTP method not allowed; OPTIONS on public routes |
+| 409 | `conflict` | Duplicate email, last admin, image in use, template in use, pending cap exceeded, wish cap exceeded, image cap exceeded |
+| 413 | `payload_too_large` | Request body exceeds limit |
+| 414 | `uri_too_long` | URL too long |
 | 429 | `rate_limited` | Rate limit exceeded per IP |
-| 405 | `method` | HTTP method not allowed |
 | 503 | `unavailable` | Database error |
 
-## Local development
+---
+
+## Limits
+
+### Input Limits
+
+| Field | Max | Notes |
+|---|---|---|
+| Message | 300 code points | max 5 newlines, 1–300 chars required |
+| From name | 40 code points | optional |
+| From class | 10 code points | optional |
+| Wish title | 80 chars | non-empty |
+| Wish body | 600 chars | can include placeholders |
+| Template name | 60 chars | required |
+| Image name | 80 ASCII chars | no control characters |
+| Image file | 300 KB | bytes read |
+| Image dimensions | 4096 × 4096 px max | ≤ 8 MP total |
+| Bulk add teachers | 100 items | body ≤ 64 KB |
+| Bulk review cards | 200 IDs | single status change |
+| Pending cards list | 200 per page | cursor pagination |
+| Teacher page cards | 200 | no pagination |
+| Wishes count | 200 | per instance |
+| Images count | 200 | per instance |
+| Images total | 40 MB raw | base64 storage ~1.33× size |
+
+### Rate Limits (Per IP, Per Minute)
+
+| Endpoint | Limit | Namespace | Purpose |
+|---|---|---|---|
+| Public reads (wall, teachers, templates, wishes) | 120 | 2004 | generous for school NAT |
+| POST /api/cards | 20 | 2005 | tight; raise for 20/11 |
+| GET /api/qr/:token | 60 | 2001 | blunts QR scanners |
+| GET /api/image/:token | 300 | 2003 | fast card loads |
+| All /api/admin/* | 60 | 2002 | upload sessions + R1 brake |
+
+**School NAT consideration:** all students on school Wi-Fi share one IP. 20 card submissions per minute may be tight on 20/11 (about 1 submission per 3 seconds for the whole school). Raise in `wrangler.jsonc` if needed (documented in admin runbook).
+
+---
+
+## Data Model
+
+### New Tables (Student Cards Model)
+
+```sql
+teacher_profile(
+  teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  public_id TEXT UNIQUE NOT NULL,
+  department TEXT NOT NULL DEFAULT '',
+  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
+)
+
+template(
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  layout TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL
+)
+
+template_image(
+  template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
+  slot TEXT NOT NULL CHECK (slot IN ('background','banner','photo')),
+  image_id INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+  PRIMARY KEY (template_id, slot)
+)
+
+student_card(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT UNIQUE NOT NULL,
+  teacher_id INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+  template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE RESTRICT,
+  message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+  from_name TEXT NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
+  from_class TEXT NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
+  anonymous INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
+  created_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by TEXT
+)
+-- Indexes on (teacher_id, status) and (status, created_at)
+```
+
+### Unchanged Tables
+
+- `teacher(id, token UNIQUE, name, subject, created_at)`
+- `teacher_title(teacher_id PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE, title)`
+- `image(id, token UNIQUE, name, mime, size, data, created_at, created_by)` (base64 TEXT)
+- `wish(id, title, body, created_at, created_by)`
+- `admin(id, email UNIQUE, created_at, created_by)`
+- `meta(key PRIMARY KEY, value)` (schema seeding)
+
+---
+
+## Local Development
+
+### Setup
 
 ```bash
-# Setup
 nvm use
 npm install
 ```
@@ -212,26 +837,26 @@ Create `.dev.vars` (gitignored):
 BOOTSTRAP_EMAIL=you@example.com
 ```
 
-Run the Worker in one terminal:
+Or to allow any email to claim first admin:
+```
+ALLOW_FIRST_CLAIM=1
+```
+
+### Run
+
+Terminal 1 — Worker:
 ```bash
 npm run worker:dev
 ```
 
-The Worker listens on `http://localhost:8787`. Tables are created automatically on the first request.
-
-Run Vite in another terminal:
+Terminal 2 — Vite:
 ```bash
 npm run dev
 ```
 
-Visit `http://localhost:5173/admin` and type the email from `.dev.vars`. The first email to log in becomes the admin.
+Visit `http://localhost:5173/admin` and type the email.
 
-For curl smoke tests:
-```bash
-curl -H "X-Admin-Email: you@example.com" \
-     -H "X-Requested-With: fetch" \
-     http://localhost:8787/api/admin/teachers
-```
+Tables are created automatically on the first request.
 
 ### Testing
 
@@ -239,16 +864,117 @@ curl -H "X-Admin-Email: you@example.com" \
 npm test
 ```
 
-Runs unit tests for token generation, auth, public card fetch, and admin CRUD on a local D1 database.
+Runs `eslint src` and `vitest run` on unit tests.
 
-## Build
+**Linting** includes React hooks rules (`rules-of-hooks` error, `exhaustive-deps` warn on `src/**/*.tsx`).
+
+### Curl Examples
+
+```bash
+curl -H "X-Admin-Email: you@example.com" \
+     -H "X-Requested-With: fetch" \
+     http://localhost:8787/api/admin/teachers
+
+curl -H "Content-Type: application/json" \
+     -d '{"teacherPublicId":"...","templateId":1,"message":"Em cảm ơn thầy."}' \
+     http://localhost:8787/api/cards
+```
+
+---
+
+## Build & Deploy
+
+### Build
 
 ```bash
 npm run build
 ```
 
-TypeScript type-check, Vite bundle, and security header validation.
+Runs TypeScript check, Vite bundle, and header validation.
 
-## Deploy
+### Deploy
 
-See `docs/runbooks/admin.md` for first-time setup and ongoing operations.
+```bash
+npx wrangler deploy
+```
+
+See `docs/runbooks/admin.md` for first-deploy setup (bootstrap email, initial admin, adding teachers).
+
+---
+
+## Site Configuration
+
+### noindex Header
+
+All routes are behind `X-Robots-Tag: noindex` (via `public/_headers`).
+
+The school can remove this later by editing `_headers`.
+
+### Robots.txt
+
+`public/robots.txt` blocks all crawlers (advisory only; server returns noindex).
+
+---
+
+## Architecture
+
+- **Frontend:** Vite + React + React Router
+- **Backend:** Cloudflare Workers + D1 (SQLite on Cloudflare)
+- **Static:** Vite build output served by Workers
+- **Images:** base64 TEXT in D1 with immutable edge caching (1 year)
+- **Rate limits:** per-IP, per-minute, via Cloudflare rate-limiting bindings
+- **Auth:** typed email (unverified, risk R1) checked against D1 admin list
+
+**How the Worker runs:**
+- All `/api/*` routes → Worker (checked before static assets)
+- Everything else → static files from `dist/`
+- Single Page Application: unmatched routes → `index.html`
+
+---
+
+## Dependencies
+
+See `package.json` for exact pinned versions (no ranges).
+
+- **Runtime:** react, react-dom, react-router-dom, qrcode
+- **Dev:** TypeScript, Vite, Vitest, ESLint (with react-hooks plugin, typescript-eslint), Wrangler
+
+All versions pinned exactly; upgrades follow the 7-day quarantine.
+
+---
+
+## npm Scripts
+
+```bash
+npm run dev              # Vite dev server (http://localhost:5173)
+npm run build            # TypeScript check + Vite bundle + header validation
+npm run preview          # Vite preview (production bundle)
+npm run lint             # ESLint on src/
+npm test                 # ESLint src/ + Vitest run
+npm run worker:dev       # Wrangler dev (http://localhost:8787)
+npm run deploy           # Wrangler deploy to Cloudflare
+```
+
+---
+
+## Security Notes
+
+- **Admin email:** unverified (risk R1); only brake is rate limit (60 req/min)
+- **Student anonymity:** anonymous flag defaults on; raw name/class shown only after approval
+- **Input validation:** control characters, zero-width chars, surrogates rejected; newlines capped at 5
+- **Moderation:** every card pending until approved; hidden cards removed from queries (not count against cap); delete to free pending quota
+- **Images:** EXIF/GPS/ICC stripped by browser re-encoding; server-side magic-bytes validation
+- **CSRF:** all admin requests require `X-Requested-With: fetch` header
+- **Foreign keys:** cascade on teacher delete; RESTRICT on template/image use
+- **Tokens:** 16-char random ([a-z0-9], ~82 bits); public_id and private token separate
+
+---
+
+## Privacy & Compliance
+
+- **Site-wide noindex** (advisory; students can opt-in to search indexing later)
+- **Photo consent:** photos carry potential EXIF metadata; school should get consent before launching
+- **Pending caps:** 2000 global, 200 per teacher — prevents unbounded spam; must be deleted to free space
+- **Data retention:** no automatic deletion; school must have a retention policy
+
+See `docs/runbooks/admin.md` for recovery steps and operational details.
