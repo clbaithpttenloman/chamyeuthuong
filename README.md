@@ -936,7 +936,7 @@ The school can remove this later by editing `_headers`.
 
 See `package.json` for exact pinned versions (no ranges).
 
-- **Runtime:** react, react-dom, react-router-dom, qrcode
+- **Runtime:** react, react-dom, react-router-dom, qrcode, @fontsource/be-vietnam-pro and @fontsource/lora (self-hosted fonts with Vietnamese coverage, SIL OFL; see docs/tech.md)
 - **Dev:** TypeScript, Vite, Vitest, ESLint (with react-hooks plugin, typescript-eslint), Wrangler
 
 All versions pinned exactly; upgrades follow the 7-day quarantine.
