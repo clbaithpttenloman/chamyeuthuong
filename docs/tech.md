@@ -231,3 +231,10 @@ INSERT INTO template_image VALUES ((SELECT MAX(id) FROM template), 'banner', ?);
 
 **Security upgrade:** `npm audit` reported 8 moderate advisories (minimatch GHSA-g3hv-75wg-m249 through eslint and typescript-eslint). Under the security-patch exception (7-day quarantine does not apply), upgraded at once to eslint 10.15.0 and typescript-eslint 8.73.0 (released within the last 7 days as of 2026-11-17). `npm audit` after upgrade: 0 vulnerabilities. Both are dev-only tools, not in the deployed bundle.
 
+
+## Fonts (self-hosted, verified 2026-11-17)
+
+- `@fontsource/be-vietnam-pro` 5.3.0 (body, weights 400/600/700) and `@fontsource/lora` 5.3.0 (headings and card text, 400, 400 italic, 700), exact pins, SIL Open Font License 1.1. Imported in `src/main.tsx`; CSS uses `--font-sans` and `--font-serif` in `src/styles.css`.
+- Why: Georgia and `system-ui` differ per device (Android has no Georgia; some fallbacks place stacked Vietnamese marks such as "ẫ", "ầ" badly). Both families are designed with full Vietnamese coverage.
+- The weight CSS files declare `unicode-range` subsets, so a browser only downloads the latin, latin-ext and vietnamese files it needs (checked: 15 woff2 files on the wall page, all same-origin, no CSP change needed because `default-src 'self'` covers fonts). The build copies every subset (about 1 MB in `dist/assets`), which is not downloaded unless used.
+- `font-display: swap`: text shows at once in the fallback font and switches when the file arrives.
