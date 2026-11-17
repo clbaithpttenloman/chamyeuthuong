@@ -11,21 +11,28 @@ import { handleAdmin } from './admin.ts'
 import worker from './index.ts'
 import { newToken } from './token.ts'
 import { testDb, type D1 } from './testDb.ts'
-import { ensureSchema } from './schema.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 
-type TeacherRow = {
-  id: number; token: string; name: string; subject: string
-  created_at: string; message: string; status: string
+// New teacher model (plan § Decision: Admin API)
+type AdminTeacher = {
+  id: number
+  token: string
+  publicId: string
+  title: 'Thầy' | 'Cô' | null
+  name: string
+  subject: string
+  department: string
+  showOnHome: 0 | 1
+  cardCounts: { pending: number; approved: number; hidden: number }
+  created_at: string
 }
-
-// ---- Shared auth fixture ----
-// Admin requests carry X-Admin-Email header; no JWT or deps needed.
 
 function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
   return {
     DB: db,
     ASSETS: { fetch: async () => new Response('asset') },
+    PUBLIC_IP_LIMIT: { limit: async () => ({ success: true }) },
+    SUBMIT_IP_LIMIT: { limit: async () => ({ success: true }) },
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
     IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
@@ -34,16 +41,11 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
   }
 }
 
-/**
- * Build an admin request with X-Admin-Email + CF-Connecting-IP headers.
- * X-Requested-With is added for non-GET (CSRF requirement).
- */
 function adminReq(method: string, path: string, body?: unknown, ip = '1.2.3.4') {
   const headers: Record<string, string> = {
     'X-Admin-Email': TEST_EMAIL,
     'CF-Connecting-IP': ip,
   }
-  // CSRF: every non-GET admin request must carry X-Requested-With: fetch
   if (method !== 'GET') headers['X-Requested-With'] = 'fetch'
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   return new Request(`https://x${path}`, {
@@ -59,8 +61,8 @@ let tokenSeq = 0
 beforeEach(async () => {
   ;({ db } = testDb())
   tokenSeq = 0
+  vi.mocked(newToken).mockReset()  // clear any leftover one-time values between tests
   vi.mocked(newToken).mockImplementation(() => `gn${String(tokenSeq++).padStart(14, '0')}`)
-  // Seed the fixture email as admin so requireAdmin passes (once Group 2 is live).
   const now = new Date().toISOString()
   await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
     .bind(TEST_EMAIL, now, 'test-seed').run()
@@ -75,14 +77,16 @@ describe('GET /api/admin/teachers', () => {
     expect(await r.json()).toEqual([])
   })
 
-  it('returns all teachers with card message and status joined', async () => {
+  it('returns all teachers in the new model shape (publicId, department, showOnHome, cardCounts)', async () => {
     await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher A', subject: 'Math', title: 'Thầy' }), makeEnv(db))
-    await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher B', subject: 'Science', title: 'Cô' }), makeEnv(db))
-
     const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
-    const list = await r.json() as TeacherRow[]
-    expect(list).toHaveLength(2)
-    expect(list[0]).toMatchObject({ name: 'Teacher A', subject: 'Math', message: '', status: 'draft' })
+    expect(r.status).toBe(200)
+    const list = await r.json() as AdminTeacher[]
+    expect(list).toHaveLength(1)
+    expect(list[0]).toHaveProperty('publicId')
+    expect(list[0]).toHaveProperty('department')
+    expect(list[0]).toHaveProperty('showOnHome')
+    expect(list[0]).toHaveProperty('cardCounts')
     expect(list[0]).toHaveProperty('id')
     expect(list[0]).toHaveProperty('token')
     expect(list[0]).toHaveProperty('created_at')
@@ -92,44 +96,60 @@ describe('GET /api/admin/teachers', () => {
 // ---- Create teacher ----
 
 describe('POST /api/admin/teachers', () => {
-  it('creates a teacher with draft card and returns the record including token', async () => {
+  it('creates a teacher and returns AdminTeacher shape (publicId, cardCounts, department, showOnHome)', async () => {
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Nguyen Van A', subject: 'Vietnamese', title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(200)
-    const body = await r.json() as TeacherRow
+    const body = await r.json() as AdminTeacher
     expect(body.name).toBe('Nguyen Van A')
     expect(body.subject).toBe('Vietnamese')
-    expect(body.message).toBe('')
-    expect(body.status).toBe('draft')
     expect(typeof body.token).toBe('string')
     expect(body.token).toMatch(/^[a-z0-9]{16}$/)
     expect(typeof body.id).toBe('number')
+    // New fields
+    expect(typeof body.publicId).toBe('string')
+    expect(body.publicId).toMatch(/^[a-z0-9]{16}$/)
+    expect(body.department).toBe('')
+    expect(body.showOnHome).toBe(1)
+    expect(body.cardCounts).toEqual({ pending: 0, approved: 0, hidden: 0 })
   })
 
   it('subject is optional and defaults to empty string', async () => {
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'No Subject', title: 'Cô' }), makeEnv(db))
     expect(r.status).toBe(200)
-    expect((await r.json() as TeacherRow).subject).toBe('')
+    expect((await r.json() as AdminTeacher).subject).toBe('')
+  })
+
+  it('department can be set on create', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', department: 'Khoa học' }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).department).toBe('Khoa học')
+  })
+
+  it('showOnHome can be set on create (0 → hidden from wall)', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy', showOnHome: 0 }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).showOnHome).toBe(0)
   })
 
   it('name is required → 400 when absent', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { subject: 'Math' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { subject: 'Math', title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(400)
     expect((await r.json() as { error: string }).error).toBe('bad_request')
   })
 
   it('name is required → 400 when empty after trim', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: '   ' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: '   ', title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('name > 80 chars → 400', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'A'.repeat(81) }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'A'.repeat(81), title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(400)
     expect((await r.json() as { error: string }).error).toBe('bad_request')
   })
 
   it('subject > 80 chars → 400', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Valid', subject: 'S'.repeat(81) }), makeEnv(db))
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Valid', subject: 'S'.repeat(81), title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
@@ -146,7 +166,6 @@ describe('POST /api/admin/teachers', () => {
   })
 
   it('body > 4 KB without Content-Length is rejected with 413', async () => {
-    // Stream 5 KB so there is no Content-Length header
     const stream = new ReadableStream({
       start(c) {
         for (let i = 0; i < 5; i++) c.enqueue(new Uint8Array(1024).fill(0x20))
@@ -170,21 +189,18 @@ describe('POST /api/admin/teachers', () => {
   })
 
   it('token UNIQUE collision retries — succeeds on second attempt', async () => {
-    // Seed a teacher occupying the first token
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
       .bind('gn00000000000000', 'Existing', '', now).run()
-    await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (?, ?, ?, ?)')
-      .bind(1, '', 'draft', now).run()
 
-    // Reset mock: collision on first try, unique on second
     vi.mocked(newToken)
-      .mockReturnValueOnce('gn00000000000000')  // collides
-      .mockReturnValueOnce('gn00000000000001')  // succeeds
+      .mockReturnValueOnce('gn00000000000000')  // collides on token
+      .mockReturnValueOnce('gn00000000000001')  // token succeeds
+      .mockReturnValueOnce('gn00000000000002')  // publicId succeeds
 
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'New Teacher', title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(200)
-    expect((await r.json() as TeacherRow).token).toBe('gn00000000000001')
+    expect((await r.json() as AdminTeacher).token).toBe('gn00000000000001')
   })
 
   it('token collision exhaust (3 collisions) → 503 unavailable', async () => {
@@ -193,8 +209,6 @@ describe('POST /api/admin/teachers', () => {
       const tok = `aaaa${String(i).padStart(12, '0')}`
       await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
         .bind(tok, `Teacher ${i}`, '', now).run()
-      await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (?, ?, ?, ?)')
-        .bind(i + 1, '', 'draft', now).run()
     }
 
     vi.mocked(newToken)
@@ -211,101 +225,72 @@ describe('POST /api/admin/teachers', () => {
 // ---- Update teacher ----
 
 describe('PUT /api/admin/teachers/:id', () => {
-  it('updates name, subject, message and status, returns updated record', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Original', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
+  it('updates name, subject, department, showOnHome; returns updated AdminTeacher', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Original', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'Updated', subject: 'Art', message: 'Great teacher!', status: 'published' }),
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'Updated', subject: 'Art', department: 'Khoa học', showOnHome: 0 }),
       makeEnv(db),
     )
     expect(r.status).toBe(200)
-    const body = await r.json() as TeacherRow
+    const body = await r.json() as AdminTeacher
     expect(body.name).toBe('Updated')
     expect(body.subject).toBe('Art')
-    expect(body.message).toBe('Great teacher!')
-    expect(body.status).toBe('published')
+    expect(body.department).toBe('Khoa học')
+    expect(body.showOnHome).toBe(0)
   })
 
   it('token is not updated even if sent in body (mass assignment ignored)', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'draft', token: 'malicious0000001' }),
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', token: 'malicious0000001' }),
       makeEnv(db),
     )
-    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as TeacherRow[]
+    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as AdminTeacher[]
     expect(list[0].token).toBe(created.token)
   })
 
   it('id is not updated even if sent in body (mass assignment ignored)', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'draft', id: 999 }),
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', id: 999 }),
       makeEnv(db),
     )
-    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as TeacherRow[]
+    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as AdminTeacher[]
     expect(list[0].id).toBe(created.id)
   })
 
   it('created_at is not updated even if sent in body (mass assignment ignored)', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'draft', created_at: '1970-01-01T00:00:00.000Z' }),
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', created_at: '1970-01-01T00:00:00.000Z' }),
       makeEnv(db),
     )
-    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as TeacherRow[]
+    const list = await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json() as AdminTeacher[]
     expect(list[0].created_at).toBe(created.created_at)
   })
 
-  it('message > 600 chars → 400', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'M'.repeat(601), status: 'draft' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-    expect((await r.json() as { error: string }).error).toBe('bad_request')
-  })
-
-  it('invalid status → 400', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: 'msg', status: 'active' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
   it('unknown teacher id → 404', async () => {
-    const r = await handleAdmin(adminReq('PUT', '/api/admin/teachers/999', { name: 'T', subject: '', message: 'msg', status: 'draft' }), makeEnv(db))
+    const r = await handleAdmin(adminReq('PUT', '/api/admin/teachers/999', { name: 'T', subject: '' }), makeEnv(db))
     expect(r.status).toBe(404)
   })
 
   it(':id not matching ^\\d{1,9}$ → 400', async () => {
     for (const bad of ['abc', '0', '1000000000', '-1', '1.5']) {
-      const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${bad}`, { name: 'T', subject: '', message: 'msg', status: 'draft' }), makeEnv(db))
+      const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${bad}`, { name: 'T', subject: '' }), makeEnv(db))
       expect(r.status, `expected 400 for id="${bad}"`).toBe(400)
     }
   })
 
   it('null body → 400 bad_request', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, null), makeEnv(db))
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
   })
 
   it('array body → 400 bad_request', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${created.id}`, []), makeEnv(db))
-    expect(r.status).toBe(400)
-    expect(await r.json()).toEqual({ error: 'bad_request' })
-  })
-
-  it('publish with empty (trimmed) message → 400 bad_request', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', message: '   ', status: 'published' }),
-      makeEnv(db),
-    )
     expect(r.status).toBe(400)
     expect(await r.json()).toEqual({ error: 'bad_request' })
   })
@@ -314,20 +299,18 @@ describe('PUT /api/admin/teachers/:id', () => {
 // ---- Rotate token ----
 
 describe('POST /api/admin/teachers/:id/rotate', () => {
-  it('replaces token; old token no longer exists in DB', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Rotate Me', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
-    // Publish so the card is accessible
-    await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'Rotate Me', subject: '', message: 'msg', status: 'published' }),
-      makeEnv(db),
-    )
-
+  it('replaces token; publicId stays the same (stable); old token no longer in DB', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Rotate Me', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(adminReq('POST', `/api/admin/teachers/${created.id}/rotate`), makeEnv(db))
     expect(r.status).toBe(200)
-    const body = await r.json() as { token: string }
+    const body = await r.json() as { token: string; publicId: string }
+    // token CHANGES
     expect(body.token).not.toBe(created.token)
     expect(body.token).toMatch(/^[a-z0-9]{16}$/)
-
+    // publicId must be a string (fails until Group 2 returns it; currently undefined → type check fails)
+    expect(typeof body.publicId).toBe('string')
+    // publicId STAYS STABLE (plan § Amendments: "publicId stable on rotate")
+    expect(body.publicId).toBe(created.publicId)
     // Old token no longer in DB
     const oldRow = await db.prepare('SELECT id FROM teacher WHERE token = ?').bind(created.token).first()
     expect(oldRow).toBeNull()
@@ -342,20 +325,250 @@ describe('POST /api/admin/teachers/:id/rotate', () => {
 // ---- Delete teacher ----
 
 describe('DELETE /api/admin/teachers/:id', () => {
-  it('deletes teacher and cascades to card', async () => {
-    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Del Me', title: 'Thầy' }), makeEnv(db))).json() as TeacherRow
-
+  it('deletes teacher and cascades to teacher_profile, teacher_title, student_card', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Del Me', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(adminReq('DELETE', `/api/admin/teachers/${created.id}`), makeEnv(db))
     expect(r.status).toBe(200)
-
-    // Both teacher and card rows are gone
+    // Teacher row is gone
     expect(await db.prepare('SELECT id FROM teacher WHERE id = ?').bind(created.id).first()).toBeNull()
-    expect(await db.prepare('SELECT teacher_id FROM card WHERE teacher_id = ?').bind(created.id).first()).toBeNull()
+    // teacher_profile is gone (CASCADE — new table, fails until Group 2 adds it)
+    const profile = await db.prepare('SELECT teacher_id FROM teacher_profile WHERE teacher_id = ?').bind(created.id).first()
+    expect(profile).toBeNull()
+    // teacher_title is gone (CASCADE)
+    const title = await db.prepare('SELECT teacher_id FROM teacher_title WHERE teacher_id = ?').bind(created.id).first()
+    expect(title).toBeNull()
   })
 
   it('unknown teacher id → 404', async () => {
     const r = await handleAdmin(adminReq('DELETE', '/api/admin/teachers/999'), makeEnv(db))
     expect(r.status).toBe(404)
+  })
+})
+
+// ---- Title field tests ----
+
+describe('POST /api/admin/teachers — title field', () => {
+  it('title missing → 400 bad_request', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'Nguyễn Văn A', subject: 'Toán' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('title invalid (not Thầy/Cô) → 400 bad_request', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'Nguyễn Văn A', title: 'giáo viên' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('title=Thầy → 200, response includes title=Thầy', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'Nguyễn Văn A', title: 'Thầy' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).title).toBe('Thầy')
+  })
+
+  it('title=Cô → 200, response includes title=Cô', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'Trần Thị B', title: 'Cô' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).title).toBe('Cô')
+  })
+})
+
+describe('GET /api/admin/teachers — title field in list', () => {
+  it('list includes title field for each teacher', async () => {
+    await handleAdmin(
+      adminReq('POST', '/api/admin/teachers', { name: 'T1', title: 'Thầy' }),
+      makeEnv(db),
+    )
+    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
+    expect(r.status).toBe(200)
+    const list = await r.json() as AdminTeacher[]
+    expect(list).toHaveLength(1)
+    expect(list[0]).toHaveProperty('title')
+    expect(list[0].title).toBe('Thầy')
+  })
+
+  it('teacher without title row has title=null in list', async () => {
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+      .bind('notitletoken001', 'No Title', '', now).run()
+    // No profile/title rows: the admin list must still show this teacher (LEFT JOINs).
+    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
+    const list = await r.json() as AdminTeacher[]
+    const t = list.find((x) => x.token === 'notitletoken001')
+    expect(t).toBeDefined()
+    expect(t!.title).toBeNull()
+  })
+})
+
+describe('PUT /api/admin/teachers/:id — title field', () => {
+  it('PUT with title=Thầy updates title, response includes title=Thầy', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', title: 'Cô' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).title).toBe('Cô')
+  })
+
+  it('PUT without title field leaves title unchanged', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Cô' }), makeEnv(db))).json() as AdminTeacher
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as AdminTeacher).title).toBe('Cô')
+  })
+
+  it('PUT with invalid title → 400', async () => {
+    const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
+    const r = await handleAdmin(
+      adminReq('PUT', `/api/admin/teachers/${created.id}`, { name: 'T', subject: '', title: 'invalid' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- Bulk create (new text-line format) — failing until Group 2 ----
+
+describe('POST /api/admin/teachers/bulk — text-line format (failing until Group 2)', () => {
+  // Format: { lines: ["Thầy Tên | Môn | Tổ", ...] }
+  // Each line: "{Title} {Name} | {Subject} | {Department}"
+
+  it('creates 3 teachers in one batch → 200 { created: [...] }', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        lines: [
+          'Thầy Nguyễn Văn A | Toán | Tổ Toán',
+          'Cô Trần Thị B | Lý',
+          'Thầy Lê Văn C | Hóa | Tổ Hóa-Sinh',
+        ],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: AdminTeacher[] }
+    expect(Array.isArray(body.created)).toBe(true)
+    expect(body.created).toHaveLength(3)
+  })
+
+  it('0 lines → 400', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines: [] }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('101 lines → 400', async () => {
+    const lines = Array.from({ length: 101 }, (_, i) => `${i % 2 === 0 ? 'Thầy' : 'Cô'} Teacher${i} | Môn${i}`)
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('1 line → 200', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines: ['Cô Trần Thị B | Văn'] }), makeEnv(db))
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: AdminTeacher[] }
+    expect(body.created).toHaveLength(1)
+    expect(body.created[0].title).toBe('Cô')
+  })
+
+  it('100 lines → 200', async () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `${i % 2 === 0 ? 'Thầy' : 'Cô'} Teacher${i} | Môn${i}`)
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', { lines }), makeEnv(db))
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: AdminTeacher[] }
+    expect(body.created).toHaveLength(100)
+  })
+
+  it('missing title in line → 400, nothing inserted (all-or-nothing)', async () => {
+    const countBefore = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        lines: ['Thầy Valid Teacher | Toán', 'Invalid Line | Môn'],  // second line has no title
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+    const countAfter = (await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>())!.c
+    expect(countAfter).toBe(countBefore)
+  })
+
+  it('unique tokens for every teacher in bulk', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        lines: ['Thầy T1 | Toán', 'Cô T2 | Lý', 'Thầy T3 | Hóa'],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: AdminTeacher[] }
+    const tokens = body.created.map((row) => row.token)
+    expect(new Set(tokens).size).toBe(tokens.length)
+  })
+
+  it('department is parsed from third | segment when present', async () => {
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', {
+        lines: ['Thầy Nguyễn Văn A | Toán | Tổ Toán-Lý'],
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: AdminTeacher[] }
+    expect(body.created[0].department).toBe('Tổ Toán-Lý')
+  })
+
+  it('body > 64 KB → 413 too_long', async () => {
+    const bigStream = new ReadableStream({
+      start(c) {
+        for (let i = 0; i < 65; i++) c.enqueue(new Uint8Array(1024).fill(0x20))
+        c.close()
+      },
+    })
+    const req = new Request('https://x/api/admin/teachers/bulk', {
+      method: 'POST',
+      headers: {
+        'X-Admin-Email': TEST_EMAIL,
+        'CF-Connecting-IP': '1.2.3.4',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'fetch',
+      },
+      body: bigStream,
+      duplex: 'half',
+    } as RequestInit)
+    const r = await handleAdmin(req, makeEnv(db))
+    expect(r.status).toBe(413)
+  })
+
+  it('token UNIQUE collision on first attempt → retry succeeds → 200', async () => {
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+      .bind('collision00000001', 'Existing', '', now).run()
+
+    vi.mocked(newToken)
+      .mockReturnValueOnce('collision00000001')  // token: collision
+      .mockReturnValueOnce('newtoken000000001')  // token: success
+      .mockReturnValueOnce('newpublicid00001')   // publicId: success
+
+    const r = await handleAdmin(
+      adminReq('POST', '/api/admin/teachers/bulk', { lines: ['Cô Retry | Văn'] }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { created: AdminTeacher[] }
+    expect(body.created[0].token).toBe('newtoken000000001')
   })
 })
 
@@ -389,7 +602,6 @@ describe('CSRF guard (via handleAdmin)', () => {
         'X-Admin-Email': TEST_EMAIL,
         'CF-Connecting-IP': '1.2.3.4',
         'Content-Type': 'application/json',
-        // No X-Requested-With
       },
       body: JSON.stringify({ name: 'T' }),
     })
@@ -397,13 +609,9 @@ describe('CSRF guard (via handleAdmin)', () => {
   })
 
   it('OPTIONS /api/admin/teachers has no Access-Control-* headers and returns 401 (email missing)', async () => {
-    // Email check comes before CSRF; without X-Admin-Email → 401, not 403.
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
-      headers: {
-        'CF-Connecting-IP': '1.2.3.4',
-        // No X-Admin-Email, No X-Requested-With
-      },
+      headers: { 'CF-Connecting-IP': '1.2.3.4' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(401)
@@ -415,11 +623,7 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('OPTIONS with valid X-Admin-Email but no X-Requested-With → 403 (no CORS headers emitted)', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
-      headers: {
-        'X-Admin-Email': TEST_EMAIL,
-        'CF-Connecting-IP': '1.2.3.4',
-        // No X-Requested-With → CSRF check → 403
-      },
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(403)
@@ -431,11 +635,7 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('OPTIONS with X-Admin-Email and X-Requested-With: fetch → 405 (past CSRF, rejected by method guard)', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
-      headers: {
-        'X-Admin-Email': TEST_EMAIL,
-        'CF-Connecting-IP': '1.2.3.4',
-        'X-Requested-With': 'fetch',
-      },
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(405)
@@ -449,11 +649,7 @@ describe('method guard', () => {
   it('PATCH /api/admin/teachers → 405', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'PATCH',
-      headers: {
-        'X-Admin-Email': TEST_EMAIL,
-        'CF-Connecting-IP': '1.2.3.4',
-        'X-Requested-With': 'fetch',
-      },
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(405)
@@ -465,23 +661,13 @@ describe('method guard', () => {
 
 describe('security headers', () => {
   it.each([
-    ['200 list', async () => {
-      return handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
-    }],
-    ['401 unauthorized', async () => {
-      return handleAdmin(new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
-    }],
-    ['429 rate limited', async () => {
-      return handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }))
-    }],
+    ['200 list', async () => handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))],
+    ['401 unauthorized', async () => handleAdmin(new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))],
+    ['429 rate limited', async () => handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }))],
     ['405 method', async () => {
       const req = new Request('https://x/api/admin/teachers', {
         method: 'PATCH',
-        headers: {
-          'X-Admin-Email': TEST_EMAIL,
-          'CF-Connecting-IP': '1.2.3.4',
-          'X-Requested-With': 'fetch',
-        },
+        headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
       })
       return handleAdmin(req, makeEnv(db))
     }],
@@ -496,16 +682,26 @@ describe('security headers', () => {
 // ---- Worker routing (via worker/index.ts default export) ----
 
 describe('worker routing', () => {
-  it('routes /api/card/:token to the card handler', async () => {
-    // No teacher → 404 (not found)
-    const r = await worker.fetch(new Request('https://x/api/card/unknowntoken1234', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
-    expect(r.status).toBe(404)
-    expect(r.headers.get('Content-Type')).toContain('application/json')
-  })
-
   it('routes /api/admin/* to the admin handler', async () => {
     const r = await worker.fetch(new Request('https://x/api/admin/teachers', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
     expect(r.status).toBe(401)  // no X-Admin-Email header → 401
+  })
+
+  it('/api/card/* → 404 (endpoint removed — fails until Group 2 removes the route)', async () => {
+    // After Group 2 removes /api/card/ from index.ts, this returns routing-level 404.
+    // Currently routes to handleCard → may return 200 for a valid token.
+    // We seed a teacher+card to prove the difference.
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890ab', 'T', '', now).run()
+    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890ab').first<{ id: number }>())!.id
+    void tid // a known teacher token must not resurrect the removed /api/card route
+    const r = await worker.fetch(
+      new Request('https://x/api/card/tok1234567890ab', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      { ...makeEnv(freshDb), DB: freshDb as never },
+    )
+    // After Group 2: 404. Currently: 200. Test fails until Group 2.
+    expect(r.status).toBe(404)
   })
 
   it('other /api/* paths return 404 JSON', async () => {
@@ -570,9 +766,8 @@ describe('admin admins routing — auth required (via handleAdmin)', () => {
   })
 })
 
-// ---- Fix Group 1: W2 — handler-level 503 for DB failures (via handleAdmin + safety wrapper) ----
+// ---- DB failure → 503 ----
 
-/** Replicates the index.ts error boundary: propagated throws become 503 {error:'unavailable'}. */
 async function safeHandleAdmin(req: Request, env: ReturnType<typeof makeEnv>): Promise<Response> {
   try {
     return await handleAdmin(req, env)
@@ -585,7 +780,7 @@ async function safeHandleAdmin(req: Request, env: ReturnType<typeof makeEnv>): P
 }
 
 describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors index.ts)', () => {
-  it('DB state.fail on first request → 503 unavailable, no row inserted, no grant', async () => {
+  it('DB state.fail on first request → 503 unavailable', async () => {
     const { db, state } = testDb()
     state.fail = true
     const env = { ...makeEnv(db), ALLOW_FIRST_CLAIM: '1' as string | undefined }
@@ -600,7 +795,7 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
     expect(count?.c).toBe(0)
   })
 
-  it('DDL failure (schema:false, state.fail=true) → 503, no tables created, no admin row', async () => {
+  it('DDL failure (schema:false, state.fail=true) → 503, no tables created', async () => {
     const { db, state, sqlite } = testDb({ schema: false })
     state.fail = true
     const env = { ...makeEnv(db), ALLOW_FIRST_CLAIM: '1' as string | undefined }
@@ -616,14 +811,13 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
   })
 })
 
-// ---- Fix Group 1: W4 — router-level /api/admin/admins* (authenticated) ----
+// ---- Admins API — authenticated ----
 
 describe('admin admins routing — authenticated (via handleAdmin)', () => {
   it('GET /api/admin/admins → 200 JSON array (lists admins after auth)', async () => {
     const r = await handleAdmin(adminReq('GET', '/api/admin/admins'), makeEnv(db))
     expect(r.status).toBe(200)
     const body = await r.json() as unknown[]
-    // db has TEST_EMAIL seeded in beforeEach
     expect(Array.isArray(body)).toBe(true)
     expect(body.length).toBe(1)
   })
@@ -631,12 +825,7 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
   it('POST /api/admin/admins without X-Requested-With → 403 (CSRF guard)', async () => {
     const req = new Request('https://x/api/admin/admins', {
       method: 'POST',
-      headers: {
-        'X-Admin-Email': TEST_EMAIL,
-        'CF-Connecting-IP': '1.2.3.4',
-        'Content-Type': 'application/json',
-        // No X-Requested-With
-      },
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'x@test.com' }),
     })
     const r = await handleAdmin(req, makeEnv(db))
@@ -644,10 +833,7 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
   })
 
   it('POST /api/admin/admins (authenticated) → 200 with created_by = TEST_EMAIL', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/admins', { email: 'second@example.com' }),
-      makeEnv(db),
-    )
+    const r = await handleAdmin(adminReq('POST', '/api/admin/admins', { email: 'second@example.com' }), makeEnv(db))
     expect(r.status).toBe(200)
     const body = await r.json() as { email: string; created_by: string }
     expect(body.email).toBe('second@example.com')
@@ -661,340 +847,9 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
   })
 })
 
-// ===================================================================
-// New teacher fields: layout, images, status (failing until Group 2)
-// ===================================================================
+// ---- Worker routing — /api/image/:token ----
 
-describe('POST /api/admin/teachers — layout and status (failing until Group 2)', () => {
-  it('creates teacher with explicit layout and returns it', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'T', layout: 'lotus', title: 'Thầy' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    expect((await r.json() as { layout: string }).layout).toBe('lotus')
-  })
-
-  it('creates teacher with status: published and non-empty message → 200', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', {
-        name: 'T',
-        message: 'Chúc mừng ngày Nhà giáo!',
-        status: 'published',
-        title: 'Thầy',
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    expect((await r.json() as { status: string }).status).toBe('published')
-  })
-
-  it('creates teacher with status: published but empty message → 400', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'T', message: '', status: 'published' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('invalid layout → 400', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'T', layout: 'nonexistent' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('missing layout defaults to classic', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    expect((await r.json() as { layout: string }).layout).toBe('classic')
-  })
-
-  it('response includes images object (empty when no images set)', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { images: Record<string, unknown> }
-    expect(typeof body.images).toBe('object')
-    expect(Object.keys(body.images)).toHaveLength(0)
-  })
-})
-
-describe('PUT /api/admin/teachers/:id — layout and images (failing until Group 2)', () => {
-  it('updates layout', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherRow
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft', layout: 'night',
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    expect((await r.json() as { layout: string }).layout).toBe('night')
-  })
-
-  it('invalid layout on PUT → 400', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherRow
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft', layout: 'nope',
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('setting an image slot with a valid image id → 200', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherRow
-    // Seed an image
-    const now = new Date().toISOString()
-    await db
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
-      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
-      .run()
-    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft',
-        images: { banner: imgId },
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { images: Record<string, { id: number; token: string }> }
-    expect(body.images['banner']?.token).toBe('imgabc1234567890')
-  })
-
-  it('setting an image slot with unknown image id → 400', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherRow
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft',
-        images: { banner: 9999 },
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('setting images with an unknown slot name → 400', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherRow
-    const now = new Date().toISOString()
-    await db
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
-      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
-      .run()
-    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft',
-        images: { badslot: imgId },
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('setting an image slot to null removes it', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherRow
-    const now = new Date().toISOString()
-    await db
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
-      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
-      .run()
-    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-    // Set banner
-    await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft', images: { banner: imgId },
-      }),
-      makeEnv(db),
-    )
-    // Remove banner by setting to null
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft', images: { banner: null },
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { images: Record<string, unknown> }
-    expect(body.images).not.toHaveProperty('banner')
-  })
-})
-
-// ===================================================================
-// Bulk create (failing until Group 2)
-// ===================================================================
-
-describe('POST /api/admin/teachers/bulk (failing until Group 2)', () => {
-  it('creates 3 teachers in one batch → 200 { created: [...] }', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [{ name: 'T1', subject: 'S1', title: 'Thầy' }, { name: 'T2', title: 'Cô' }, { name: 'T3', subject: 'S3', title: 'Thầy' }],
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { created: unknown[] }
-    expect(Array.isArray(body.created)).toBe(true)
-    expect(body.created).toHaveLength(3)
-  })
-
-  it('0 items → 400', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items: [] }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('101 items → 400', async () => {
-    const items = Array.from({ length: 101 }, (_, i) => ({ name: `T${i}`, title: i % 2 === 0 ? 'Thầy' : 'Cô' } as const))
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('1 item → 200', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'Solo', title: 'Cô' }] }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-  })
-
-  it('100 items → 200', async () => {
-    const items = Array.from({ length: 100 }, (_, i) => ({ name: `T${i}`, title: i % 2 === 0 ? 'Thầy' : 'Cô' } as const))
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-  })
-
-  it('all-or-nothing: a bad row in the batch → no teachers inserted', async () => {
-    const countBefore = (
-      await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>()
-    )!.c
-
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [
-          { name: 'Good', title: 'Thầy' },
-          { name: '' },  // empty name → validation error triggers rollback
-        ],
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-
-    const countAfter = (
-      await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>()
-    )!.c
-    expect(countAfter).toBe(countBefore)  // nothing was inserted
-  })
-
-  it('body > 64 KB → 413 too_long', async () => {
-    const bigStream = new ReadableStream({
-      start(c) {
-        for (let i = 0; i < 65; i++) c.enqueue(new Uint8Array(1024).fill(0x20))
-        c.close()
-      },
-    })
-    const req = new Request('https://x/api/admin/teachers/bulk', {
-      method: 'POST',
-      headers: {
-        'X-Admin-Email': TEST_EMAIL,
-        'CF-Connecting-IP': '1.2.3.4',
-        'Content-Type': 'application/json',
-        'X-Requested-With': 'fetch',
-      },
-      body: bigStream,
-      duplex: 'half',
-    } as RequestInit)
-    const r = await handleAdmin(req, makeEnv(db))
-    expect(r.status).toBe(413)
-  })
-
-  it('shared layout applied to every teacher in bulk', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [{ name: 'T1', title: 'Thầy' }, { name: 'T2', title: 'Cô' }],
-        layout: 'spring',
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { created: Array<{ layout: string }> }
-    for (const row of body.created) {
-      expect(row.layout).toBe('spring')
-    }
-  })
-
-  it('shared image applied to every teacher in bulk', async () => {
-    const now = new Date().toISOString()
-    await db
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
-      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
-      .run()
-    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [{ name: 'T1', title: 'Thầy' }, { name: 'T2', title: 'Cô' }],
-        images: { banner: imgId },
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { created: Array<{ images: Record<string, { token: string }> }> }
-    for (const row of body.created) {
-      expect(row.images['banner']?.token).toBe('imgabc1234567890')
-    }
-  })
-
-  it('unique tokens for every teacher in bulk', async () => {
-    // Tokens must be distinct across all created teachers
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [{ name: 'T1', title: 'Thầy' }, { name: 'T2', title: 'Cô' }, { name: 'T3', title: 'Thầy' }],
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { created: Array<{ token: string }> }
-    const tokens = body.created.map((row) => row.token)
-    expect(new Set(tokens).size).toBe(tokens.length)
-  })
-})
-
-// ===================================================================
-// Worker routing — /api/image/:token (failing until Group 2)
-// ===================================================================
-
-describe('worker routing — /api/image/:token (failing until Group 2)', () => {
+describe('worker routing — /api/image/:token', () => {
   it('routes /api/image/:token to the public image handler (unknown → 404)', async () => {
     const r = await worker.fetch(
       new Request('https://x/api/image/imgabc1234567890', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
@@ -1002,309 +857,5 @@ describe('worker routing — /api/image/:token (failing until Group 2)', () => {
     )
     expect(r.status).toBe(404)
     expect(r.headers.get('Content-Type')).toContain('application/json')
-  })
-})
-
-// ===================================================================
-// Fix Group 1 — new tests (must fail before fixes)
-// ===================================================================
-
-describe('PUT /api/admin/teachers/:id — unknown id with layout/images (Fix Group 1 W2)', () => {
-  it('image deleted between validation and the batch (FK violation) → 400, not 503', async () => {
-    const now = new Date().toISOString()
-    await db
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES (?,?,?,?)")
-      .bind('racetoken0000001', 'Race', '', now).run()
-    const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('racetoken0000001').first<{ id: number }>())!.id
-    await db.prepare("INSERT INTO card (teacher_id,message,status,updated_at) VALUES (?,?,?,?)").bind(tid, '', 'draft', now).run()
-    // Wrap the DB so the batch fails with the SQLite FK message, as D1 would after a concurrent delete.
-    // ensureSchema caches per DB object, so let the wrapper run the schema batch for real first,
-    // then make only the update batch fail with the SQLite FK message.
-    const racyDb = { prepare: db.prepare.bind(db), batch: db.batch.bind(db) }
-    await ensureSchema(racyDb as typeof db)
-    racyDb.batch = async () => { throw new Error('D1_ERROR: FOREIGN KEY constraint failed: SQLITE_CONSTRAINT') }
-    await db
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
-      .bind('raceimg000000001', 'r.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL).run()
-    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('raceimg000000001').first<{ id: number }>())!.id
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${tid}`, { name: 'Race', subject: '', message: '', status: 'draft', images: { banner: imgId } }),
-      makeEnv(racyDb as typeof db),
-    )
-    expect(r.status).toBe(400)
-    expect((await r.json() as { error: string }).error).toBe('bad_request')
-  })
-
-  it('unknown teacher id with layout update → 404 (not 503)', async () => {
-    // Before fix: batch runs UPDATE(0 changes) then INSERT INTO card_style with FK→503.
-    // After fix: existence check first → 404.
-    const r = await handleAdmin(
-      adminReq('PUT', '/api/admin/teachers/999', { name: 'X', subject: '', message: '', status: 'draft', layout: 'lotus' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(404)
-    expect((await r.json() as { error: string }).error).toBe('not_found')
-  })
-
-  it('unknown teacher id with image slot set → 404 (not 503)', async () => {
-    // Seed an image so the validation step passes.
-    const now = new Date().toISOString()
-    await db
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
-      .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL)
-      .run()
-    const imgId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-
-    const r = await handleAdmin(
-      adminReq('PUT', '/api/admin/teachers/999', {
-        name: 'X', subject: '', message: '', status: 'draft', images: { banner: imgId },
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(404)
-    expect((await r.json() as { error: string }).error).toBe('not_found')
-  })
-})
-
-describe('POST /api/admin/teachers/bulk — collision retry (Fix Group 1 W3)', () => {
-  it('token UNIQUE collision on first attempt → retry succeeds → 200', async () => {
-    // Pre-seed the collision token
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
-      .bind('collision00000001', 'Existing', '', now).run()
-    await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (?, ?, ?, ?)')
-      .bind(1, '', 'draft', now).run()
-
-    vi.mocked(newToken)
-      .mockReturnValueOnce('collision00000001')  // attempt 0: UNIQUE fail
-      .mockReturnValueOnce('newtoken000000001')  // attempt 1: success
-
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'Retry', title: 'Thầy' }] }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { created: Array<{ token: string }> }
-    expect(body.created[0].token).toBe('newtoken000000001')
-  })
-
-  it('token UNIQUE collision on both attempts → 503', async () => {
-    // Pre-seed both collision tokens
-    const now = new Date().toISOString()
-    for (const tok of ['collision00000001', 'collision00000002']) {
-      await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
-        .bind(tok, 'Existing', '', now).run()
-      await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
-        .bind('', 'draft', now).run()
-    }
-
-    vi.mocked(newToken)
-      .mockReturnValueOnce('collision00000001')  // attempt 0: UNIQUE fail
-      .mockReturnValueOnce('collision00000002')  // attempt 1: UNIQUE fail again
-
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'Unlucky', title: 'Thầy' }] }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(503)
-    expect((await r.json() as { error: string }).error).toBe('unavailable')
-  })
-
-  it('DB-level batch failure → all-or-nothing: a row inserted earlier in the batch is rolled back', async () => {
-    // Item A gets a fresh token, item B collides with an existing row. If the batch were not atomic,
-    // A's teacher row (inserted before B's failing INSERT) would survive.
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
-      .bind('collision00000001', 'Existing', '', now).run()
-    await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
-      .bind('', 'draft', now).run()
-
-    vi.mocked(newToken)
-      .mockReturnValueOnce('freshtokenaaaa01')   // A, attempt 1
-      .mockReturnValueOnce('collision00000001')  // B, attempt 1 (collides)
-      .mockReturnValueOnce('freshtokenaaaa01')   // A, retry
-      .mockReturnValueOnce('collision00000001')  // B, retry (collides again)
-
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', { items: [{ name: 'A', title: 'Thầy' }, { name: 'B', title: 'Cô' }] }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(503)
-    const a = await db.prepare('SELECT id FROM teacher WHERE token = ?').bind('freshtokenaaaa01').first()
-    expect(a).toBeNull()
-    const named = await db.prepare("SELECT COUNT(*) AS c FROM teacher WHERE name IN ('A','B')").first<{ c: number }>()
-    expect(named!.c).toBe(0)
-  })
-})
-
-// ===================================================================
-// New for honorific plan: title field on teachers (failing until Group 2)
-// ===================================================================
-
-type TeacherWithTitle = {
-  id: number; token: string; name: string; subject: string
-  created_at: string; message: string; status: string
-  title: 'Thầy' | 'Cô' | null
-}
-
-describe('POST /api/admin/teachers — title field (failing until Group 2)', () => {
-  it('title missing → 400 bad_request', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'Nguyễn Văn A', subject: 'Toán' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-    expect((await r.json() as { error: string }).error).toBe('bad_request')
-  })
-
-  it('title invalid (not Thầy/Cô) → 400 bad_request', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'Nguyễn Văn A', title: 'giáo viên' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('title=Thầy → 200, response includes title=Thầy', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'Nguyễn Văn A', title: 'Thầy' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as TeacherWithTitle
-    expect(body.title).toBe('Thầy')
-  })
-
-  it('title=Cô → 200, response includes title=Cô', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'Trần Thị B', title: 'Cô' }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as TeacherWithTitle
-    expect(body.title).toBe('Cô')
-  })
-})
-
-describe('GET /api/admin/teachers — title field in list (failing until Group 2)', () => {
-  it('list includes title field for each teacher', async () => {
-    await handleAdmin(
-      adminReq('POST', '/api/admin/teachers', { name: 'T1', title: 'Thầy' }),
-      makeEnv(db),
-    )
-    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
-    expect(r.status).toBe(200)
-    const list = await r.json() as TeacherWithTitle[]
-    expect(list).toHaveLength(1)
-    expect(list[0]).toHaveProperty('title')
-    expect(list[0].title).toBe('Thầy')
-  })
-
-  it('teacher without title row has title=null in list', async () => {
-    // Insert a teacher directly (bypassing title validation for this setup)
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
-      .bind('notitletoken001', 'No Title', '', now).run()
-    await db.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)')
-      .bind('', 'draft', now).run()
-    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
-    const list = await r.json() as TeacherWithTitle[]
-    const t = list.find((x) => x.token === 'notitletoken001')
-    expect(t).toBeDefined()
-    expect(t!.title).toBeNull()
-  })
-})
-
-describe('PUT /api/admin/teachers/:id — title field (failing until Group 2)', () => {
-  it('PUT with title=Thầy updates title, response includes title=Thầy', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherWithTitle
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft', title: 'Cô',
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    expect((await r.json() as TeacherWithTitle).title).toBe('Cô')
-  })
-
-  it('PUT without title field leaves title unchanged', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Cô' }), makeEnv(db))
-    ).json() as TeacherWithTitle
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft',
-        // no title field
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    // Title should remain Cô
-    expect((await r.json() as TeacherWithTitle).title).toBe('Cô')
-  })
-
-  it('PUT with invalid title → 400', async () => {
-    const created = await (
-      await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'T', title: 'Thầy' }), makeEnv(db))
-    ).json() as TeacherWithTitle
-    const r = await handleAdmin(
-      adminReq('PUT', `/api/admin/teachers/${created.id}`, {
-        name: 'T', subject: '', message: '', status: 'draft', title: 'invalid',
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-})
-
-describe('POST /api/admin/teachers/bulk — title field (failing until Group 2)', () => {
-  it('item missing title → 400 bad_request, nothing inserted', async () => {
-    const countBefore = (
-      await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>()
-    )!.c
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [
-          { name: 'T1', title: 'Thầy' },
-          { name: 'T2' },  // missing title
-        ],
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-    const countAfter = (
-      await db.prepare('SELECT COUNT(*) as c FROM teacher').first<{ c: number }>()
-    )!.c
-    expect(countAfter).toBe(countBefore)
-  })
-
-  it('item with invalid title → 400', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [{ name: 'T1', title: 'giáo viên' }],
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(400)
-  })
-
-  it('all items with valid title → 200, created teachers include title', async () => {
-    const r = await handleAdmin(
-      adminReq('POST', '/api/admin/teachers/bulk', {
-        items: [
-          { name: 'T1', title: 'Thầy' },
-          { name: 'T2', title: 'Cô' },
-        ],
-      }),
-      makeEnv(db),
-    )
-    expect(r.status).toBe(200)
-    const body = await r.json() as { created: TeacherWithTitle[] }
-    expect(body.created).toHaveLength(2)
-    expect(body.created[0].title).toBe('Thầy')
-    expect(body.created[1].title).toBe('Cô')
   })
 })

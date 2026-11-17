@@ -1,282 +1,308 @@
 /**
- * TeachersSection — manage teacher cards (Thiệp).
+ * TeachersSection — Thầy cô.
  *
- * Features:
- *  - Teacher list with CRUD + QR + token rotation
- *  - Edit/create form with layout select, three slot image pickers (with
- *    quick upload), wish picker (fillWish), live CardView preview
- *  - Images and wishes loaded lazily when the editor first opens
+ * List with card counts (pending/approved/hidden).
+ * Form: Thầy/Cô required, name, subject, department, show on home.
+ * QR show/download using private token URL `${origin}/t/${token}`.
+ * Rotate QR token, delete teacher.
+ * Bulk add with lines `Thầy|Cô Tên | Môn | Tổ`.
  */
-import { useCallback, useRef, useState } from 'react'
+import { useState } from 'react'
 import QRCode from 'qrcode'
+import type { AdminTeacher, AdminTeacherInput } from '../../../shared/api.ts'
 import {
-  type ImageRow,
-  type TeacherRow,
-  type WishRow,
   ApiError,
-  createTeacher,
-  deleteTeacher,
-  listImages,
-  listWishes,
-  rotateTeacherToken,
-  updateTeacher,
-  uploadImage,
+  bulkAdminTeachers,
+  createAdminTeacher,
+  deleteAdminTeacher,
+  rotateAdminTeacher,
+  updateAdminTeacher,
 } from '../../api'
-import { LAYOUTS, SLOTS, type Slot, DEFAULT_LAYOUT } from '../../../shared/layouts.ts'
-import { fillWish } from '../../../shared/wish.ts'
-import CardView from '../../components/CardView.tsx'
-import { compressImage } from '../../imageCompress.ts'
+import { parseBulkInput } from './bulkParse.ts'
 
-type SlotImages = Partial<Record<Slot, { id: number; token: string } | null>>
-
-type EditDraft = {
+type TeacherForm = {
+  title: 'Thầy' | 'Cô' | ''
   name: string
   subject: string
-  message: string
-  status: string
-  layout: string
-  title: string
-  images: SlotImages
+  department: string
+  showOnHome: 0 | 1
 }
 
-function emptyDraft(t?: TeacherRow): EditDraft {
+function emptyForm(t?: AdminTeacher): TeacherForm {
   return {
+    title: (t?.title as 'Thầy' | 'Cô') ?? '',
     name: t?.name ?? '',
     subject: t?.subject ?? '',
-    message: t?.message ?? '',
-    status: t?.status ?? 'draft',
-    layout: t?.layout ?? DEFAULT_LAYOUT,
-    title: t?.title ?? '',
-    images: (t?.images as SlotImages | undefined) ?? {},
+    department: t?.department ?? '',
+    showOnHome: t?.showOnHome ?? 1,
   }
 }
 
-const SLOT_LABELS: Record<Slot, string> = {
-  background: 'Nền toàn trang',
-  banner: 'Banner (đầu thiệp)',
-  photo: 'Ảnh tròn (trên tên)',
-}
+// ── QR section ────────────────────────────────────────────────────────────
 
-const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-
-// ── Slot picker ────────────────────────────────────────────────────────────
-
-function SlotPicker({
-  slot,
-  current,
-  images,
-  uploading,
-  onSelect,
-  onUpload,
-}: {
-  slot: Slot
-  current: { id: number; token: string } | null | undefined
-  images: ImageRow[]
-  uploading: boolean
-  onSelect: (img: { id: number; token: string } | null) => void
-  onUpload: (slot: Slot) => void
-}) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <div className="slot-picker">
-      <span className="slot-picker-label">{SLOT_LABELS[slot]}</span>
-      <div className="slot-picker-row">
-        {current ? (
-          <>
-            <img
-              src={`/api/image/${current.token}`}
-              alt=""
-              className="slot-thumb"
-              aria-hidden="true"
-            />
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => { onSelect(null); setOpen(false) }}
-            >
-              Bỏ chọn
-            </button>
-          </>
-        ) : (
-          <span className="slot-empty">Chưa có ảnh</span>
-        )}
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-        >
-          Thư viện
-        </button>
-        <button
-          type="button"
-          onClick={() => onUpload(slot)}
-          disabled={uploading}
-        >
-          {uploading ? 'Đang tải...' : 'Tải lên'}
-        </button>
-      </div>
-      {open && (
-        <div className="slot-picker-library" role="listbox" aria-label={`Chọn ảnh cho ${SLOT_LABELS[slot]}`}>
-          {images.length === 0 && (
-            <p className="slot-picker-empty">Thư viện trống. Hãy tải ảnh lên trước.</p>
-          )}
-          {images.map((img) => (
-            <button
-              key={img.id}
-              type="button"
-              role="option"
-              aria-selected={current?.id === img.id}
-              className={`img-thumb-btn${current?.id === img.id ? ' img-thumb-btn--selected' : ''}`}
-              onClick={() => { onSelect({ id: img.id, token: img.token }); setOpen(false) }}
-              title={img.name}
-            >
-              <img src={`/api/image/${img.token}`} alt={img.name} className="slot-thumb" />
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Wish picker ────────────────────────────────────────────────────────────
-
-function WishPicker({
-  wishes,
-  name,
-  subject,
-  title,
-  onPick,
-}: {
-  wishes: WishRow[]
-  name: string
-  subject: string
-  title?: 'Thầy' | 'Cô'
-  onPick: (body: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <div className="wish-picker">
-      <button type="button" onClick={() => setOpen((o) => !o)}>
-        {open ? 'Ẩn thư viện lời chúc' : 'Chọn từ thư viện lời chúc'}
-      </button>
-      {open && (
-        <ul className="wish-picker-list" aria-label="Thư viện lời chúc">
-          {wishes.length === 0 && (
-            <li className="slot-picker-empty">Thư viện trống.</li>
-          )}
-          {wishes.map((w) => (
-            <li key={w.id}>
-              <button
-                type="button"
-                className="wish-pick-btn"
-                onClick={() => { onPick(fillWish(w.body, { name, subject, title })); setOpen(false) }}
-              >
-                <strong>{w.title}</strong>
-                <span>{w.body.slice(0, 80)}{w.body.length > 80 ? '…' : ''}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-// ── Teacher edit/add form ──────────────────────────────────────────────────
-
-function TeacherForm({
+function QrSection({
   teacher,
-  images,
-  wishes,
-  loadingExtras,
-  uploadError,
-  onSave,
-  onCancel,
-  onQuickUpload,
+  dataUrl,
+  onClose,
 }: {
-  teacher: TeacherRow | null  // null = adding new
-  images: ImageRow[]
-  wishes: WishRow[]
-  loadingExtras: boolean
-  uploadError: string | null
-  onSave: (draft: EditDraft) => void
-  onCancel: () => void
-  onQuickUpload: (slot: Slot, file: File) => Promise<{ id: number; token: string } | null>
+  teacher: AdminTeacher
+  dataUrl: string
+  onClose: () => void
 }) {
-  const [draft, setDraft] = useState<EditDraft>(() => emptyDraft(teacher ?? undefined))
-  const [uploadingSlot, setUploadingSlot] = useState<Slot | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const pendingSlot = useRef<Slot | null>(null)
+  const url = `${location.origin}/t/${teacher.token}`
+  return (
+    <div className="admin-qr">
+      <h2>Mã QR — {teacher.name}</h2>
+      <img src={dataUrl} alt={`Mã QR cho ${teacher.name}`} width={256} height={256} />
+      <p className="qr-url">{url}</p>
+      <div className="form-actions">
+        <a href={dataUrl} download={`qr-${teacher.name}.png`} className="btn-link">
+          Tải PNG
+        </a>
+        <button type="button" onClick={onClose} className="btn-ghost">Đóng</button>
+      </div>
+    </div>
+  )
+}
 
-  // Build preview images: slot → token (drop nulls)
-  const previewImages: Partial<Record<string, string>> = {}
-  for (const slot of SLOTS) {
-    const img = draft.images[slot]
-    if (img) previewImages[slot] = img.token
-  }
+// ── Bulk add sub-panel ────────────────────────────────────────────────────
 
-  function handleUploadClick(slot: Slot) {
-    pendingSlot.current = slot
-    fileInputRef.current?.click()
-  }
+function BulkAddPanel({
+  onAdd,
+  onClose,
+}: {
+  onAdd: (teachers: AdminTeacher[]) => void
+  onClose: () => void
+}) {
+  const [text, setText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    const slot = pendingSlot.current
-    if (!file || !slot) return
+  const { items, invalidLines, overLimit } = parseBulkInput(text)
 
-    if (!ACCEPTED_TYPES.includes(file.type)) return
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
 
-    setUploadingSlot(slot)
+    if (invalidLines.length > 0) {
+      setError(`Các dòng sau thiếu danh xưng Thầy/Cô hoặc tên: ${invalidLines.join(', ')}`)
+      return
+    }
+    if (items.length === 0) { setError('Danh sách trống.'); return }
+    if (overLimit > 0) { setError(`Tối đa 100 giáo viên mỗi lần; bớt ${overLimit} dòng.`); return }
+
+    setSubmitting(true)
     try {
-      const newImg = await onQuickUpload(slot, file)
-      // Auto-select the newly uploaded image for the slot
-      if (newImg) {
-        setDraft((d) => ({ ...d, images: { ...d.images, [slot]: newImg } }))
+      const inputs: AdminTeacherInput[] = items.map((item) => ({
+        title: item.title,
+        name: item.name,
+        ...(item.subject ? { subject: item.subject } : {}),
+        ...(item.department ? { department: item.department } : {}),
+      }))
+      const { created } = await bulkAdminTeachers(inputs)
+      onAdd(created)
+      onClose()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) {
+        setError('Dữ liệu không hợp lệ. Kiểm tra lại danh sách.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Lỗi thêm hàng loạt')
       }
     } finally {
-      setUploadingSlot(null)
+      setSubmitting(false)
     }
   }
-
-  // Called by parent after a quick-upload completes to inject the new image.
-  // We expose a stable callback via the slot picker's onSelect.
-  function handleSelectSlot(slot: Slot) {
-    return (img: { id: number; token: string } | null) => {
-      setDraft((d) => ({ ...d, images: { ...d.images, [slot]: img } }))
-    }
-  }
-
-  const canPublish = draft.message.trim().length > 0
 
   return (
-    <div className="teacher-editor">
-      <div className="teacher-editor-panels">
-        {/* Left: form */}
-        <form
-          className="admin-form teacher-editor-form"
-          onSubmit={(e) => { e.preventDefault(); onSave(draft) }}
-        >
-          <h2>{teacher ? `Sửa thiệp — ${teacher.name}` : 'Thêm giáo viên'}</h2>
+    <form className="admin-form" onSubmit={(e) => { void handleSubmit(e) }}>
+      <h2>Thêm hàng loạt</h2>
+      {error && <p className="admin-error" role="alert">{error}</p>}
+      <label>
+        Danh sách giáo viên <span aria-hidden="true">*</span>
+        <small>Mỗi dòng: Thầy/Cô Tên | Môn | Tổ bộ môn (tối đa 100 dòng)</small>
+        <textarea
+          value={text}
+          onChange={(e) => { setText(e.target.value); setError(null) }}
+          rows={8}
+          placeholder={'Thầy Nguyễn Văn A | Toán | Tổ Toán - Tin\nCô Trần Thị B | Văn | Tổ Văn - Sử\nThầy Lê Văn C'}
+          required
+        />
+        <small>{items.length} giáo viên</small>
+      </label>
+      <div className="form-actions">
+        <button type="submit" disabled={submitting || items.length === 0}>
+          {submitting ? 'Đang thêm...' : `Thêm ${items.length} giáo viên`}
+        </button>
+        <button type="button" className="btn-ghost" onClick={onClose}>Hủy</button>
+      </div>
+    </form>
+  )
+}
 
-          <label>
-            Họ tên <span aria-hidden="true">*</span>
-            <input
-              type="text"
-              value={draft.name}
-              onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-              maxLength={80}
-              required
-            />
-          </label>
+// ── Main component ────────────────────────────────────────────────────────
+
+export default function TeachersSection({
+  teachers,
+  onTeachersChange,
+  onAccessError,
+}: {
+  teachers: AdminTeacher[]
+  onTeachersChange: (updater: (ts: AdminTeacher[]) => AdminTeacher[]) => void
+  onAccessError: (e: unknown) => boolean
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [form, setForm] = useState<TeacherForm>(emptyForm())
+  const [saving, setSaving] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [qrData, setQrData] = useState<{ teacher: AdminTeacher; dataUrl: string } | null>(null)
+
+  function openNew() {
+    setEditing('new')
+    setForm(emptyForm())
+    setBulkOpen(false)
+    setQrData(null)
+    setError(null)
+  }
+
+  function openEdit(t: AdminTeacher) {
+    setEditing(t.id)
+    setForm(emptyForm(t))
+    setBulkOpen(false)
+    setQrData(null)
+    setError(null)
+  }
+
+  function cancelEdit() {
+    setEditing(null)
+    setError(null)
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    if (!form.title) { setError('Vui lòng chọn danh xưng Thầy hoặc Cô.'); return }
+    setSaving(true)
+    setError(null)
+
+    const input: AdminTeacherInput = {
+      title: form.title,
+      name: form.name.trim(),
+      ...(form.subject.trim() ? { subject: form.subject.trim() } : {}),
+      ...(form.department.trim() ? { department: form.department.trim() } : {}),
+      showOnHome: form.showOnHome,
+    }
+
+    try {
+      if (editing === 'new') {
+        const created = await createAdminTeacher(input)
+        onTeachersChange((ts) => [...ts, created])
+      } else if (editing !== null) {
+        const updated = await updateAdminTeacher(editing, input)
+        onTeachersChange((ts) => ts.map((t) => t.id === updated.id ? updated : t))
+      }
+      setEditing(null)
+    } catch (err) {
+      if (!onAccessError(err)) {
+        if (err instanceof ApiError && err.status === 400) {
+          setError('Không thể lưu: kiểm tra lại các trường.')
+        } else {
+          setError(err instanceof Error ? err.message : 'Lỗi lưu giáo viên')
+        }
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(t: AdminTeacher) {
+    if (!confirm(`Xóa ${t.title ? `${t.title} ` : ''}${t.name}? Hành động này không thể hoàn tác.`)) return
+    setError(null)
+    try {
+      await deleteAdminTeacher(t.id)
+      onTeachersChange((ts) => ts.filter((x) => x.id !== t.id))
+      if (editing === t.id) cancelEdit()
+      if (qrData?.teacher.id === t.id) setQrData(null)
+    } catch (err) {
+      if (!onAccessError(err)) {
+        setError(err instanceof Error ? err.message : 'Lỗi xóa giáo viên')
+      }
+    }
+  }
+
+  async function handleRotate(t: AdminTeacher) {
+    if (!confirm(`Đổi mã QR của "${t.name}"? Mã cũ sẽ không còn hoạt động.`)) return
+    setError(null)
+    try {
+      const { token } = await rotateAdminTeacher(t.id)
+      const updated = { ...t, token }
+      onTeachersChange((ts) => ts.map((x) => x.id === t.id ? updated : x))
+      if (qrData?.teacher.id === t.id) {
+        const url = `${location.origin}/t/${token}`
+        const dataUrl = await QRCode.toDataURL(url, { margin: 2, width: 256 })
+        setQrData({ teacher: updated, dataUrl })
+      }
+    } catch (err) {
+      if (!onAccessError(err)) {
+        setError(err instanceof Error ? err.message : 'Lỗi đổi mã QR')
+      }
+    }
+  }
+
+  async function handleShowQr(t: AdminTeacher) {
+    try {
+      const url = `${location.origin}/t/${t.token}`
+      const dataUrl = await QRCode.toDataURL(url, { margin: 2, width: 256 })
+      setQrData({ teacher: t, dataUrl })
+      setEditing(null)
+      setBulkOpen(false)
+    } catch {
+      setError('Lỗi tạo mã QR')
+    }
+  }
+
+  const showForm = editing !== null
+  const counts = (t: AdminTeacher) =>
+    `${t.cardCounts.pending} chờ · ${t.cardCounts.approved} duyệt · ${t.cardCounts.hidden} ẩn`
+
+  return (
+    <div>
+      <div className="admin-header">
+        <h2 style={{ margin: 0 }}>Thầy cô</h2>
+        <div className="admin-header-actions">
+          <button type="button" onClick={openNew} disabled={showForm || bulkOpen}>
+            + Thêm giáo viên
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => { setBulkOpen(true); setEditing(null); setQrData(null); setError(null) }}
+            disabled={showForm || bulkOpen}
+          >
+            Thêm hàng loạt
+          </button>
+        </div>
+      </div>
+
+      {error && <p className="admin-error" role="alert">{error}</p>}
+
+      {/* Bulk add panel */}
+      {bulkOpen && (
+        <BulkAddPanel
+          onAdd={(created) => { onTeachersChange((ts) => [...ts, ...created]) }}
+          onClose={() => setBulkOpen(false)}
+        />
+      )}
+
+      {/* Add/edit form */}
+      {showForm && (
+        <form className="admin-form" onSubmit={(e) => { void handleSave(e) }}>
+          <h2>{editing === 'new' ? 'Thêm giáo viên' : 'Sửa giáo viên'}</h2>
+
           <label>
             Danh xưng <span aria-hidden="true">*</span>
             <select
-              value={draft.title}
-              onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value as 'Thầy' | 'Cô' | '' }))}
               required
             >
               <option value="" disabled>Chọn Thầy/Cô</option>
@@ -284,381 +310,68 @@ function TeacherForm({
               <option value="Cô">Cô</option>
             </select>
           </label>
+
+          <label>
+            Họ tên <span aria-hidden="true">*</span>
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              maxLength={80}
+              required
+            />
+          </label>
+
           <label>
             Môn dạy
             <input
               type="text"
-              value={draft.subject}
-              onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
+              value={form.subject}
+              onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))}
               maxLength={80}
             />
           </label>
 
           <label>
-            Lời chúc
-            {loadingExtras ? (
-              <span className="admin-loading" style={{ fontSize: '0.8rem' }}>Đang tải thư viện…</span>
-            ) : (
-              <WishPicker
-                wishes={wishes}
-                name={draft.name}
-                subject={draft.subject}
-                title={draft.title as 'Thầy' | 'Cô' | undefined}
-                onPick={(body) => setDraft((d) => ({ ...d, message: body }))}
-              />
-            )}
-            <textarea
-              value={draft.message}
-              onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))}
-              maxLength={600}
-              rows={5}
-              placeholder="Nhập lời chúc hoặc chọn từ thư viện"
+            Tổ bộ môn
+            <input
+              type="text"
+              value={form.department}
+              onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
+              maxLength={80}
             />
-            <small>{draft.message.length}/600 ký tự</small>
           </label>
 
-          <label>
-            Bố cục thiệp
-            <select
-              value={draft.layout}
-              onChange={(e) => setDraft((d) => ({ ...d, layout: e.target.value }))}
-            >
-              {LAYOUTS.map((l) => (
-                <option key={l.id} value={l.id}>{l.name}</option>
-              ))}
-            </select>
-          </label>
-
-          {uploadError && (
-            <p className="admin-error" role="alert">{uploadError}</p>
-          )}
-
-          {/* Slot image pickers */}
-          {SLOTS.map((slot) => (
-            <SlotPicker
-              key={slot}
-              slot={slot}
-              current={draft.images[slot] ?? null}
-              images={images}
-              uploading={uploadingSlot === slot}
-              onSelect={handleSelectSlot(slot)}
-              onUpload={handleUploadClick}
+          <label className="write-anon" style={{ gap: '0.5rem' }}>
+            <input
+              type="checkbox"
+              checked={form.showOnHome === 1}
+              onChange={(e) => setForm((f) => ({ ...f, showOnHome: e.target.checked ? 1 : 0 }))}
             />
-          ))}
-
-          <label>
-            Trạng thái
-            <select
-              value={draft.status}
-              onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))}
-            >
-              <option value="draft">Nháp</option>
-              <option value="published" disabled={!canPublish}>
-                Đã phát hành{!canPublish ? ' (cần lời chúc)' : ''}
-              </option>
-            </select>
+            Hiện trên trang chủ
           </label>
 
           <div className="form-actions">
-            <button type="submit">{teacher ? 'Lưu thay đổi' : 'Thêm'}</button>
-            <button type="button" onClick={onCancel} className="btn-ghost">Hủy</button>
+            <button type="submit" disabled={saving || !form.title || !form.name.trim()}>
+              {saving ? 'Đang lưu...' : editing === 'new' ? 'Thêm' : 'Lưu thay đổi'}
+            </button>
+            <button type="button" className="btn-ghost" onClick={cancelEdit}>Hủy</button>
           </div>
         </form>
+      )}
 
-        {/* Right: live preview */}
-        <div className="teacher-editor-preview">
-          <p className="kicker" style={{ marginBottom: '0.5rem' }}>Xem trước thiệp</p>
-          <div className="preview-wrap">
-            <CardView
-              card={{
-                name: draft.name || '(Họ tên)',
-                subject: draft.subject,
-                message: draft.message || '(Lời chúc)',
-                title: (draft.title as 'Thầy' | 'Cô') || null,
-              }}
-              layout={draft.layout}
-              images={previewImages}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Hidden file input for quick upload */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp"
-        style={{ display: 'none' }}
-        onChange={(e) => { void handleFileChange(e) }}
-        aria-label="Chọn ảnh để tải lên"
-      />
-    </div>
-  )
-}
-
-// ── QR section ─────────────────────────────────────────────────────────────
-
-function QrSection({
-  teacher,
-  dataUrl,
-  onClose,
-}: {
-  teacher: TeacherRow
-  dataUrl: string
-  onClose: () => void
-}) {
-  return (
-    <div className="admin-qr">
-      <h2>Mã QR — {teacher.name}</h2>
-      <img src={dataUrl} alt={`Mã QR cho ${teacher.name}`} width={256} height={256} />
-      <p className="qr-url">{location.origin}/t/{teacher.token}</p>
-      <div className="form-actions">
-        <a href={dataUrl} download={`thiep-${teacher.id}.png`} className="btn-link">
-          Tải PNG
-        </a>
-        <button onClick={onClose} className="btn-ghost">Đóng</button>
-      </div>
-    </div>
-  )
-}
-
-// ── Main TeachersSection ───────────────────────────────────────────────────
-
-export default function TeachersSection({
-  teachers,
-  onTeachersChange,
-  onAccessError,
-}: {
-  teachers: TeacherRow[]
-  onTeachersChange: (updater: (ts: TeacherRow[]) => TeacherRow[]) => void
-  onAccessError: (e: unknown) => boolean
-}) {
-  const [error, setError] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
-  const [editTeacher, setEditTeacher] = useState<TeacherRow | null>(null)
-  const [qrData, setQrData] = useState<{ teacher: TeacherRow; dataUrl: string } | null>(null)
-  const [copiedId, setCopiedId] = useState<number | null>(null)
-
-  // Lazy-loaded editor resources
-  const [images, setImages] = useState<ImageRow[]>([])
-  const [wishes, setWishes] = useState<WishRow[]>([])
-  const [loadingExtras, setLoadingExtras] = useState(false)
-  const extrasLoaded = useRef(false)
-  const [uploadError, setUploadError] = useState<string | null>(null)
-
-  const loadExtras = useCallback(async () => {
-    if (extrasLoaded.current) return
-    setLoadingExtras(true)
-    try {
-      const [imgs, wshs] = await Promise.all([listImages(), listWishes()])
-      setImages(imgs)
-      setWishes(wshs)
-      extrasLoaded.current = true
-    } catch (e) {
-      if (!onAccessError(e)) {
-        setError(e instanceof Error ? e.message : 'Lỗi tải thư viện')
-      }
-    } finally {
-      setLoadingExtras(false)
-    }
-  }, [onAccessError])
-
-  function openEditor(teacher: TeacherRow | null) {
-    setEditTeacher(teacher)
-    setAdding(teacher === null)
-    setQrData(null)
-    setError(null)
-    setUploadError(null)
-    void loadExtras()
-  }
-
-  async function handleQuickUpload(_slot: Slot, file: File): Promise<{ id: number; token: string } | null> {
-    setUploadError(null)
-    try {
-      const compressed = await compressImage(file, { maxBytes: 307200, maxDim: 1280 })
-      const name = file.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'image'
-      const uploaded = await uploadImage(compressed, name)
-      const newImg = { id: uploaded.id, token: uploaded.token }
-      setImages((imgs) => [...imgs, uploaded])
-      return newImg
-    } catch (err) {
-      if (!onAccessError(err)) {
-        if (err instanceof ApiError && err.status === 409) {
-          setUploadError('Đã đạt giới hạn thư viện ảnh (200 ảnh hoặc 40 MB)')
-        } else if (err instanceof ApiError && err.status === 400) {
-          setUploadError('Ảnh không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP nhỏ hơn 300 KB.')
-        } else {
-          setUploadError(err instanceof Error ? err.message : 'Lỗi tải ảnh lên')
-        }
-      }
-      return null
-    }
-  }
-
-  async function handleSave(draft: EditDraft) {
-    setError(null)
-    // Build images payload: slot → image id (null to remove)
-    const imagesPayload: Partial<Record<string, number | null>> = {}
-    for (const slot of SLOTS) {
-      const img = draft.images[slot]
-      if (img !== undefined) {
-        imagesPayload[slot] = img ? img.id : null
-      }
-    }
-    try {
-      let saved: TeacherRow
-      if (editTeacher !== null) {
-        saved = await updateTeacher(editTeacher.id, {
-          name: draft.name,
-          subject: draft.subject,
-          message: draft.message,
-          status: draft.status,
-          layout: draft.layout,
-          images: imagesPayload,
-          ...(draft.title ? { title: draft.title as 'Thầy' | 'Cô' } : {}),
-        })
-        onTeachersChange((ts) => ts.map((t) => (t.id === saved.id ? saved : t)))
-      } else {
-        if (!draft.title || (draft.title !== 'Thầy' && draft.title !== 'Cô')) {
-          setError('Vui lòng chọn danh xưng Thầy hoặc Cô.')
-          return
-        }
-        saved = await createTeacher({
-          name: draft.name,
-          subject: draft.subject || undefined,
-          message: draft.message || undefined,
-          layout: draft.layout,
-          images: Object.fromEntries(
-            Object.entries(imagesPayload)
-              .filter(([, v]) => v !== null)
-              .map(([k, v]) => [k, v as number]),
-          ),
-          status: draft.status,
-          title: draft.title as 'Thầy' | 'Cô',
-        })
-        onTeachersChange((ts) => [...ts, saved])
-      }
-      setEditTeacher(null)
-      setAdding(false)
-    } catch (e) {
-      if (!onAccessError(e)) {
-        if (e instanceof ApiError && e.status === 400) {
-          setError('Không thể lưu: kiểm tra lại các trường hoặc chọn ảnh hợp lệ.')
-        } else {
-          setError(e instanceof Error ? e.message : 'Lỗi lưu thiệp')
-        }
-      }
-    }
-  }
-
-  async function handleToggleStatus(t: TeacherRow) {
-    setError(null)
-    try {
-      const updated = await updateTeacher(t.id, {
-        name: t.name,
-        subject: t.subject,
-        message: t.message,
-        status: t.status === 'published' ? 'draft' : 'published',
-      })
-      onTeachersChange((ts) => ts.map((x) => (x.id === updated.id ? updated : x)))
-      if (editTeacher?.id === updated.id) setEditTeacher(updated)
-    } catch (e) {
-      if (!onAccessError(e)) {
-        if (e instanceof ApiError && e.status === 400 && t.status === 'draft') {
-          setError(`Không thể phát hành "${t.name}": lời chúc không được để trống`)
-        } else {
-          setError(e instanceof Error ? e.message : 'Lỗi cập nhật trạng thái')
-        }
-      }
-    }
-  }
-
-  async function handleDelete(t: TeacherRow) {
-    if (!confirm(`Xóa giáo viên "${t.name}"? Hành động này không thể hoàn tác.`)) return
-    setError(null)
-    try {
-      await deleteTeacher(t.id)
-      onTeachersChange((ts) => ts.filter((x) => x.id !== t.id))
-      if (editTeacher?.id === t.id) { setEditTeacher(null); setAdding(false) }
-      if (qrData?.teacher.id === t.id) setQrData(null)
-    } catch (e) {
-      if (!onAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi xóa giáo viên')
-    }
-  }
-
-  async function handleRotate(t: TeacherRow) {
-    if (!confirm(`Đổi mã QR của "${t.name}"? Mã cũ sẽ không còn hoạt động.`)) return
-    setError(null)
-    try {
-      const { token } = await rotateTeacherToken(t.id)
-      const updated = { ...t, token }
-      onTeachersChange((ts) => ts.map((x) => (x.id === t.id ? updated : x)))
-      if (editTeacher?.id === t.id) setEditTeacher(updated)
-      if (qrData?.teacher.id === t.id) {
-        const url = `${location.origin}/t/${token}`
-        setQrData({ teacher: updated, dataUrl: await QRCode.toDataURL(url, { margin: 2, width: 256 }) })
-      }
-    } catch (e) {
-      if (!onAccessError(e)) setError(e instanceof Error ? e.message : 'Lỗi đổi mã')
-    }
-  }
-
-  async function handleShowQr(t: TeacherRow) {
-    try {
-      const url = `${location.origin}/t/${t.token}`
-      const dataUrl = await QRCode.toDataURL(url, { margin: 2, width: 256 })
-      setQrData({ teacher: t, dataUrl })
-      setEditTeacher(null)
-      setAdding(false)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Lỗi tạo mã QR')
-    }
-  }
-
-  async function handleCopyUrl(t: TeacherRow) {
-    try {
-      await navigator.clipboard.writeText(`${location.origin}/t/${t.token}`)
-      setCopiedId(t.id)
-      setTimeout(() => setCopiedId((x) => (x === t.id ? null : x)), 1500)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Lỗi sao chép URL')
-    }
-  }
-
-  const showForm = adding || editTeacher !== null
-
-  return (
-    <div>
-      <div className="admin-header">
-        <h2 style={{ margin: 0 }}>Thiệp giáo viên</h2>
-        <div className="admin-header-actions">
-          <button
-            onClick={() => openEditor(null)}
-            disabled={showForm}
-          >
-            + Thêm giáo viên
-          </button>
-        </div>
-      </div>
-
-      {error && <p className="admin-error" role="alert">{error}</p>}
-
-      {showForm && (
-        <TeacherForm
-          key={editTeacher?.id ?? 'new'}
-          teacher={editTeacher}
-          images={images}
-          wishes={wishes}
-          loadingExtras={loadingExtras}
-          uploadError={uploadError}
-          onSave={(draft) => { void handleSave(draft) }}
-          onCancel={() => { setEditTeacher(null); setAdding(false) }}
-          onQuickUpload={handleQuickUpload}
+      {/* QR section */}
+      {qrData && (
+        <QrSection
+          teacher={qrData.teacher}
+          dataUrl={qrData.dataUrl}
+          onClose={() => setQrData(null)}
         />
       )}
 
-      {!showForm && teachers.length === 0 && (
-        <p className="admin-empty">Chưa có giáo viên nào. Nhấn &ldquo;+ Thêm giáo viên&rdquo; để bắt đầu.</p>
+      {/* Teacher table */}
+      {teachers.length === 0 && !showForm && !bulkOpen && (
+        <p className="admin-empty">Chưa có giáo viên nào.</p>
       )}
 
       {teachers.length > 0 && (
@@ -669,66 +382,43 @@ export default function TeachersSection({
                 <th>Danh xưng</th>
                 <th>Họ tên</th>
                 <th>Môn</th>
-                <th>Bố cục</th>
-                <th>Trạng thái</th>
+                <th>Tổ</th>
+                <th>Trang chủ</th>
+                <th>Thiệp</th>
                 <th>Thao tác</th>
               </tr>
             </thead>
             <tbody>
               {teachers.map((t) => (
-                <tr
-                  key={t.id}
-                  className={editTeacher?.id === t.id ? 'row-active' : undefined}
-                >
+                <tr key={t.id} className={editing === t.id ? 'row-active' : undefined}>
                   <td>{t.title ?? '—'}</td>
                   <td>{t.name}</td>
                   <td>{t.subject || '—'}</td>
-                  <td>{LAYOUTS.find((l) => l.id === t.layout)?.name ?? t.layout}</td>
-                  <td>
-                    <span className={`status-badge status-${t.status}`}>
-                      {t.status === 'published' ? 'Đã phát hành' : 'Nháp'}
-                    </span>
-                  </td>
+                  <td>{t.department || '—'}</td>
+                  <td>{t.showOnHome ? '✓' : '—'}</td>
+                  <td style={{ fontSize: '0.8rem', color: '#78716c' }}>{counts(t)}</td>
                   <td className="admin-actions">
+                    <button type="button" onClick={() => openEdit(t)}>Sửa</button>
                     <button
-                      onClick={() => openEditor(t)}
-                      aria-label={`Sửa thiệp của ${t.name}`}
-                    >
-                      Sửa
-                    </button>
-                    <button
-                      onClick={() => { void handleToggleStatus(t) }}
-                      aria-label={
-                        t.status === 'published'
-                          ? `Chuyển "${t.name}" về nháp`
-                          : `Phát hành thiệp của ${t.name}`
-                      }
-                    >
-                      {t.status === 'published' ? 'Về nháp' : 'Phát hành'}
-                    </button>
-                    <button
-                      onClick={() => { void handleCopyUrl(t) }}
-                      aria-label={`Sao chép URL thiệp của ${t.name}`}
-                    >
-                      {copiedId === t.id ? '✓ Đã sao chép' : 'Sao chép URL'}
-                    </button>
-                    <button
+                      type="button"
                       onClick={() => { void handleShowQr(t) }}
                       aria-label={`Xem mã QR cho ${t.name}`}
                     >
                       QR
                     </button>
                     <button
+                      type="button"
+                      className="btn-warn"
                       onClick={() => { void handleRotate(t) }}
                       aria-label={`Đổi mã QR của ${t.name}`}
-                      className="btn-warn"
                     >
                       Đổi mã
                     </button>
                     <button
+                      type="button"
+                      className="btn-danger"
                       onClick={() => { void handleDelete(t) }}
                       aria-label={`Xóa giáo viên ${t.name}`}
-                      className="btn-danger"
                     >
                       Xóa
                     </button>
@@ -738,14 +428,6 @@ export default function TeachersSection({
             </tbody>
           </table>
         </div>
-      )}
-
-      {qrData && (
-        <QrSection
-          teacher={qrData.teacher}
-          dataUrl={qrData.dataUrl}
-          onClose={() => setQrData(null)}
-        />
       )}
     </div>
   )

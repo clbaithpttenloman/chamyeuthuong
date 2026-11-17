@@ -1,261 +1,210 @@
+/**
+ * worker/admin.ts — admin teacher CRUD and routing hub.
+ *
+ * Teacher model (plan § Decision: Admin API):
+ *   teacher + teacher_title + teacher_profile created in one batch.
+ *   Admin list uses LEFT JOINs so teachers without a profile still show.
+ *
+ * Bulk format: { lines: ["Thầy Name | Subject | Dept", ...] }
+ *   First word is title (Thầy/Cô), rest of first pipe-segment is name.
+ *
+ * Routes to: handleTemplates, handleModeration, handleAdmins, handleImages, handleWishes.
+ */
 import { error, json, readJson, HttpError } from './http.ts'
 import { requireAdmin } from './auth.ts'
 import { handleAdmins, parseId } from './admins.ts'
 import { handleImages } from './images.ts'
 import { handleWishes } from './wishes.ts'
+import { handleTemplates } from './templates.ts'
+import { handleModeration } from './moderation.ts'
 import { newToken } from './token.ts'
-import { isLayout, isSlot, DEFAULT_LAYOUT } from '../shared/layouts.ts'
 import { isTitle } from '../shared/honorific.ts'
 import type { Env } from './types.ts'
 import type { D1Stmt } from './types.ts'
 
-type TeacherRow = {
+// ---- Teacher row shape ----
+
+type RawTeacherRow = {
   id: number
   token: string
   name: string
   subject: string
   created_at: string
-  message: string
-  status: string
+  publicId: string | null
+  department: string | null
+  showOnHome: number | null
   title: 'Thầy' | 'Cô' | null
+  pending_count: number
+  approved_count: number
+  hidden_count: number
 }
 
-type ImageSlot = { id: number; token: string }
-type TeacherFull = TeacherRow & { layout: string; images: Record<string, ImageSlot> }
-
-// ---- Helpers ----
-
-/** SELECT for teacher + card + layout + title. */
-const TEACHER_SQL =
-  'SELECT t.id, t.token, t.name, t.subject, t.created_at, c.message, c.status, ' +
-  `COALESCE(cs.layout, '${DEFAULT_LAYOUT}') AS layout, tt.title ` +
+const TEACHER_SELECT =
+  'SELECT t.id, t.token, t.name, t.subject, t.created_at, ' +
+  'tp.public_id AS publicId, COALESCE(tp.department, \'\') AS department, ' +
+  'COALESCE(tp.show_on_home, 1) AS showOnHome, tt.title, ' +
+  'COALESCE(SUM(CASE WHEN sc.status = \'pending\' THEN 1 ELSE 0 END), 0) AS pending_count, ' +
+  'COALESCE(SUM(CASE WHEN sc.status = \'approved\' THEN 1 ELSE 0 END), 0) AS approved_count, ' +
+  'COALESCE(SUM(CASE WHEN sc.status = \'hidden\' THEN 1 ELSE 0 END), 0) AS hidden_count ' +
   'FROM teacher t ' +
-  'JOIN card c ON c.teacher_id = t.id ' +
-  'LEFT JOIN card_style cs ON cs.teacher_id = t.id ' +
-  'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id '
+  'LEFT JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
+  'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
+  'LEFT JOIN student_card sc ON sc.teacher_id = t.id '
 
-async function fetchImages(db: Env['DB'], teacherId: number): Promise<Record<string, ImageSlot>> {
-  const { results } = await db
-    .prepare(
-      'SELECT ci.slot, i.id, i.token FROM card_image ci ' +
-      'JOIN image i ON i.id = ci.image_id WHERE ci.teacher_id = ?',
-    )
-    .bind(teacherId)
-    .all<{ slot: string; id: number; token: string }>()
-  const images: Record<string, ImageSlot> = {}
-  for (const r of results) images[r.slot] = { id: r.id, token: r.token }
-  return images
+function toAdminTeacher(row: RawTeacherRow) {
+  return {
+    id: row.id,
+    token: row.token,
+    publicId: row.publicId ?? '',
+    title: row.title ?? null,
+    name: row.name,
+    subject: row.subject,
+    department: row.department ?? '',
+    showOnHome: (row.showOnHome ?? 1) as 0 | 1,
+    cardCounts: {
+      pending: row.pending_count ?? 0,
+      approved: row.approved_count ?? 0,
+      hidden: row.hidden_count ?? 0,
+    },
+    created_at: row.created_at,
+  }
 }
 
-async function fetchTeacherById(db: Env['DB'], id: number): Promise<TeacherFull | null> {
-  const row = await db
-    .prepare(`${TEACHER_SQL}WHERE t.id = ?`)
+async function fetchTeacherById(db: Env['DB'], id: number) {
+  return db
+    .prepare(TEACHER_SELECT + 'WHERE t.id = ? GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.public_id, tp.department, tp.show_on_home, tt.title')
     .bind(id)
-    .first<TeacherRow & { layout: string }>()
-  if (!row) return null
-  return { ...row, images: await fetchImages(db, row.id) }
+    .first<RawTeacherRow>()
 }
 
-async function fetchTeacherByToken(db: Env['DB'], token: string): Promise<TeacherFull | null> {
-  const row = await db
-    .prepare(`${TEACHER_SQL}WHERE t.token = ?`)
-    .bind(token)
-    .first<TeacherRow & { layout: string }>()
-  if (!row) return null
-  return { ...row, images: await fetchImages(db, row.id) }
-}
-
-// ---- Route handlers ----
+// ---- List teachers ----
 
 async function listTeachers(env: Env): Promise<Response> {
   const { results } = await env.DB
-    .prepare(`${TEACHER_SQL}ORDER BY t.id`)
-    .all<TeacherRow & { layout: string }>()
-
-  // Fetch all card_images in one query and group by teacher_id
-  const { results: allImgs } = await env.DB
-    .prepare(
-      'SELECT ci.teacher_id, ci.slot, i.id, i.token FROM card_image ci ' +
-      'JOIN image i ON i.id = ci.image_id',
-    )
-    .all<{ teacher_id: number; slot: string; id: number; token: string }>()
-
-  const imgMap = new Map<number, Record<string, ImageSlot>>()
-  for (const img of allImgs) {
-    if (!imgMap.has(img.teacher_id)) imgMap.set(img.teacher_id, {})
-    imgMap.get(img.teacher_id)![img.slot] = { id: img.id, token: img.token }
-  }
-
-  return json(results.map((t) => ({ ...t, images: imgMap.get(t.id) ?? {} })))
+    .prepare(TEACHER_SELECT + 'GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.public_id, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
+    .all<RawTeacherRow>()
+  return json(results.map(toAdminTeacher))
 }
+
+// ---- Create teacher ----
 
 async function createTeacher(request: Request, env: Env, _email: string): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 4096)
 
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
-  const message = typeof body.message === 'string' ? body.message.trim() : ''
-  const rawStatus = body.status
-  const status = rawStatus === 'published' ? 'published' : 'draft'
-  const rawLayout = body.layout
-  const layout = typeof rawLayout === 'string' ? rawLayout : null
+  const department = typeof body.department === 'string' ? body.department.trim() : ''
+  const showOnHome = body.showOnHome === 0 ? 0 : 1
   const rawTitle = body.title
 
-  if (name.length === 0 || name.length > 80) throw new HttpError('bad_request')
+  if (!name || name.length > 80) throw new HttpError('bad_request')
   if (subject.length > 80) throw new HttpError('bad_request')
-  if (message.length > 600) throw new HttpError('bad_request')
-  if (status === 'published' && message.length === 0) throw new HttpError('bad_request')
-  if (layout !== null && !isLayout(layout)) throw new HttpError('bad_request')
-  // title is required on create
   if (typeof rawTitle !== 'string' || !isTitle(rawTitle)) throw new HttpError('bad_request')
-  const title = rawTitle
-
-  // Validate images
-  const rawImages = body.images
-  let imageSlots: Record<string, number> | null = null
-  if (rawImages && typeof rawImages === 'object' && !Array.isArray(rawImages)) {
-    imageSlots = {}
-    for (const [slot, imgId] of Object.entries(rawImages as Record<string, unknown>)) {
-      if (!isSlot(slot)) throw new HttpError('bad_request')
-      if (typeof imgId !== 'number') throw new HttpError('bad_request')
-      imageSlots[slot] = imgId as number
-    }
-    // Validate all image ids exist
-    for (const imgId of Object.values(imageSlots)) {
-      const imgRow = await env.DB.prepare('SELECT id FROM image WHERE id = ?').bind(imgId).first()
-      if (!imgRow) throw new HttpError('bad_request')
-    }
-  }
 
   const now = new Date().toISOString()
-  const effectiveLayout = layout ?? DEFAULT_LAYOUT
 
+  // Generate token with retry on UNIQUE collision (up to 3 attempts)
+  let token: string | null = null
   for (let attempt = 0; attempt < 3; attempt++) {
     const tok = newToken()
-    // Pre-check for UNIQUE collision
     const existing = await env.DB.prepare('SELECT id FROM teacher WHERE token = ?').bind(tok).first()
-    if (existing) continue
-
-    const stmts: D1Stmt[] = [
-      env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(tok, name, subject, now),
-      env.DB.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES (last_insert_rowid(), ?, ?, ?)').bind(message, status, now),
-      env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, title),
-    ]
-    if (layout !== null) {
-      stmts.push(env.DB.prepare('INSERT INTO card_style (teacher_id, layout) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, effectiveLayout))
-    }
-    if (imageSlots) {
-      for (const [slot, imgId] of Object.entries(imageSlots)) {
-        stmts.push(env.DB.prepare('INSERT INTO card_image (teacher_id, slot, image_id) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?)').bind(tok, slot, imgId))
-      }
-    }
-
-    await env.DB.batch(stmts)
-
-    const row = await fetchTeacherByToken(env.DB, tok)
-    return json(row)
+    if (!existing) { token = tok; break }
+  }
+  if (!token) {
+    console.error('admin: unavailable')
+    return error('unavailable')
   }
 
-  console.error('admin: unavailable')
-  return error('unavailable')
+  // Generate publicId (no retry needed: astronomically unlikely collision)
+  const publicId = newToken()
+
+  const stmts: D1Stmt[] = [
+    env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(token, name, subject, now),
+    env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(token, rawTitle),
+    env.DB.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(token, publicId, department, showOnHome),
+  ]
+
+  await env.DB.batch(stmts)
+
+  const row = await fetchTeacherById(env.DB, (await env.DB.prepare('SELECT id FROM teacher WHERE token = ?').bind(token).first<{ id: number }>())!.id)
+  return json(toAdminTeacher(row!))
 }
+
+// ---- Update teacher ----
 
 async function updateTeacher(request: Request, env: Env, id: number): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 4096)
 
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   const subject = typeof body.subject === 'string' ? body.subject.trim() : ''
-  const message = typeof body.message === 'string' ? body.message.trim() : ''
-  const status = body.status
-  const rawLayout = body.layout
-  const layout = typeof rawLayout === 'string' ? rawLayout : undefined
+  const department = typeof body.department === 'string' ? body.department.trim() : ''
+  const showOnHome = body.showOnHome === 0 ? 0 : 1
   const rawTitle = body.title
 
-  if (name.length === 0 || name.length > 80) throw new HttpError('bad_request')
+  if (!name || name.length > 80) throw new HttpError('bad_request')
   if (subject.length > 80) throw new HttpError('bad_request')
-  if (message.length > 600) throw new HttpError('bad_request')
-  if (status !== 'draft' && status !== 'published') throw new HttpError('bad_request')
-  if (status === 'published' && message.length === 0) throw new HttpError('bad_request')
-  if (layout !== undefined && !isLayout(layout)) throw new HttpError('bad_request')
-  // title on PUT: absent → unchanged; present → must be valid
   if (rawTitle !== undefined && (typeof rawTitle !== 'string' || !isTitle(rawTitle))) {
     throw new HttpError('bad_request')
   }
-  const titleToUpdate = rawTitle !== undefined ? (rawTitle as string) : undefined
 
-  // Parse images update: { [slot]: number | null }
-  const rawImages = body.images
-  let imageUpdates: Record<string, number | null> | null = null
-  if (rawImages !== undefined && rawImages !== null && typeof rawImages === 'object' && !Array.isArray(rawImages)) {
-    imageUpdates = {}
-    for (const [slot, val] of Object.entries(rawImages as Record<string, unknown>)) {
-      if (!isSlot(slot)) throw new HttpError('bad_request')
-      if (val !== null && typeof val !== 'number') throw new HttpError('bad_request')
-      imageUpdates[slot] = val === null ? null : (val as number)
-    }
-    // Validate non-null image ids
-    for (const val of Object.values(imageUpdates)) {
-      if (val !== null) {
-        const imgRow = await env.DB.prepare('SELECT id FROM image WHERE id = ?').bind(val).first()
-        if (!imgRow) throw new HttpError('bad_request')
-      }
-    }
-  }
+  const existing = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
+  if (!existing) return error('not_found')
 
-  const now = new Date().toISOString()
-
-  // Check teacher exists before building the batch; layout/image FK statements would throw
-  // a FK violation (→ 503) if the id is unknown, so check first and return 404 cleanly.
-  const teacherExists = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
-  if (!teacherExists) return error('not_found')
+  // Get existing publicId (stable across updates)
+  const profileRow = await env.DB
+    .prepare('SELECT public_id FROM teacher_profile WHERE teacher_id = ?')
+    .bind(id)
+    .first<{ public_id: string }>()
+  const publicId = profileRow?.public_id ?? newToken()
 
   const stmts: D1Stmt[] = [
     env.DB.prepare('UPDATE teacher SET name = ?, subject = ? WHERE id = ?').bind(name, subject, id),
-    env.DB.prepare('UPDATE card SET message = ?, status = ?, updated_at = ? WHERE teacher_id = ?').bind(message, status, now, id),
+    env.DB.prepare(
+      'INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(teacher_id) DO UPDATE SET department = excluded.department, show_on_home = excluded.show_on_home',
+    ).bind(id, publicId, department, showOnHome),
   ]
-  if (layout !== undefined) {
-    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO card_style (teacher_id, layout) VALUES (?, ?)').bind(id, layout))
-  }
-  if (titleToUpdate !== undefined) {
-    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(id, titleToUpdate))
-  }
-  if (imageUpdates) {
-    for (const [slot, val] of Object.entries(imageUpdates)) {
-      if (val === null) {
-        stmts.push(env.DB.prepare('DELETE FROM card_image WHERE teacher_id = ? AND slot = ?').bind(id, slot))
-      } else {
-        stmts.push(env.DB.prepare('INSERT OR REPLACE INTO card_image (teacher_id, slot, image_id) VALUES (?, ?, ?)').bind(id, slot, val))
-      }
-    }
+
+  if (rawTitle !== undefined) {
+    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(id, rawTitle))
   }
 
   try {
     await env.DB.batch(stmts)
   } catch (e) {
-    // A teacher or image deleted between the checks above and this batch: client-side data is stale.
     if (e instanceof Error && e.message.includes('FOREIGN KEY constraint failed')) throw new HttpError('bad_request')
     throw e
   }
 
   const row = await fetchTeacherById(env.DB, id)
-  return json(row)
+  if (!row) return error('not_found')
+  return json(toAdminTeacher(row))
 }
+
+// ---- Rotate QR token (publicId stays stable) ----
 
 async function rotateToken(env: Env, id: number): Promise<Response> {
   const existing = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
+
+  const profileRow = await env.DB
+    .prepare('SELECT public_id FROM teacher_profile WHERE teacher_id = ?')
+    .bind(id)
+    .first<{ public_id: string }>()
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const tok = newToken()
     const collision = await env.DB.prepare('SELECT id FROM teacher WHERE token = ?').bind(tok).first()
     if (collision) continue
     await env.DB.prepare('UPDATE teacher SET token = ? WHERE id = ?').bind(tok, id).run()
-    return json({ token: tok })
+    return json({ token: tok, publicId: profileRow?.public_id ?? null })
   }
 
   console.error('admin: unavailable')
   return error('unavailable')
 }
+
+// ---- Delete teacher ----
 
 async function deleteTeacher(env: Env, id: number): Promise<Response> {
   const result = await env.DB.prepare('DELETE FROM teacher WHERE id = ?').bind(id).run()
@@ -263,136 +212,90 @@ async function deleteTeacher(env: Env, id: number): Promise<Response> {
   return json({ success: true })
 }
 
+// ---- Bulk create (line format: "Title Name | Subject | Dept") ----
+
+type ParsedLine = { title: string; name: string; subject: string; department: string }
+
+function parseBulkLine(line: string): ParsedLine | null {
+  const parts = line.split('|').map((s) => s.trim())
+  const firstPart = parts[0] ?? ''
+  const spaceIdx = firstPart.indexOf(' ')
+  if (spaceIdx === -1) return null
+  const title = firstPart.slice(0, spaceIdx)
+  const name = firstPart.slice(spaceIdx + 1).trim()
+  if (!isTitle(title) || !name) return null
+  return {
+    title,
+    name,
+    subject: (parts[1] ?? '').trim(),
+    department: (parts[2] ?? '').trim(),
+  }
+}
+
 async function createBulk(request: Request, env: Env): Promise<Response> {
-  // Enforce 64 KB body cap; readJson throws too_long (413) when exceeded
   const body = await readJson<Record<string, unknown>>(request, 65536)
 
-  const rawItems = body.items
-  if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 100) {
+  const rawLines = body.lines
+  if (!Array.isArray(rawLines) || rawLines.length === 0 || rawLines.length > 100) {
     throw new HttpError('bad_request')
   }
 
-  // Validate each item
-  const items = rawItems.map((item: unknown) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError('bad_request')
-    const obj = item as Record<string, unknown>
-    const name = typeof obj.name === 'string' ? obj.name.trim() : ''
-    const subject = typeof obj.subject === 'string' ? obj.subject.trim() : ''
-    const message = typeof obj.message === 'string' ? obj.message.trim() : ''
-    const rawItemTitle = obj.title
-    if (name.length === 0 || name.length > 80) throw new HttpError('bad_request')
-    if (subject.length > 80) throw new HttpError('bad_request')
-    if (message.length > 600) throw new HttpError('bad_request')
-    // title is required on each bulk item
-    if (typeof rawItemTitle !== 'string' || !isTitle(rawItemTitle)) throw new HttpError('bad_request')
-    return { name, subject, message, title: rawItemTitle }
+  const items: ParsedLine[] = rawLines.map((line: unknown) => {
+    if (typeof line !== 'string') throw new HttpError('bad_request')
+    const parsed = parseBulkLine(line)
+    if (!parsed) throw new HttpError('bad_request')
+    return parsed
   })
-
-  // Parse shared layout
-  const rawLayout = body.layout
-  const layout = typeof rawLayout === 'string' ? rawLayout : null
-  if (layout !== null && !isLayout(layout)) throw new HttpError('bad_request')
-  const effectiveLayout = layout ?? DEFAULT_LAYOUT
-
-  // Parse shared images
-  const rawImages = body.images
-  let imageSlots: Record<string, number> | null = null
-  if (rawImages && typeof rawImages === 'object' && !Array.isArray(rawImages)) {
-    imageSlots = {}
-    for (const [slot, imgId] of Object.entries(rawImages as Record<string, unknown>)) {
-      if (!isSlot(slot)) throw new HttpError('bad_request')
-      if (typeof imgId !== 'number') throw new HttpError('bad_request')
-      imageSlots[slot] = imgId as number
-    }
-    // Validate all image ids exist
-    for (const imgId of Object.values(imageSlots)) {
-      const imgRow = await env.DB.prepare('SELECT id FROM image WHERE id = ?').bind(imgId).first()
-      if (!imgRow) throw new HttpError('bad_request')
-    }
-  }
-
-  // Parse shared status
-  const rawStatus = body.status
-  const status = rawStatus === 'published' ? 'published' : 'draft'
-  if (status === 'published') {
-    for (const item of items) {
-      if (item.message.length === 0) throw new HttpError('bad_request')
-    }
-  }
 
   const now = new Date().toISOString()
 
-  // Try the batch, retry once on UNIQUE collision for teacher.token
-  let tokens: string[] = []
-  for (let attempt = 0; attempt < 2; attempt++) {
-    tokens = items.map(() => newToken())
-
-    const stmts: D1Stmt[] = []
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      const tok = tokens[i]
-      stmts.push(env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(tok, item.name, item.subject, now))
-      stmts.push(env.DB.prepare('INSERT INTO card (teacher_id, message, status, updated_at) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(tok, item.message, status, now))
-      stmts.push(env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, item.title))
-      if (layout !== null) {
-        stmts.push(env.DB.prepare('INSERT INTO card_style (teacher_id, layout) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(tok, effectiveLayout))
-      }
-      if (imageSlots) {
-        for (const [slot, imgId] of Object.entries(imageSlots)) {
-          stmts.push(env.DB.prepare('INSERT INTO card_image (teacher_id, slot, image_id) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?)').bind(tok, slot, imgId))
-        }
-      }
+  // Generate token + publicId for each teacher (token with up to 3 retries each)
+  const tokenPairs: Array<{ token: string; publicId: string }> = []
+  for (const _item of items) {
+    let token: string | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const tok = newToken()
+      const existing = await env.DB.prepare('SELECT id FROM teacher WHERE token = ?').bind(tok).first()
+      if (!existing) { token = tok; break }
     }
-
-    try {
-      await env.DB.batch(stmts)
-      break  // success
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : ''
-      if (msg.includes('UNIQUE constraint failed: teacher.token')) {
-        if (attempt === 0) continue  // retry with new tokens
-        return error('unavailable')  // second collision
-      }
-      throw e  // unexpected error
+    if (!token) {
+      console.error('admin: unavailable')
+      return error('unavailable')
     }
+    const publicId = newToken()
+    tokenPairs.push({ token, publicId })
   }
 
-  // Fetch created teachers using the tokens
-  const ph = tokens.map(() => '?').join(', ')
-  const { results: teacherRows } = await env.DB
-    .prepare(`${TEACHER_SQL}WHERE t.token IN (${ph}) ORDER BY t.id`)
-    .bind(...tokens)
-    .all<TeacherRow & { layout: string }>()
-
-  // Fetch images for all created teachers
-  const teacherIds = teacherRows.map((r) => r.id)
-  let created: TeacherFull[]
-  if (teacherIds.length > 0) {
-    const idPh = teacherIds.map(() => '?').join(', ')
-    const { results: imgRows } = await env.DB
-      .prepare(
-        `SELECT ci.teacher_id, ci.slot, i.id, i.token FROM card_image ci ` +
-        `JOIN image i ON i.id = ci.image_id WHERE ci.teacher_id IN (${idPh})`,
-      )
-      .bind(...teacherIds)
-      .all<{ teacher_id: number; slot: string; id: number; token: string }>()
-
-    const imgMap = new Map<number, Record<string, ImageSlot>>()
-    for (const img of imgRows) {
-      if (!imgMap.has(img.teacher_id)) imgMap.set(img.teacher_id, {})
-      imgMap.get(img.teacher_id)![img.slot] = { id: img.id, token: img.token }
-    }
-    created = teacherRows.map((t) => ({ ...t, images: imgMap.get(t.id) ?? {} }))
-  } else {
-    created = []
+  // Build batch stmts
+  const stmts: D1Stmt[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    const { token, publicId } = tokenPairs[i]
+    stmts.push(env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(token, item.name, item.subject, now))
+    stmts.push(env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(token, item.title))
+    stmts.push(env.DB.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(token, publicId, item.department, 1))
   }
 
-  return json({ created })
+  try {
+    await env.DB.batch(stmts)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : ''
+    if (msg.includes('UNIQUE constraint failed: teacher.token')) return error('unavailable')
+    throw e
+  }
+
+  // Fetch created teachers
+  const tokens = tokenPairs.map((p) => p.token)
+  const { results } = await env.DB
+    .prepare(TEACHER_SELECT + 'WHERE t.token IN (SELECT value FROM json_each(?)) GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.public_id, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
+    .bind(JSON.stringify(tokens))
+    .all<RawTeacherRow>()
+
+  return json({ created: results.map(toAdminTeacher) })
 }
 
 /**
  * Routes all /api/admin/* requests after checking auth.
- * Never reads token, id, or created_at from request bodies (plan § Constraints).
  */
 export async function handleAdmin(request: Request, env: Env): Promise<Response> {
   const authResult = await requireAdmin(request, env)
@@ -416,13 +319,23 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
       return await handleWishes(request, env, email)
     }
 
+    if (parts.length >= 3 && parts[2] === 'templates') {
+      return await handleTemplates(request, env, email)
+    }
+
+    if (parts.length >= 3 && parts[2] === 'cards') {
+      return await handleModeration(request, env, email)
+    }
+
+    // ---- Teachers ----
+
     if (parts.length === 3 && parts[2] === 'teachers') {
       if (method === 'GET') return await listTeachers(env)
       if (method === 'POST') return await createTeacher(request, env, email)
       return error('method')
     }
 
-    // /api/admin/teachers/bulk  (must come before /:id check)
+    // /api/admin/teachers/bulk (before /:id check)
     if (parts.length === 4 && parts[2] === 'teachers' && parts[3] === 'bulk') {
       if (method === 'POST') return await createBulk(request, env)
       return error('method')

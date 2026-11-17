@@ -277,6 +277,27 @@ describe('CardView — from prop (custom signature line)', () => {
   })
 })
 
+// ===================================================================
+// white-space: pre-line rendering (message in .msg element, no <br>)
+// ===================================================================
+
+describe('CardView — message pre-line rendering', () => {
+  it('message with newline is in a .msg element without converting \\n to <br>', () => {
+    const card = { name: 'A', subject: '', message: 'line1\nline2' }
+    const html = renderToString(
+      // Provide `from` to avoid the default <br/> in the from paragraph
+      <CardView card={card} layout="classic" images={{}} from="Test" />,
+    )
+    // The .msg element exists
+    expect(html).toContain('class="msg"')
+    // Message content is present (react preserves newlines as text, not <br>)
+    expect(html).toContain('line1')
+    expect(html).toContain('line2')
+    // No <br> elements — newlines rendered via CSS pre-line
+    expect(html).not.toContain('<br')
+  })
+})
+
 describe('CardView — photo alt text includes title (failing until Group 2)', () => {
   it('photo alt is "Ảnh đại diện của {title} {name}" when title is set', () => {
     const card: CardDataWithTitle = {

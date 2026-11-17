@@ -23,6 +23,10 @@ export type ExecutionContext = {
 export type Env = {
   DB: D1
   ASSETS: { fetch(request: Request): Promise<Response> }
+  /** Rate limit for public read endpoints: 120 req/60 s per IP, namespace 2004. */
+  PUBLIC_IP_LIMIT: RateLimit
+  /** Rate limit for student card submissions: 20 req/60 s per IP, namespace 2005. */
+  SUBMIT_IP_LIMIT: RateLimit
   CARD_IP_LIMIT: RateLimit
   ADMIN_FAIL_LIMIT: RateLimit
   /** Rate limit for public image fetches: 300 req/60 s per IP, namespace 2003. */

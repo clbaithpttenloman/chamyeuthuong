@@ -214,7 +214,7 @@ function getCache(env: { _caches?: CacheStore }): CacheStore['default'] | undefi
 async function listImages(env: Pick<Env, 'DB'>): Promise<Response> {
   const { results } = await env.DB.prepare(
     'SELECT i.id, i.token, i.name, i.mime, i.size, i.created_at, i.created_by, ' +
-    '(SELECT COUNT(*) FROM card_image ci WHERE ci.image_id = i.id) AS used_by ' +
+    '(SELECT COUNT(*) FROM template_image ti WHERE ti.image_id = i.id) AS used_by ' +
     'FROM image i ORDER BY i.id',
   ).all<Record<string, unknown>>()
   return json(results)
@@ -291,13 +291,13 @@ async function deleteImage(env: Pick<Env, 'DB'>, id: number): Promise<Response> 
   const existing = await env.DB.prepare('SELECT id FROM image WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
 
-  // Try delete; FK RESTRICT on card_image.image_id will throw if in use
+  // Try delete; FK RESTRICT on template_image.image_id will throw if in use by a template
   try {
     const result = await env.DB.prepare('DELETE FROM image WHERE id = ?').bind(id).run()
     if (result.meta.changes === 0) return error('not_found')
     return json({ success: true })
   } catch (e) {
-    // FK constraint violated → image is in use
+    // FK RESTRICT on template_image.image_id will throw if the image is in use by a template
     const msg = e instanceof Error ? e.message : ''
     if (msg.includes('FOREIGN KEY constraint failed') || msg.includes('RESTRICT')) {
       return error('conflict')

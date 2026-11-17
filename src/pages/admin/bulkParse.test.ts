@@ -110,6 +110,42 @@ describe('parseBulkInput — title extraction', () => {
   })
 })
 
+describe('parseBulkInput — department column', () => {
+  it('"Thầy X | Toán | Tổ Toán - Tin" → item has department', () => {
+    const result = parseBulkInput('Thầy Nguyễn Văn A | Toán | Tổ Toán - Tin')
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0]).toMatchObject({
+      name: 'Nguyễn Văn A',
+      subject: 'Toán',
+      department: 'Tổ Toán - Tin',
+      title: 'Thầy',
+    })
+  })
+
+  it('department is trimmed', () => {
+    const result = parseBulkInput('Cô X |  Văn  |  Tổ Văn - Sử  ')
+    expect(result.items[0].department).toBe('Tổ Văn - Sử')
+    expect(result.items[0].subject).toBe('Văn')
+  })
+
+  it('department absent when only two pipes used', () => {
+    const result = parseBulkInput('Thầy X | Toán')
+    expect(result.items[0].department).toBeUndefined()
+  })
+
+  it('empty department pipe → department undefined', () => {
+    const result = parseBulkInput('Thầy X | Toán | ')
+    expect(result.items[0].department).toBeUndefined()
+  })
+
+  it('all three columns in a multi-line input', () => {
+    const input = 'Thầy A | Toán | Tổ Toán\nCô B | Văn | Tổ Văn'
+    const result = parseBulkInput(input)
+    expect(result.items[0].department).toBe('Tổ Toán')
+    expect(result.items[1].department).toBe('Tổ Văn')
+  })
+})
+
 describe('parseBulkInput — line numbers and Unicode forms', () => {
   it('reports line numbers as seen in the textarea, counting blank lines', () => {
     const r = parseBulkInput('Thầy An | Toán\n\nNguyễn Bình\nCô Chi')

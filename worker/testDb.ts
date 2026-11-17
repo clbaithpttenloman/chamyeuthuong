@@ -49,7 +49,10 @@ export function testDb(opts: { schema?: false } = {}) {
     }
     const args = values as (string | number | null)[]
     return {
-      bind: (...v: unknown[]) => stmt(sql, v),
+      bind: (...v: unknown[]) => {
+        if (v.length > 100) throw new Error('too many SQL variables')
+        return stmt(sql, v)
+      },
       run: () =>
         exec(() => {
           const r = sqlite.prepare(sql).run(...args)

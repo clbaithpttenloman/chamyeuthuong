@@ -34,14 +34,21 @@
     "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com"
   },
   // Per-IP rate limits (approximate, per Cloudflare location).
-  // CARD_IP_LIMIT (60/60 s): guards /api/card/:token; blunts token scanners.
-  //   School NAT = many viewers on one IP; 60/60 is generous to avoid hitting the limit on legitimate traffic.
+  // PUBLIC_IP_LIMIT (120/60 s): guards /api/wall, /api/teachers/*, /api/templates, /api/wishes.
+  //   120/min is generous; school NAT shares one IP, so set high enough to avoid false positives.
+  // SUBMIT_IP_LIMIT (20/60 s): guards POST /api/cards (student card submissions).
+  //   20/min is tight for a school NAT on 20/11 — raise in .dev.vars for the event if needed.
+  //   See docs/runbooks/admin.md for how to raise.
+  // CARD_IP_LIMIT (60/60 s): guards /api/qr/:token; blunts token scanners.
+  //   School NAT = many viewers on one IP; 60/60 is generous.
   // ADMIN_FAIL_LIMIT (60/60 s): guards /api/admin/* (all requests); was 30/60, raised to 60/60 for upload sessions.
   //   Upload workflows make many API calls (list, upload, attach, preview, publish).
   //   Side effect (R1): rate limit is the only brake on guessing admin emails (risk accepted, see decisions.md).
   //   Consequence: multiple admins behind one NAT share the 60/60 s budget; busy editing may hit the limit.
   // IMAGE_IP_LIMIT (300/60 s): guards /api/image/:token (GET only); 300/60 allows fast card loads while blunting scanners.
   "ratelimits": [
+    { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "2004", "simple": { "limit": 120, "period": 60 } },
+    { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "2005", "simple": { "limit": 20,  "period": 60 } },
     { "name": "CARD_IP_LIMIT",    "namespace_id": "2001", "simple": { "limit": 60,  "period": 60 } },
     { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "2002", "simple": { "limit": 60,  "period": 60 } },
     { "name": "IMAGE_IP_LIMIT",   "namespace_id": "2003", "simple": { "limit": 300, "period": 60 } }

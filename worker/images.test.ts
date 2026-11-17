@@ -628,7 +628,7 @@ describe('GET /api/admin/images — list', () => {
     expect(list[0]).toHaveProperty('size')
   })
 
-  it('list includes used_by count (0 when no card uses it)', async () => {
+  it('list includes used_by count (0 when no template uses it)', async () => {
     await db
       .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
       .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', new Date().toISOString(), TEST_EMAIL)
@@ -661,16 +661,17 @@ describe('DELETE /api/admin/images/:id', () => {
     expect(await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first()).toBeNull()
   })
 
-  it('deleting an in-use image → 409 conflict', async () => {
-    // Create teacher + card_image using the image
+  it('deleting an image used by a template → 409 conflict (failing until Group 2 adds template tables)', async () => {
+    // Create a template using the image via template_image (new plan — not card_image)
     const now = new Date().toISOString()
-    await db.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES (?,?,?,?)")
-      .bind('tok1234567890ab', 'T', '', now).run()
-    const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890ab').first<{ id: number }>())!.id
     await db.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
       .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL).run()
     const iid = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-    await db.prepare("INSERT INTO card_image (teacher_id,slot,image_id) VALUES (?,?,?)").bind(tid, 'background', iid).run()
+    // Insert a template row (fails until Group 2 adds template to SCHEMA)
+    await db.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)")
+      .bind('TestTemplate', 'classic', 1, now, TEST_EMAIL).run()
+    const tid = (await db.prepare('SELECT id FROM template WHERE name=?').bind('TestTemplate').first<{ id: number }>())!.id
+    await db.prepare("INSERT INTO template_image (template_id, slot, image_id) VALUES (?, ?, ?)").bind(tid, 'background', iid).run()
 
     const r = await handleImages(
       imageReq('DELETE', `/api/admin/images/${iid}`),

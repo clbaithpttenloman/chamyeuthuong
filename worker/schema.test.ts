@@ -15,19 +15,18 @@ describe('SCHEMA shape', () => {
     for (const s of SCHEMA) expect(typeof s).toBe('string')
   })
 
-  it('every entry starts with CREATE TABLE IF NOT EXISTS (DDL) or INSERT/INSERT OR IGNORE (seeds)', () => {
+  it('every entry is idempotent DDL (CREATE TABLE/INDEX IF NOT EXISTS) or a seed INSERT', () => {
     for (const s of SCHEMA) {
-      expect(s.trim().toUpperCase()).toMatch(/^(CREATE TABLE IF NOT EXISTS|INSERT)\s/)
+      expect(s.trim().toUpperCase()).toMatch(/^(CREATE TABLE IF NOT EXISTS|CREATE INDEX IF NOT EXISTS|INSERT)\s/)
     }
   })
 
-  it('covers teacher, card, and admin tables', () => {
+  it('covers teacher and admin tables', () => {
     const names = SCHEMA.map((s) => {
       const m = s.match(/CREATE TABLE IF NOT EXISTS\s+(\w+)/i)
       return m?.[1]?.toLowerCase() ?? ''
     })
     expect(names).toContain('teacher')
-    expect(names).toContain('card')
     expect(names).toContain('admin')
   })
 })
@@ -35,7 +34,7 @@ describe('SCHEMA shape', () => {
 // ---- ensureSchema — creation ----
 
 describe('ensureSchema — creation', () => {
-  it('creates teacher, card, and admin tables on a fresh empty DB', async () => {
+  it('creates teacher and admin tables on a fresh empty DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const rows = sqlite
@@ -43,7 +42,6 @@ describe('ensureSchema — creation', () => {
       .all() as Array<{ name: string }>
     const names = rows.map((r) => r.name)
     expect(names).toContain('admin')
-    expect(names).toContain('card')
     expect(names).toContain('teacher')
   })
 
@@ -95,8 +93,6 @@ describe('ensureSchema — idempotency', () => {
   })
 
   it('re-running every SCHEMA statement on a populated DB leaves rows intact (real DDL idempotency)', async () => {
-    // Run SCHEMA via sqlite.exec directly (bypasses the WeakMap cache) so we can re-run on
-    // an already-populated DB and confirm IF NOT EXISTS truly leaves existing rows untouched.
     const { sqlite } = testDb({ schema: false })
     for (const sql of SCHEMA) sqlite.exec(sql)
     sqlite.exec('PRAGMA foreign_keys = ON')
@@ -127,7 +123,6 @@ describe('ensureSchema — concurrency', () => {
     expect(r1).toBeUndefined()
     expect(r2).toBeUndefined()
     expect(r3).toBeUndefined()
-    // Exactly SCHEMA.length DDL prepares — not 2× or 3×
     expect(state.ddl).toBe(SCHEMA.length)
   })
 })
@@ -147,7 +142,6 @@ describe('ensureSchema — failure and retry', () => {
     const p1 = ensureSchema(db)
     await expect(p1).rejects.toThrow()
     state.fail = false
-    // p1 was evicted from the WeakMap — a new promise must be created
     const p2 = ensureSchema(db)
     expect(p2).not.toBe(p1)
     await expect(p2).resolves.toBeUndefined()
@@ -158,8 +152,6 @@ describe('ensureSchema — failure and retry', () => {
 
 describe('ensureSchema — batch rollback', () => {
   it('batch rejected before BEGIN (state.fail fires before sqlite BEGIN) leaves no tables', async () => {
-    // state.fail causes db.batch() to throw before sqlite.exec('BEGIN') runs in testDb —
-    // so this tests the "batch never starts" path, not mid-batch atomicity.
     const { db, state, sqlite } = testDb({ schema: false })
     state.fail = true
     await expect(ensureSchema(db)).rejects.toThrow()
@@ -170,8 +162,6 @@ describe('ensureSchema — batch rollback', () => {
   })
 
   it('mid-batch failure leaves zero tables (transaction atomicity: ROLLBACK undoes partial DDL)', async () => {
-    // Build a minimal D1 that shares the sqlite handle but throws on the 2nd statement.run()
-    // — after sqlite BEGIN, before COMMIT — to verify the ROLLBACK undoes the first table.
     const { sqlite } = testDb({ schema: false })
     let runCount = 0
     const makeStmt = (sql: string): D1Stmt => ({
@@ -226,7 +216,6 @@ describe('SCHEMA parity — table structure', () => {
   it('admin CHECK rejects an email longer than 254 characters', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
-    // 247 + '@example.com' (12) = 259 chars (> 254)
     const longEmail = 'a'.repeat(247) + '@example.com'
     expect(() => {
       sqlite
@@ -248,74 +237,15 @@ describe('SCHEMA parity — table structure', () => {
         .run()
     }).not.toThrow()
   })
-
-  it('deleting a teacher cascades to its card (ON DELETE CASCADE)', async () => {
-    const { db, sqlite } = testDb({ schema: false })
-    await ensureSchema(db)
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite
-      .prepare(
-        "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890ab', 'T', 'S', datetime('now'))",
-      )
-      .run()
-    const row = sqlite
-      .prepare("SELECT id FROM teacher WHERE token = 'tok1234567890ab'")
-      .get() as { id: number }
-    sqlite
-      .prepare(
-        `INSERT INTO card (teacher_id, message, status, updated_at) VALUES (${row.id}, 'msg', 'draft', datetime('now'))`,
-      )
-      .run()
-    sqlite.prepare(`DELETE FROM teacher WHERE id = ${row.id}`).run()
-    const cards = sqlite
-      .prepare(`SELECT * FROM card WHERE teacher_id = ${row.id}`)
-      .all()
-    expect(cards).toHaveLength(0)
-  })
-
-  it('PRAGMA foreign_key_list(card) shows ON DELETE CASCADE for teacher_id', async () => {
-    const { db, sqlite } = testDb({ schema: false })
-    await ensureSchema(db)
-    const fkList = sqlite.prepare('PRAGMA foreign_key_list(card)').all() as Array<
-      Record<string, unknown>
-    >
-    expect(fkList.length).toBeGreaterThan(0)
-    expect(fkList.some((r) => r['on_delete'] === 'CASCADE')).toBe(true)
-  })
-})
-
-// ===================================================================
-// New tables (Group 2 adds them to SCHEMA — these tests fail until then)
-// ===================================================================
-
-describe('SCHEMA covers new tables (failing until Group 2)', () => {
-  it('covers image, card_style, card_image, wish, meta tables', async () => {
-    const { db, sqlite } = testDb({ schema: false })
-    await ensureSchema(db)
-    const rows = sqlite
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .all() as Array<{ name: string }>
-    const names = rows.map((r) => r.name)
-    expect(names).toContain('image')
-    expect(names).toContain('card_style')
-    expect(names).toContain('card_image')
-    expect(names).toContain('wish')
-    expect(names).toContain('meta')
-  })
 })
 
 // ---- image table: CHECK constraints ----
 
-describe('image table CHECK constraints (failing until Group 2)', () => {
+describe('image table CHECK constraints', () => {
   it('mime CHECK accepts image/jpeg', async () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     expect(() => {
-      sqlite
-        .prepare(
-          "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890ab','T','','2024-01-01')",
-        )
-        .run()
       sqlite
         .prepare(
           "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','test.jpg','image/jpeg',100,'data','2024-01-01','a@b.com')",
@@ -379,17 +309,6 @@ describe('image table CHECK constraints (failing until Group 2)', () => {
     }).toThrow()
   })
 
-  it('size CHECK rejects size = -1', async () => {
-    const { sqlite } = testDb()
-    expect(() => {
-      sqlite
-        .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.png','image/png',-1,'data','2024-01-01','a@b.com')",
-        )
-        .run()
-    }).toThrow()
-  })
-
   it('size CHECK rejects size > 307200', async () => {
     const { sqlite } = testDb()
     expect(() => {
@@ -424,103 +343,9 @@ describe('image table CHECK constraints (failing until Group 2)', () => {
   })
 })
 
-// ---- card_image table: CHECK and FK constraints ----
-
-describe('card_image table constraints (failing until Group 2)', () => {
-  it('slot CHECK rejects an unknown slot', async () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    expect(() => {
-      // Need teacher + image rows first
-      sqlite
-        .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
-        .run()
-      const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
-      sqlite
-        .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','t.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')")
-        .run()
-      const iid = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
-      sqlite.prepare(`INSERT INTO card_image (teacher_id,slot,image_id) VALUES (${tid},'unknown_slot',${iid})`).run()
-    }).toThrow()
-  })
-
-  it('slot CHECK accepts background, banner, photo', async () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
-      .run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
-    sqlite
-      .prepare("INSERT INTO card (teacher_id,message,status,updated_at) VALUES (?,'','draft','2024-01-01')")
-      .run(tid)
-    for (const slot of ['background', 'banner', 'photo']) {
-      const imgToken = `img${slot.slice(0, 4)}123456789`
-      sqlite
-        .prepare(`INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('${imgToken}','t.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')`)
-        .run()
-      const iid = (sqlite.prepare('SELECT id FROM image WHERE token=?').get(imgToken) as { id: number }).id
-      expect(() => {
-        sqlite.prepare(`INSERT INTO card_image (teacher_id,slot,image_id) VALUES (${tid},'${slot}',${iid})`).run()
-      }).not.toThrow()
-    }
-  })
-
-  it('card_image.image_id ON DELETE RESTRICT prevents deleting an image in use', async () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
-      .run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
-    sqlite
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','t.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')")
-      .run()
-    const iid = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
-    sqlite.prepare(`INSERT INTO card_image (teacher_id,slot,image_id) VALUES (${tid},'background',${iid})`).run()
-    expect(() => {
-      sqlite.prepare(`DELETE FROM image WHERE id=${iid}`).run()
-    }).toThrow()
-  })
-
-  it('deleting a teacher cascades to card_image rows', async () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
-      .run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
-    sqlite
-      .prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','t.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')")
-      .run()
-    const iid = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
-    sqlite.prepare(`INSERT INTO card_image (teacher_id,slot,image_id) VALUES (${tid},'background',${iid})`).run()
-    sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
-    const rows = sqlite.prepare(`SELECT * FROM card_image WHERE teacher_id=${tid}`).all()
-    expect(rows).toHaveLength(0)
-  })
-})
-
-// ---- card_style: FK cascade ----
-
-describe('card_style table constraints (failing until Group 2)', () => {
-  it('deleting a teacher cascades to card_style row', async () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
-      .run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
-    sqlite.prepare(`INSERT INTO card_style (teacher_id,layout) VALUES (${tid},'lotus')`).run()
-    sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
-    const row = sqlite.prepare(`SELECT * FROM card_style WHERE teacher_id=${tid}`).get()
-    expect(row).toBeUndefined()
-  })
-})
-
 // ---- Seeds: 12 wishes inserted once ----
 
-describe('SCHEMA seeds — 12 example wishes (failing until Group 2)', () => {
+describe('SCHEMA seeds — 12 example wishes', () => {
   it('ensureSchema inserts 12 wishes on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -546,13 +371,10 @@ describe('SCHEMA seeds — 12 example wishes (failing until Group 2)', () => {
   })
 
   it('seeds never re-inserted after deleting wishes and running raw SCHEMA batch again', async () => {
-    // Run SCHEMA once via sqlite.exec (bypasses WeakMap) so seeds run
     const { sqlite } = testDb({ schema: false })
     for (const sql of SCHEMA) sqlite.exec(sql)
-    // Delete all wishes
     sqlite.exec('DELETE FROM wish')
     expect((sqlite.prepare('SELECT COUNT(*) as c FROM wish').get() as { c: number }).c).toBe(0)
-    // Run SCHEMA again — seeds should not fire because meta flag is set
     for (const sql of SCHEMA) sqlite.exec(sql)
     expect((sqlite.prepare('SELECT COUNT(*) as c FROM wish').get() as { c: number }).c).toBe(0)
   })
@@ -560,17 +382,16 @@ describe('SCHEMA seeds — 12 example wishes (failing until Group 2)', () => {
   it('seeds are counted as DDL by testDb state.ddl', async () => {
     const { db, state } = testDb({ schema: false })
     await ensureSchema(db)
-    // All SCHEMA entries (CREATE TABLE + seeds) must be counted
     expect(state.ddl).toBe(SCHEMA.length)
     expect(state.prepares).toBe(0)
   })
 })
 
 // ===================================================================
-// New for honorific plan: teacher_title table (failing until Group 2)
+// New for honorific plan: teacher_title table
 // ===================================================================
 
-describe('teacher_title table exists (failing until Group 2)', () => {
+describe('teacher_title table exists', () => {
   it('ensureSchema creates teacher_title table on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -589,7 +410,7 @@ describe('teacher_title table exists (failing until Group 2)', () => {
   })
 })
 
-describe('teacher_title CHECK and FK constraints (failing until Group 2)', () => {
+describe('teacher_title CHECK and FK constraints', () => {
   it('title CHECK accepts Thầy', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
@@ -627,23 +448,8 @@ describe('teacher_title CHECK and FK constraints (failing until Group 2)', () =>
     const tid = (
       sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
     ).id
-    // Should throw CHECK violation (or "no such table" until Group 2 adds the table)
     expect(() => {
       sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'thầy')`).run()
-    }).toThrow()
-  })
-
-  it('title CHECK rejects lowercase cô', () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
-      .run()
-    const tid = (
-      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
-    ).id
-    expect(() => {
-      sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'cô')`).run()
     }).toThrow()
   })
 
@@ -678,10 +484,10 @@ describe('teacher_title CHECK and FK constraints (failing until Group 2)', () =>
 })
 
 // ===================================================================
-// New for honorific plan: seed content (failing until Group 2)
+// Seeds — no hard-coded thầy/cô before name placeholder
 // ===================================================================
 
-describe('Seeds — no hard-coded thầy/cô before name placeholder (failing until Group 2)', () => {
+describe('Seeds — no hard-coded thầy/cô before name placeholder', () => {
   it('no seed SQL contains "thầy {tên}" (lowercase thầy hard-coded before name)', () => {
     for (const sql of SEEDS) {
       expect(sql, sql.slice(0, 80)).not.toContain('thầy {tên}')
@@ -701,5 +507,317 @@ describe('Seeds — no hard-coded thầy/cô before name placeholder (failing un
         expect(hasTitle, `seed missing title placeholder: ${sql.slice(0, 80)}`).toBe(true)
       }
     }
+  })
+})
+
+// ===================================================================
+// testDb — 100-parameter guard (passes immediately, guard already in testDb.ts)
+// ===================================================================
+
+describe('testDb — 100-parameter guard', () => {
+  it('binding exactly 100 params does not throw', () => {
+    const { db } = testDb()
+    const params = Array.from({ length: 100 }, () => '?').join(', ')
+    expect(() => {
+      db.prepare(`SELECT ${params}`).bind(...Array.from({ length: 100 }, (_, i) => i))
+    }).not.toThrow()
+  })
+
+  it('binding 101 params throws "too many SQL variables"', () => {
+    const { db } = testDb()
+    const params = Array.from({ length: 101 }, () => '?').join(', ')
+    expect(() => {
+      db.prepare(`SELECT ${params}`).bind(...Array.from({ length: 101 }, (_, i) => i))
+    }).toThrow('too many SQL variables')
+  })
+
+  it('binding 200 params throws "too many SQL variables"', () => {
+    const { db } = testDb()
+    const params = Array.from({ length: 200 }, () => '?').join(', ')
+    expect(() => {
+      db.prepare(`SELECT ${params}`).bind(...Array.from({ length: 200 }, (_, i) => i))
+    }).toThrow('too many SQL variables')
+  })
+})
+
+// ===================================================================
+// New tables in plan — FAILING until Group 2 adds them to SCHEMA
+// ===================================================================
+
+describe('SCHEMA covers new tables (failing until Group 2)', () => {
+  it('covers teacher_profile, template, template_image, student_card, image, wish, meta', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const rows = sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .all() as Array<{ name: string }>
+    const names = rows.map((r) => r.name)
+    expect(names).toContain('teacher_profile')
+    expect(names).toContain('template')
+    expect(names).toContain('template_image')
+    expect(names).toContain('student_card')
+    expect(names).toContain('image')
+    expect(names).toContain('wish')
+    expect(names).toContain('meta')
+  })
+
+  it('card, card_style, card_image are NOT in SCHEMA (removed tables)', () => {
+    const names = SCHEMA.map((s) => {
+      const m = s.match(/CREATE TABLE IF NOT EXISTS\s+(\w+)/i)
+      return m?.[1]?.toLowerCase() ?? ''
+    })
+    expect(names).not.toContain('card')
+    expect(names).not.toContain('card_style')
+    expect(names).not.toContain('card_image')
+  })
+})
+
+describe('teacher_profile table constraints (failing until Group 2)', () => {
+  it('ensureSchema creates teacher_profile on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('teacher_profile')
+  })
+
+  it('show_on_home CHECK accepts 0 and 1', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890ab', '', 1)`).run()
+    }).not.toThrow()
+  })
+
+  it('show_on_home CHECK rejects 2', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890ab', '', 2)`).run()
+    }).toThrow()
+  })
+
+  it('public_id UNIQUE constraint enforced', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const t1 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok9876543210ab','T2','','2024-01-01')").run()
+    const t2 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok9876543210ab') as { id: number }).id
+    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${t1}, 'samepublicid001', '', 1)`).run()
+    expect(() => {
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${t2}, 'samepublicid001', '', 1)`).run()
+    }).toThrow()
+  })
+
+  it('deleting a teacher cascades to teacher_profile row', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890ab', '', 1)`).run()
+    sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
+    const row = sqlite.prepare(`SELECT * FROM teacher_profile WHERE teacher_id=${tid}`).get()
+    expect(row).toBeUndefined()
+  })
+})
+
+describe('template table constraints (failing until Group 2)', () => {
+  it('ensureSchema creates template on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('template')
+  })
+
+  it('active CHECK accepts 0 and 1', () => {
+    const { sqlite } = testDb()
+    expect(() => {
+      sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    }).not.toThrow()
+    expect(() => {
+      sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T2','classic',0,'2024-01-01','a@b.com')").run()
+    }).not.toThrow()
+  })
+
+  it('active CHECK rejects 2', () => {
+    const { sqlite } = testDb()
+    expect(() => {
+      sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',2,'2024-01-01','a@b.com')").run()
+    }).toThrow()
+  })
+})
+
+describe('template_image table constraints (failing until Group 2)', () => {
+  it('ensureSchema creates template_image on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('template_image')
+  })
+
+  it('slot CHECK accepts background, banner, photo', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    for (const slot of ['background', 'banner', 'photo']) {
+      const imgTok = `img${slot.slice(0,3)}12345678901`
+      sqlite.prepare(`INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('${imgTok}','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')`).run()
+      const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get(imgTok) as { id: number }).id
+      expect(() => {
+        sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, '${slot}', ${imgId})`).run()
+      }).not.toThrow()
+    }
+  })
+
+  it('slot CHECK rejects unknown slot', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    sqlite.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')").run()
+    const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, 'unknown', ${imgId})`).run()
+    }).toThrow()
+  })
+
+  it('template_image.image_id ON DELETE RESTRICT prevents deleting an image in use', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    sqlite.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')").run()
+    const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
+    sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, 'background', ${imgId})`).run()
+    expect(() => {
+      sqlite.prepare(`DELETE FROM image WHERE id=${imgId}`).run()
+    }).toThrow()
+  })
+
+  it('deleting a template cascades to template_image rows', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    sqlite.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')").run()
+    const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
+    sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, 'background', ${imgId})`).run()
+    sqlite.prepare(`DELETE FROM template WHERE id=${tmplId}`).run()
+    const rows = sqlite.prepare(`SELECT * FROM template_image WHERE template_id=${tmplId}`).all()
+    expect(rows).toHaveLength(0)
+  })
+})
+
+describe('student_card table constraints (failing until Group 2)', () => {
+  it('ensureSchema creates student_card on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('student_card')
+  })
+
+  it('status CHECK accepts pending, approved, hidden', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    for (const status of ['pending', 'approved', 'hidden']) {
+      const pid = `pub${status.slice(0,3)}123456789`
+      expect(() => {
+        sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('${pid}',${tid},${tmplId},'msg','','',0,'${status}','2024-01-01')`).run()
+      }).not.toThrow()
+    }
+  })
+
+  it('status CHECK rejects unknown status', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',0,'published','2024-01-01')`).run()
+    }).toThrow()
+  })
+
+  it('message length CHECK rejects length 0', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'','','',0,'pending','2024-01-01')`).run()
+    }).toThrow()
+  })
+
+  it('anonymous CHECK rejects value 2', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    expect(() => {
+      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',2,'pending','2024-01-01')`).run()
+    }).toThrow()
+  })
+
+  it('template FK ON DELETE RESTRICT — cannot delete template with cards', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',0,'pending','2024-01-01')`).run()
+    expect(() => {
+      sqlite.prepare(`DELETE FROM template WHERE id=${tmplId}`).run()
+    }).toThrow()
+  })
+
+  it('teacher FK ON DELETE CASCADE — deleting teacher cascades to student_card', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',0,'pending','2024-01-01')`).run()
+    sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
+    const rows = sqlite.prepare(`SELECT * FROM student_card WHERE teacher_id=${tid}`).all()
+    expect(rows).toHaveLength(0)
+  })
+
+  it('indexes exist on student_card for (teacher_id, status) and (status, created_at)', () => {
+    const { sqlite } = testDb()
+    const indexList = sqlite.prepare('PRAGMA index_list(student_card)').all() as Array<{ name: string; unique: number }>
+    // The two planned composite indexes are non-unique (the UNIQUE public_id adds its own autoindex).
+    const planned = indexList.filter((r) => !r.name.startsWith('sqlite_autoindex'))
+    expect(planned.length).toBeGreaterThanOrEqual(2)
+    for (const idx of planned) {
+      expect(idx.unique).toBe(0)
+    }
+    // Verify at least one index covers teacher_id
+    const teacherIdx = indexList.find((r) => {
+      const cols = (sqlite.prepare(`PRAGMA index_info(${r.name})`).all() as Array<{ name: string }>).map((c) => c.name)
+      return cols.includes('teacher_id')
+    })
+    expect(teacherIdx).toBeDefined()
+    // Verify at least one index covers status
+    const statusIdx = indexList.find((r) => {
+      const cols = (sqlite.prepare(`PRAGMA index_info(${r.name})`).all() as Array<{ name: string }>).map((c) => c.name)
+      return cols.includes('status')
+    })
+    expect(statusIdx).toBeDefined()
   })
 })

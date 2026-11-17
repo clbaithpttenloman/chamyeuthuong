@@ -1,17 +1,18 @@
 /**
- * Pure, testable bulk-input parser (used by BulkCreate.tsx).
+ * Pure, testable bulk-input parser for teacher bulk-add.
  *
- * Format per line: `{Thầy|Cô} Name | Subject` (subject optional).
- * The title prefix is matched case-insensitively ('thầy', 'CÔ', …) after Unicode NFC
- * normalisation (text pasted from macOS can be decomposed) and stored as 'Thầy' or 'Cô'.
- * Lines without a recognised prefix or name are reported in `invalidLines` using the line
- * numbers shown in the textarea (blank lines are counted but ignored). At most 100 items
- * are returned; `overLimit` counts the valid lines beyond that.
+ * Format per line: `{Thầy|Cô} Tên | Môn | Tổ`
+ *   - Title prefix required (Thầy / Cô, case-insensitive).
+ *   - Subject (after first `|`) and department (after second `|`) are optional.
+ *
+ * Lines without a recognised prefix or name are reported in `invalidLines` using
+ * the line numbers shown in the textarea (blank lines are counted but ignored).
+ * At most 100 items are returned; `overLimit` counts valid lines beyond that.
  */
 
 import type { Title } from '../../../shared/honorific.ts'
 
-export type ParsedItem = { name: string; subject?: string; title: Title }
+export type ParsedItem = { name: string; subject?: string; department?: string; title: Title }
 
 export type ParseResult = {
   items: ParsedItem[]
@@ -33,9 +34,11 @@ export function parseBulkInput(raw: string): ParseResult {
     const line = lines[i].trim()
     if (!line) continue
 
-    const pipeIdx = line.indexOf('|')
-    const namePart = (pipeIdx === -1 ? line : line.slice(0, pipeIdx)).trim()
-    const subject = pipeIdx === -1 ? '' : line.slice(pipeIdx + 1).trim()
+    // Split on pipes to get: [title+name, subject?, department?]
+    const parts = line.split('|').map((s) => s.trim())
+    const namePart = parts[0] ?? ''
+    const subject = parts[1] ? parts[1] : undefined
+    const department = parts[2] ? parts[2] : undefined
 
     const lower = namePart.toLowerCase()
     const match = PREFIXES.find(([prefix]) => lower.startsWith(prefix))
@@ -49,7 +52,12 @@ export function parseBulkInput(raw: string): ParseResult {
       overLimit++
       continue
     }
-    items.push({ name, title: match[1], ...(subject ? { subject } : {}) })
+    items.push({
+      name,
+      title: match[1],
+      ...(subject ? { subject } : {}),
+      ...(department ? { department } : {}),
+    })
   }
 
   return { items, invalidLines, overLimit }

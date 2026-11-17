@@ -3,9 +3,4 @@
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
-
-/admin
-  X-Robots-Tag: noindex
-
-/t/*
   X-Robots-Tag: noindex

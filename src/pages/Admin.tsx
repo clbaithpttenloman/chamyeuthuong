@@ -1,16 +1,28 @@
+/**
+ * Admin — /admin
+ *
+ * Email verification shell → admin sections:
+ *   Duyệt thiệp (default) | Mẫu thiệp | Thầy cô |
+ *   Thư viện lời chúc | Thư viện ảnh | Quản trị viên
+ *
+ * First page load: at most 2 admin API calls
+ *   1. listAdminTeachers() — auth verify + data for teacher filter
+ *   2. ModerationSection loads GET /api/admin/cards?status=pending on mount
+ */
 import { useCallback, useEffect, useState } from 'react'
+import type { AdminTeacher } from '../../shared/api.ts'
 import {
-  type TeacherRow,
   ApiError,
   clearAdminEmail,
   getAdminEmail,
-  listTeachers,
+  listAdminTeachers,
   setAdminEmail,
 } from '../api'
 import AdminsSection from './admin/AdminsSection.tsx'
-import BulkCreate from './admin/BulkCreate.tsx'
 import ImageLibrary from './admin/ImageLibrary.tsx'
+import ModerationSection from './admin/ModerationSection.tsx'
 import TeachersSection from './admin/TeachersSection.tsx'
+import TemplateSection from './admin/TemplateSection.tsx'
 import WishLibrary from './admin/WishLibrary.tsx'
 
 /** Inject <meta name="robots" content="noindex"> while this component is mounted. */
@@ -24,9 +36,6 @@ function useNoIndex() {
   }, [])
 }
 
-/**
- * Client-side email format check that mirrors the server's normalizeEmail rules.
- */
 function isValidEmailFormat(raw: string): boolean {
   const trimmed = raw.trim()
   if (!/^[\x00-\x7F]*$/.test(trimmed)) return false
@@ -42,30 +51,17 @@ function isValidEmailFormat(raw: string): boolean {
   return labels.every((l) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(l))
 }
 
-// ── Email input form ──────────────────────────────────────────────────────────
+// ── Email input form ──────────────────────────────────────────────────────
 
-function EmailInputForm({
-  error,
-  onSubmit,
-}: {
-  error: string | null
-  onSubmit: (email: string) => void
-}) {
+function EmailInputForm({ error, onSubmit }: { error: string | null; onSubmit: (e: string) => void }) {
   const [email, setEmail] = useState('')
   return (
     <section className="admin-signin">
       <h1>Nhập email quản trị</h1>
-      {error && (
-        <p className="admin-signin-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <p className="admin-signin-error" role="alert">{error}</p>}
       <form
         className="admin-form"
-        onSubmit={(e) => {
-          e.preventDefault()
-          onSubmit(email.trim().toLowerCase())
-        }}
+        onSubmit={(e) => { e.preventDefault(); onSubmit(email.trim().toLowerCase()) }}
       >
         <label>
           Email <span aria-hidden="true">*</span>
@@ -86,37 +82,34 @@ function EmailInputForm({
   )
 }
 
-// ── Section tabs ──────────────────────────────────────────────────────────────
+// ── Section tabs ──────────────────────────────────────────────────────────
 
-type Section = 'teachers' | 'bulk' | 'wishes' | 'images' | 'admins'
+type Section = 'moderation' | 'templates' | 'teachers' | 'wishes' | 'images' | 'admins'
 
 const SECTION_LABELS: Record<Section, string> = {
-  teachers: 'Thiệp',
-  bulk: 'Tạo hàng loạt',
+  moderation: 'Duyệt thiệp',
+  templates: 'Mẫu thiệp',
+  teachers: 'Thầy cô',
   wishes: 'Thư viện lời chúc',
   images: 'Thư viện ảnh',
   admins: 'Quản trị viên',
 }
 
-// ── Main admin page ───────────────────────────────────────────────────────────
+// ── Main admin page ───────────────────────────────────────────────────────
 
 export default function Admin() {
   useNoIndex()
 
-  const [adminEmail, setAdminEmailState] = useState<string | null>(
-    () => getAdminEmail(),
-  )
+  const [adminEmail, setAdminEmailState] = useState<string | null>(() => getAdminEmail())
   const [emailError, setEmailError] = useState<string | null>(null)
   const [verified, setVerified] = useState(false)
   const [checking, setChecking] = useState(false)
 
-  // Teachers state: loaded on verification (1 API call on page load).
-  const [teachers, setTeachers] = useState<TeacherRow[]>([])
+  const [teachers, setTeachers] = useState<AdminTeacher[]>([])
+  const [pendingCount, setPendingCount] = useState(0)
 
-  // Active section tab
-  const [section, setSection] = useState<Section>('teachers')
+  const [section, setSection] = useState<Section>('moderation')
 
-  // ── Error handler ────────────────────────────────────────────────────────
   const handleAccessError = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError) {
       if (e.status === 401) {
@@ -128,23 +121,24 @@ export default function Admin() {
         setTeachers([])
         return true
       }
-      if (e.status === 403) {
-        return true
-      }
+      if (e.status === 403) return true
     }
     return false
   }, [])
 
-  // ── Verification effect ───────────────────────────────────────────────────
+  // Auth verification: load teachers list (1 API call)
   useEffect(() => {
     if (!adminEmail || verified) return
     let cancelled = false
     setChecking(true)
     setEmailError(null)
-    listTeachers()
+    listAdminTeachers()
       .then((ts) => {
         if (cancelled) return
         setTeachers(ts)
+        // Count pending from card counts across all teachers
+        const pending = ts.reduce((sum, t) => sum + t.cardCounts.pending, 0)
+        setPendingCount(pending)
         setVerified(true)
       })
       .catch((e) => {
@@ -161,18 +155,13 @@ export default function Admin() {
     return () => { cancelled = true }
   }, [adminEmail, verified])
 
-  // ── Email form submit ────────────────────────────────────────────────────
   function handleEmailSubmit(email: string) {
-    if (!isValidEmailFormat(email)) {
-      setEmailError('Email không hợp lệ')
-      return
-    }
+    if (!isValidEmailFormat(email)) { setEmailError('Email không hợp lệ'); return }
     setAdminEmail(email)
     setAdminEmailState(email)
     setEmailError(null)
   }
 
-  // ── Sign-out ─────────────────────────────────────────────────────────────
   function handleSignOut() {
     clearAdminEmail()
     setAdminEmailState(null)
@@ -180,57 +169,59 @@ export default function Admin() {
     setChecking(false)
     setEmailError(null)
     setTeachers([])
-    setSection('teachers')
+    setSection('moderation')
   }
 
-  // ── Pre-verification states ───────────────────────────────────────────────
   if (!adminEmail || !verified) {
     if (checking) {
-      return (
-        <section className="admin-signin">
-          <p>Đang kiểm tra…</p>
-        </section>
-      )
+      return <section className="admin-signin"><p>Đang kiểm tra…</p></section>
     }
     return <EmailInputForm error={emailError} onSubmit={handleEmailSubmit} />
   }
 
-  // ── Admin shell ───────────────────────────────────────────────────────────
   return (
     <section className="admin-page">
       <div className="admin-header">
         <h1>Quản lý thiệp</h1>
         <div className="admin-header-actions">
-          <button onClick={handleSignOut} className="btn-ghost">Đổi email</button>
+          <button type="button" onClick={handleSignOut} className="btn-ghost">Đổi email</button>
         </div>
       </div>
 
-      {/* Section tabs */}
       <nav className="admin-tabs" aria-label="Điều hướng quản trị">
-        {(Object.keys(SECTION_LABELS) as Section[]).map((s) => (
+        {(Object.entries(SECTION_LABELS) as [Section, string][]).map(([s, label]) => (
           <button
             key={s}
+            type="button"
             onClick={() => setSection(s)}
             className={`tab-btn${section === s ? ' tab-btn--active' : ''}`}
             aria-current={section === s ? 'page' : undefined}
           >
-            {SECTION_LABELS[s]}
+            {label}
+            {s === 'moderation' && pendingCount > 0 && (
+              <span className="pending-badge" aria-hidden="true">{pendingCount}</span>
+            )}
           </button>
         ))}
       </nav>
 
       <div className="admin-section-content">
+        {section === 'moderation' && (
+          <ModerationSection
+            teachers={teachers}
+            pendingCount={pendingCount}
+            onPendingCountChange={(delta) => setPendingCount((n) => Math.max(0, n + delta))}
+            onAccessError={handleAccessError}
+          />
+        )}
+        {section === 'templates' && (
+          <TemplateSection onAccessError={handleAccessError} />
+        )}
         {section === 'teachers' && (
           <TeachersSection
             teachers={teachers}
             onTeachersChange={(updater) => setTeachers((ts) => updater(ts))}
             onAccessError={handleAccessError}
-          />
-        )}
-        {section === 'bulk' && (
-          <BulkCreate
-            onAccessError={handleAccessError}
-            onTeachersCreated={(newTeachers) => setTeachers((ts) => [...ts, ...newTeachers])}
           />
         )}
         {section === 'wishes' && (

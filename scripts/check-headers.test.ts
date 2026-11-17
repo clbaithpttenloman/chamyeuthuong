@@ -3,22 +3,18 @@
  *
  * Key focus: the strict CSP (no Google origins), the rejection of any
  * accounts.google.com occurrence, and wildcard rejection in key directives.
+ * Also enforces the site-wide X-Robots-Tag: noindex on /* (plan § Amendments).
  */
 import { describe, expect, it } from 'vitest'
 import { checkHeaders } from './check-headers.ts'
 
-// ── Valid baseline (strict CSP — no Google origins) ───────────────────────────
+// ── Valid baseline (strict CSP — no Google origins, X-Robots-Tag on /*) ──────
 
 const VALID = `/*
   Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors 'none'
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
-
-/admin
-  X-Robots-Tag: noindex
-
-/t/*
   X-Robots-Tag: noindex
 `
 
@@ -51,6 +47,12 @@ describe('checkHeaders', () => {
     const content = VALID.replace('X-Frame-Options: DENY\n', '')
     const errors = checkHeaders(content)
     expect(errors.some((e) => e.includes('X-Frame-Options'))).toBe(true)
+  })
+
+  it('reports missing X-Robots-Tag: noindex', () => {
+    const content = VALID.replace('  X-Robots-Tag: noindex\n', '')
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('X-Robots-Tag'))).toBe(true)
   })
 
   // ── accounts.google.com rejection ────────────────────────────────────────

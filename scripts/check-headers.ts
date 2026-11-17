@@ -22,9 +22,7 @@ const REQUIRED_LINES: readonly string[] = [
   'Referrer-Policy: no-referrer',
   'X-Content-Type-Options: nosniff',
   'X-Frame-Options: DENY',
-  // noindex sections
-  '/admin',
-  '/t/*',
+  // Site-wide noindex (plan § Amendments: single X-Robots-Tag: noindex on /*)
   'X-Robots-Tag: noindex',
 ]
 
