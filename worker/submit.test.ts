@@ -490,3 +490,39 @@ describe('POST /api/cards — security headers', () => {
     expect(r.headers.get('X-Robots-Tag')).toBe('noindex')
   })
 })
+
+describe('POST /api/cards — more invisible and malformed characters (security review suggestion)', () => {
+  let db: D1
+  beforeEach(() => { db = testDb().db })
+  const cases: Array<[string, string]> = [
+    ['line separator U+2028', 'a\u2028b'],
+    ['paragraph separator U+2029', 'a\u2029b'],
+    ['Arabic letter mark U+061C', 'a\u061Cb'],
+    ['soft hyphen U+00AD', 'a\u00ADb'],
+    ['combining grapheme joiner U+034F', 'a\u034Fb'],
+    ['Mongolian vowel separator U+180E', 'a\u180Eb'],
+    ['Hangul filler U+3164 (renders blank)', '\u3164\u3164'],
+    ['halfwidth Hangul filler U+FFA0', '\uFFA0'],
+    ['tag character U+E0041', 'a\u{E0041}b'],
+  ]
+  for (const [label, text] of cases) {
+    it(`rejects ${label} in the message`, async () => {
+      const { tmplId } = await seedTeacherAndTemplate(db)
+      const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: text }), makeEnv(db))
+      expect(r.status).toBe(400)
+    })
+  }
+  it('rejects a lone surrogate with 400 (not a database error)', async () => {
+    const { tmplId } = await seedTeacherAndTemplate(db)
+    const raw = `{"teacherPublicId":"${VALID_PUBLIC_ID}","templateId":${tmplId},"message":"hi \\ud800 there"}`
+    const r = await handleSubmit(new Request('https://x/api/cards', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '1.2.3.4' }, body: raw,
+    }), makeEnv(db))
+    expect(r.status).toBe(400)
+  })
+  it('accepts Vietnamese text with emoji, including ZWJ sequences (👩‍🏫) and variation selectors (❤️)', async () => {
+    const { tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'Chúc cô 20/11 vui vẻ 🌸💐 👩\u200D🏫 ❤\uFE0F' }), makeEnv(db))
+    expect(r.status).toBe(201)
+  })
+})

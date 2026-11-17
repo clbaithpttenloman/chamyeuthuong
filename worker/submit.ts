@@ -18,10 +18,15 @@ import {
 } from '../shared/api.ts'
 import type { Env } from './types.ts'
 
-/** Reject C0 (except \n), C1, and Unicode format/bidi/zero-width characters. */
-const REJECT_MSG_RE = /[\x00-\x09\x0B-\x1F\x7F\x80-\x9F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/
+// Invisible or text-direction characters that could hide or disguise content. U+200D (zero-width joiner)
+// and variation selectors are allowed because emoji such as 👩‍🏫 and ❤️ need them.
+const INVISIBLE = '\\u00AD\\u034F\\u061C\\u180E\\u200B\\u200C\\u200E\\u200F\\u2028\\u2029\\u202A-\\u202E\\u2060-\\u2069\\u3164\\uFEFF\\uFFA0'
+const REJECT_MSG_RE = new RegExp(`[\\x00-\\x09\\x0B-\\x1F\\x7F\\x80-\\x9F${INVISIBLE}]|[\\u{E0000}-\\u{E007F}]`, 'u')
 /** Reject all control characters and format characters in name/class fields. */
-const REJECT_NAME_RE = /[\x00-\x1F\x7F\x80-\x9F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/
+const REJECT_NAME_RE = new RegExp(`[\\x00-\\x1F\\x7F\\x80-\\x9F${INVISIBLE}]|[\\u{E0000}-\\u{E007F}]`, 'u')
+
+/** A high surrogate not followed by a low one, or a low surrogate not preceded by a high one. */
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 /** Known top-level keys in the submit body. */
 const KNOWN_KEYS = new Set(['teacherPublicId', 'templateId', 'message', 'fromName', 'fromClass', 'anonymous'])
@@ -101,6 +106,8 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
   if ([...rawFromClass].length > MAX_FROM_CLASS) return error('bad_request')
 
   // 11. Control / format character rejection
+  // Lone surrogates are not valid Unicode text and can fail at the database layer.
+  if ([rawMessage, rawFromName, rawFromClass].some((v) => LONE_SURROGATE_RE.test(v))) return error('bad_request')
   if (REJECT_MSG_RE.test(rawMessage)) return error('bad_request')
   if (REJECT_NAME_RE.test(rawFromName)) return error('bad_request')
   if (REJECT_NAME_RE.test(rawFromClass)) return error('bad_request')
