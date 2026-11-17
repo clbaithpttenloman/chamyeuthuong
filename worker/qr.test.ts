@@ -14,7 +14,7 @@ import { handleQr } from './qr.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 
-const VALID_TOKEN = 'tok1234567890ab'
+const VALID_TOKEN = 'tok1234567890abc'
 
 function makeEnv(db: D1, opts: { cardIpLimit?: boolean } = {}) {
   return {
@@ -33,7 +33,7 @@ function makeEnv(db: D1, opts: { cardIpLimit?: boolean } = {}) {
 async function seedTeacher(db: D1, opts: { token?: string; publicId?: string } = {}) {
   const now = new Date().toISOString()
   const tok = opts.token ?? VALID_TOKEN
-  const pubId = opts.publicId ?? 'pub1234567890ab'
+  const pubId = opts.publicId ?? 'pub1234567890abc'
   await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
     .bind(tok, 'Teacher', 'Math', now).run()
   const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind(tok).first<{ id: number }>())!.id
@@ -64,7 +64,7 @@ describe('GET /api/qr/:token — happy path', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'Chúc mừng!', '', '', 0, 'approved', now).run()
+      .bind('crd1234567890abc', tid, tmplId, 'Chúc mừng!', '', '', 0, 'approved', now).run()
 
     const r = await handleQr(
       new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
@@ -139,7 +139,7 @@ describe('GET /api/qr/:token — hidden/pending cards never chosen', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('pnd1234567890ab', tid, tmplId, 'Pending!', '', '', 0, 'pending', now).run()
+      .bind('pnd1234567890abc', tid, tmplId, 'Pending!', '', '', 0, 'pending', now).run()
     const r = await handleQr(
       new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -154,7 +154,7 @@ describe('GET /api/qr/:token — hidden/pending cards never chosen', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('hid1234567890ab', tid, tmplId, 'Hidden!', '', '', 0, 'hidden', now).run()
+      .bind('hid1234567890abc', tid, tmplId, 'Hidden!', '', '', 0, 'hidden', now).run()
     const r = await handleQr(
       new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),

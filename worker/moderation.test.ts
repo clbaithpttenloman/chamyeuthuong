@@ -61,10 +61,10 @@ beforeEach(async () => {
   await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)').bind(TEST_EMAIL, now, 'seed').run()
 
   // Seed teacher + profile + template
-  await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890ab', 'Teacher', 'Math', now).run()
-  tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890ab').first<{ id: number }>())!.id
+  await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'Teacher', 'Math', now).run()
+  tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
   await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
-  await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890ab', '', 1).run()
+  await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890abc', '', 1).run()
   await db.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, TEST_EMAIL).run()
   tmplId = (await db.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
 })
@@ -111,7 +111,7 @@ describe('GET /api/admin/cards', () => {
 
   it('response includes raw fromName, fromClass, anonymous, teacher, template', async () => {
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'Secret msg', 'Học sinh A', '12A1', 0, 'pending', new Date().toISOString()).run()
+      .bind('crd1234567890abc', tid, tmplId, 'Secret msg', 'Học sinh A', '12A1', 0, 'pending', new Date().toISOString()).run()
     const r = await handleModeration(req('GET', '/api/admin/cards?status=pending'), makeEnv(db), TEST_EMAIL)
     const list = await r.json() as Array<Record<string, unknown>>
     expect(list).toHaveLength(1)
@@ -134,7 +134,7 @@ describe('GET /api/admin/cards', () => {
     await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid2, 'pub9876543210ab', '', 1).run()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
       .bind('crd9876543210ab', tid2, tmplId, 'Other msg', '', '', 0, 'pending', now).run()
-    await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
 
     const r = await handleModeration(req('GET', `/api/admin/cards?status=pending&teacher=${tid}`), makeEnv(db), TEST_EMAIL)
     const list = await r.json() as Array<{ id: number }>
@@ -193,7 +193,7 @@ describe('GET /api/admin/cards — paging cursors', () => {
 
 describe('PUT /api/admin/cards/:id', () => {
   it('approve a pending card → status=approved, reviewedAt set, reviewedBy set', async () => {
-    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
     const r = await handleModeration(req('PUT', `/api/admin/cards/${id}`, { status: 'approved' }), makeEnv(db), TEST_EMAIL)
     expect(r.status).toBe(200)
     const row = await db.prepare('SELECT status, reviewed_at, reviewed_by FROM student_card WHERE id=?').bind(id).first<{ status: string; reviewed_at: string; reviewed_by: string }>()
@@ -203,7 +203,7 @@ describe('PUT /api/admin/cards/:id', () => {
   })
 
   it('hide a card → status=hidden', async () => {
-    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
     const r = await handleModeration(req('PUT', `/api/admin/cards/${id}`, { status: 'hidden' }), makeEnv(db), TEST_EMAIL)
     expect(r.status).toBe(200)
     const row = await db.prepare('SELECT status FROM student_card WHERE id=?').bind(id).first<{ status: string }>()
@@ -211,7 +211,7 @@ describe('PUT /api/admin/cards/:id', () => {
   })
 
   it('invalid status → 400', async () => {
-    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
     const r = await handleModeration(req('PUT', `/api/admin/cards/${id}`, { status: 'published' }), makeEnv(db), TEST_EMAIL)
     expect(r.status).toBe(400)
   })
@@ -227,7 +227,7 @@ describe('PUT /api/admin/cards/:id', () => {
 describe('POST /api/admin/cards/review — bulk (json_each, max 200 ids)', () => {
   it('bulk approve 3 cards at once', async () => {
     const ids = await Promise.all([
-      seedCard({ status: 'pending', publicId: 'crd1234567890ab' }),
+      seedCard({ status: 'pending', publicId: 'crd1234567890abc' }),
       seedCard({ status: 'pending', publicId: 'crd2345678901bc' }),
       seedCard({ status: 'pending', publicId: 'crd3456789012cd' }),
     ])
@@ -246,7 +246,7 @@ describe('POST /api/admin/cards/review — bulk (json_each, max 200 ids)', () =>
 
   it('bulk hide 3 cards at once', async () => {
     const ids = await Promise.all([
-      seedCard({ status: 'pending', publicId: 'crd1234567890ab' }),
+      seedCard({ status: 'pending', publicId: 'crd1234567890abc' }),
       seedCard({ status: 'pending', publicId: 'crd2345678901bc' }),
       seedCard({ status: 'pending', publicId: 'crd3456789012cd' }),
     ])
@@ -279,7 +279,7 @@ describe('POST /api/admin/cards/review — bulk (json_each, max 200 ids)', () =>
   })
 
   it('ids must be unique positive integers — duplicate ids → 400', async () => {
-    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
     const r = await handleModeration(
       req('POST', '/api/admin/cards/review', { ids: [id, id], status: 'approved' }),
       makeEnv(db), TEST_EMAIL,
@@ -313,7 +313,7 @@ describe('POST /api/admin/cards/review — bulk (json_each, max 200 ids)', () =>
   })
 
   it('invalid status → 400', async () => {
-    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
     const r = await handleModeration(
       req('POST', '/api/admin/cards/review', { ids: [id], status: 'pending' }),
       makeEnv(db), TEST_EMAIL,
@@ -326,7 +326,7 @@ describe('POST /api/admin/cards/review — bulk (json_each, max 200 ids)', () =>
 
 describe('DELETE /api/admin/cards/:id', () => {
   it('deletes a card → 200, row gone', async () => {
-    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890ab' })
+    const id = await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })
     const r = await handleModeration(req('DELETE', `/api/admin/cards/${id}`), makeEnv(db), TEST_EMAIL)
     expect(r.status).toBe(200)
     const row = await db.prepare('SELECT id FROM student_card WHERE id=?').bind(id).first()

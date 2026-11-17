@@ -10,7 +10,7 @@
  * Never echoes the submitted card or logs student text.
  */
 import { error, json } from './http.ts'
-import { newToken } from './token.ts'
+import { isToken, newToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
 import {
   MAX_MESSAGE, MAX_FROM_NAME, MAX_FROM_CLASS, MAX_NEWLINES,
@@ -77,10 +77,10 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
   // 6. anonymous must be boolean if present
   if ('anonymous' in body2 && typeof body2.anonymous !== 'boolean') return error('bad_request')
 
-  // 7. teacherPublicId: must be lowercase alnum (rejects 'BAD!!' and similar); isToken not used
+  // 7. teacherPublicId must have the exact token shape before any DB statement
   //    here because test seed public_ids are 15 chars; production tokens are 16.
   const teacherPublicId = typeof body2.teacherPublicId === 'string' ? body2.teacherPublicId : ''
-  if (!/^[a-z0-9]{1,32}$/.test(teacherPublicId)) return error('bad_request')
+  if (!isToken(teacherPublicId)) return error('bad_request')
 
   // 8. templateId must be a number
   if (typeof body2.templateId !== 'number' || !Number.isInteger(body2.templateId) || body2.templateId < 1) {

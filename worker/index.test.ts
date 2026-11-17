@@ -30,7 +30,7 @@ type Env = {
 
 function makeEnv(): Env {
   return {
-    DB: {} as never,
+    DB: testDb().db as never, // real schema so routes hit real handlers (no error-swallowing)
     ASSETS: { fetch: async () => new Response('asset') },
     PUBLIC_IP_LIMIT: { limit: async () => ({ success: true }) },
     SUBMIT_IP_LIMIT: { limit: async () => ({ success: true }) },

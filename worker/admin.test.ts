@@ -693,8 +693,8 @@ describe('worker routing', () => {
     // We seed a teacher+card to prove the difference.
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
-    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890ab', 'T', '', now).run()
-    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890ab').first<{ id: number }>())!.id
+    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
+    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
     void tid // a known teacher token must not resurrect the removed /api/card route
     const r = await worker.fetch(
       new Request('https://x/api/card/tok1234567890ab', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),

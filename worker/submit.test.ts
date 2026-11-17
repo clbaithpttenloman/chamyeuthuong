@@ -20,8 +20,8 @@ import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 import { newToken } from './token.ts'
 
-const VALID_PUBLIC_ID = 'pub1234567890ab'
-const VALID_TOKEN = 'tok1234567890ab'
+const VALID_PUBLIC_ID = 'pub1234567890abc'
+const VALID_TOKEN = 'tok1234567890abc'
 
 function makeEnv(db: D1, opts: { submitIpLimit?: boolean } = {}) {
   return {

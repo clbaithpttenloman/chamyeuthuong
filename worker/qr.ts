@@ -7,6 +7,7 @@
  * Replaces the old GET /api/card/:token endpoint.
  */
 import { error, json } from './http.ts'
+import { isToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
 import { formatFrom } from '../shared/api.ts'
 import type { Env } from './types.ts'
@@ -25,7 +26,7 @@ export async function handleQr(request: Request, env: Env): Promise<Response> {
   const segments = new URL(request.url).pathname.split('/')
   // Expect: ['', 'api', 'qr', '<token>'] (length 4)
   const token = segments.length === 4 ? segments[3] ?? '' : ''
-  if (!/^[a-z0-9]{1,32}$/.test(token)) return error('not_found')
+  if (!isToken(token)) return error('not_found')
 
   // 4. ensureSchema then DB
   await ensureSchema(env.DB)

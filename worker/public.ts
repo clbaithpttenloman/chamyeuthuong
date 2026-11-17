@@ -11,6 +11,7 @@
  * Never logs student text. Options → 405 (no CORS headers).
  */
 import { error, json } from './http.ts'
+import { isToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
 import { formatFrom } from '../shared/api.ts'
 import type { Env } from './types.ts'
@@ -238,42 +239,28 @@ export async function handlePublic(request: Request, env: Env): Promise<Response
   // 2. Route — isToken check before ensureSchema/DB where applicable
   if (pathname === '/api/wall') {
     if (method !== 'GET') return error('method')
-    try {
-      await ensureSchema(env.DB)
-      return await handleWall(env.DB)
-    } catch {
-      // DB unavailable: return empty wall (graceful degradation for routing tests)
-      return json({ teachers: [], latest: [], totals: { teachers: 0, cards: 0 } })
-    }
+    await ensureSchema(env.DB)
+    return handleWall(env.DB)
   }
 
   if (pathname.startsWith('/api/teachers/')) {
     if (method !== 'GET') return error('method')
     const publicId = pathname.slice('/api/teachers/'.length)
-    // Use loose check (test tokens are 15 chars; production are 16); rejects 'BAD!!' etc.
-    if (!/^[a-z0-9]{1,32}$/.test(publicId)) return error('not_found')
+    if (!isToken(publicId)) return error('not_found')
     await ensureSchema(env.DB)
     return handleTeacherPage(env.DB, publicId)
   }
 
   if (pathname === '/api/templates') {
     if (method !== 'GET') return error('method')
-    try {
-      await ensureSchema(env.DB)
-      return await handleTemplateList(env.DB)
-    } catch {
-      return json([])
-    }
+    await ensureSchema(env.DB)
+    return handleTemplateList(env.DB)
   }
 
   if (pathname === '/api/wishes') {
     if (method !== 'GET') return error('method')
-    try {
-      await ensureSchema(env.DB)
-      return await handleWishes(env.DB)
-    } catch {
-      return json([])
-    }
+    await ensureSchema(env.DB)
+    return handleWishes(env.DB)
   }
   return error('not_found')
 }

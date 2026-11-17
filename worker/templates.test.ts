@@ -57,8 +57,8 @@ async function seedImage(db: D1, token = 'imgabc1234567890') {
 async function seedTeacher(db: D1) {
   const now = new Date().toISOString()
   await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
-    .bind('tok1234567890ab', 'Teacher', 'Math', now).run()
-  return (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890ab').first<{ id: number }>())!.id
+    .bind('tok1234567890abc', 'Teacher', 'Math', now).run()
+  return (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
 }
 
 let db: D1
@@ -274,7 +274,7 @@ describe('DELETE /api/admin/templates/:id', () => {
     const tid = await seedTeacher(db)
     await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
     await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)')
-      .bind(tid, 'pub1234567890ab', '', 1).run()
+      .bind(tid, 'pub1234567890abc', '', 1).run()
 
     const created = await (
       await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
@@ -282,7 +282,7 @@ describe('DELETE /api/admin/templates/:id', () => {
 
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, created.id, 'msg', '', '', 0, 'pending', now).run()
+      .bind('crd1234567890abc', tid, created.id, 'msg', '', '', 0, 'pending', now).run()
 
     const r = await handleTemplates(
       req('DELETE', `/api/admin/templates/${created.id}`),

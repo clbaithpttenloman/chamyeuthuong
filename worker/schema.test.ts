@@ -79,7 +79,7 @@ describe('ensureSchema — idempotency', () => {
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
       .prepare(
-        "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890ab', 'T', 'S', datetime('now'))",
+        "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890abc', 'T', 'S', datetime('now'))",
       )
       .run()
     const before = (
@@ -98,7 +98,7 @@ describe('ensureSchema — idempotency', () => {
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
       .prepare(
-        "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890ab', 'T', 'S', datetime('now'))",
+        "INSERT INTO teacher (token, name, subject, created_at) VALUES ('tok1234567890abc', 'T', 'S', datetime('now'))",
       )
       .run()
     // Re-run every SCHEMA statement — IF NOT EXISTS → no structural change
@@ -259,7 +259,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.gif','image/gif',100,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.gif','image/gif',100,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).toThrow()
@@ -270,7 +270,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.svg','image/svg+xml',100,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.svg','image/svg+xml',100,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).toThrow()
@@ -281,7 +281,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.png','image/png',100,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.png','image/png',100,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).not.toThrow()
@@ -292,7 +292,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.webp','image/webp',100,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.webp','image/webp',100,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).not.toThrow()
@@ -303,7 +303,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.png','image/png',0,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.png','image/png',0,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).toThrow()
@@ -314,7 +314,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.png','image/png',307201,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.png','image/png',307201,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).toThrow()
@@ -325,7 +325,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.png','image/png',1,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.png','image/png',1,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).not.toThrow()
@@ -336,7 +336,7 @@ describe('image table CHECK constraints', () => {
     expect(() => {
       sqlite
         .prepare(
-          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890ab','t.webp','image/webp',307200,'data','2024-01-01','a@b.com')",
+          "INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('tok1234567890abc','t.webp','image/webp',307200,'data','2024-01-01','a@b.com')",
         )
         .run()
     }).not.toThrow()
@@ -415,10 +415,10 @@ describe('teacher_title CHECK and FK constraints', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')")
       .run()
     const tid = (
-      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }
     ).id
     expect(() => {
       sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'Thầy')`).run()
@@ -429,10 +429,10 @@ describe('teacher_title CHECK and FK constraints', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')")
       .run()
     const tid = (
-      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }
     ).id
     expect(() => {
       sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'Cô')`).run()
@@ -443,10 +443,10 @@ describe('teacher_title CHECK and FK constraints', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')")
       .run()
     const tid = (
-      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }
     ).id
     expect(() => {
       sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'thầy')`).run()
@@ -457,10 +457,10 @@ describe('teacher_title CHECK and FK constraints', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')")
       .run()
     const tid = (
-      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }
     ).id
     expect(() => {
       sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, '')`).run()
@@ -471,10 +471,10 @@ describe('teacher_title CHECK and FK constraints', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite
-      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')")
+      .prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')")
       .run()
     const tid = (
-      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }
+      sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }
     ).id
     sqlite.prepare(`INSERT INTO teacher_title (teacher_id, title) VALUES (${tid}, 'Thầy')`).run()
     sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
@@ -583,28 +583,28 @@ describe('teacher_profile table constraints (failing until Group 2)', () => {
   it('show_on_home CHECK accepts 0 and 1', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890ab', '', 1)`).run()
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890abc', '', 1)`).run()
     }).not.toThrow()
   })
 
   it('show_on_home CHECK rejects 2', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890ab', '', 2)`).run()
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890abc', '', 2)`).run()
     }).toThrow()
   })
 
   it('public_id UNIQUE constraint enforced', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const t1 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const t1 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok9876543210ab','T2','','2024-01-01')").run()
     const t2 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok9876543210ab') as { id: number }).id
     sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${t1}, 'samepublicid001', '', 1)`).run()
@@ -616,9 +616,9 @@ describe('teacher_profile table constraints (failing until Group 2)', () => {
   it('deleting a teacher cascades to teacher_profile row', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
-    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890ab', '', 1)`).run()
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
+    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890abc', '', 1)`).run()
     sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
     const row = sqlite.prepare(`SELECT * FROM teacher_profile WHERE teacher_id=${tid}`).get()
     expect(row).toBeUndefined()
@@ -724,8 +724,8 @@ describe('student_card table constraints (failing until Group 2)', () => {
   it('status CHECK accepts pending, approved, hidden', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
     for (const status of ['pending', 'approved', 'hidden']) {
@@ -739,47 +739,47 @@ describe('student_card table constraints (failing until Group 2)', () => {
   it('status CHECK rejects unknown status', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',0,'published','2024-01-01')`).run()
+      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890abc',${tid},${tmplId},'msg','','',0,'published','2024-01-01')`).run()
     }).toThrow()
   })
 
   it('message length CHECK rejects length 0', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'','','',0,'pending','2024-01-01')`).run()
+      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890abc',${tid},${tmplId},'','','',0,'pending','2024-01-01')`).run()
     }).toThrow()
   })
 
   it('anonymous CHECK rejects value 2', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',2,'pending','2024-01-01')`).run()
+      sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890abc',${tid},${tmplId},'msg','','',2,'pending','2024-01-01')`).run()
     }).toThrow()
   })
 
   it('template FK ON DELETE RESTRICT — cannot delete template with cards', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
-    sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',0,'pending','2024-01-01')`).run()
+    sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890abc',${tid},${tmplId},'msg','','',0,'pending','2024-01-01')`).run()
     expect(() => {
       sqlite.prepare(`DELETE FROM template WHERE id=${tmplId}`).run()
     }).toThrow()
@@ -788,11 +788,11 @@ describe('student_card table constraints (failing until Group 2)', () => {
   it('teacher FK ON DELETE CASCADE — deleting teacher cascades to student_card', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890ab','T','','2024-01-01')").run()
-    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890ab') as { id: number }).id
+    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
+    const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
-    sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890ab',${tid},${tmplId},'msg','','',0,'pending','2024-01-01')`).run()
+    sqlite.prepare(`INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES ('pub1234567890abc',${tid},${tmplId},'msg','','',0,'pending','2024-01-01')`).run()
     sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
     const rows = sqlite.prepare(`SELECT * FROM student_card WHERE teacher_id=${tid}`).all()
     expect(rows).toHaveLength(0)

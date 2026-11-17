@@ -15,7 +15,7 @@ import { handlePublic } from './public.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 
-const VALID_PUBLIC_ID = 'pub1234567890ab'
+const VALID_PUBLIC_ID = 'pub1234567890abc'
 
 function makeEnv(db: D1, opts: { publicIpLimit?: boolean } = {}) {
   return {
@@ -98,7 +98,7 @@ describe('GET /api/wall', () => {
 
   it('only teachers with show_on_home=1 appear in teachers list', async () => {
     await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
-    await seedTeacher(db, { publicId: 'hid1234567890ab', showOnHome: 0, title: 'Cô' })
+    await seedTeacher(db, { publicId: 'hid1234567890abc', showOnHome: 0, title: 'Cô' })
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -128,9 +128,9 @@ describe('GET /api/wall', () => {
   it('cardCount reflects approved cards only (not pending or hidden)', async () => {
     const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, title: 'Thầy', showOnHome: 1 })
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tid, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tid, tmplId, 'crd1234567890abc')
     await seedApprovedCard(db, tid, tmplId, 'crd2345678901ab')
-    await seedPendingCard(db, tid, tmplId, 'pnd1234567890ab')
+    await seedPendingCard(db, tid, tmplId, 'pnd1234567890abc')
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -158,7 +158,7 @@ describe('GET /api/wall', () => {
   it('latest items include teacher ref { publicId, title, name }', async () => {
     const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, title: 'Thầy', showOnHome: 1 })
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tid, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tid, tmplId, 'crd1234567890abc')
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -174,9 +174,9 @@ describe('GET /api/wall', () => {
   })
 
   it('latest: hidden teacher (show_on_home=0) cards do NOT appear', async () => {
-    const { tid } = await seedTeacher(db, { publicId: 'hid1234567890ab', showOnHome: 0, title: 'Cô' })
+    const { tid } = await seedTeacher(db, { publicId: 'hid1234567890abc', showOnHome: 0, title: 'Cô' })
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tid, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tid, tmplId, 'crd1234567890abc')
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -188,7 +188,7 @@ describe('GET /api/wall', () => {
   it('latest: pending cards do NOT appear', async () => {
     const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
     const tmplId = await seedTemplate(db)
-    await seedPendingCard(db, tid, tmplId, 'pnd1234567890ab')
+    await seedPendingCard(db, tid, tmplId, 'pnd1234567890abc')
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -199,7 +199,7 @@ describe('GET /api/wall', () => {
 
   it('totals.teachers counts only show_on_home=1', async () => {
     await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
-    await seedTeacher(db, { publicId: 'hid1234567890ab', showOnHome: 0, title: 'Cô' })
+    await seedTeacher(db, { publicId: 'hid1234567890abc', showOnHome: 0, title: 'Cô' })
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -210,9 +210,9 @@ describe('GET /api/wall', () => {
 
   it('totals.cards counts approved cards from show_on_home=1 teachers only', async () => {
     const { tid: t1 } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
-    const { tid: t2 } = await seedTeacher(db, { publicId: 'hid1234567890ab', showOnHome: 0, title: 'Cô' })
+    const { tid: t2 } = await seedTeacher(db, { publicId: 'hid1234567890abc', showOnHome: 0, title: 'Cô' })
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, t1, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, t1, tmplId, 'crd1234567890abc')
     await seedApprovedCard(db, t2, tmplId, 'crd2345678901ab')
     const r = await handlePublic(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
@@ -249,7 +249,7 @@ describe('GET /api/teachers/:publicId', () => {
   it('valid teacher → { teacher: {...}, cards: [...], total }', async () => {
     const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, title: 'Thầy', showOnHome: 1 })
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tid, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tid, tmplId, 'crd1234567890abc')
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -269,7 +269,7 @@ describe('GET /api/teachers/:publicId', () => {
   it('teacher with show_on_home=0 is still reachable by publicId', async () => {
     const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 0, title: 'Thầy' })
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tid, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tid, tmplId, 'crd1234567890abc')
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -280,7 +280,7 @@ describe('GET /api/teachers/:publicId', () => {
   it('pending cards are not included (approved only)', async () => {
     const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, title: 'Thầy', showOnHome: 1 })
     const tmplId = await seedTemplate(db)
-    await seedPendingCard(db, tid, tmplId, 'pnd1234567890ab')
+    await seedPendingCard(db, tid, tmplId, 'pnd1234567890abc')
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -403,7 +403,7 @@ describe('PublicCard.from construction', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'msg', '', '', 1, 'approved', now).run()
+      .bind('crd1234567890abc', tid, tmplId, 'msg', '', '', 1, 'approved', now).run()
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -417,7 +417,7 @@ describe('PublicCard.from construction', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'msg', '', '12A1', 1, 'approved', now).run()
+      .bind('crd1234567890abc', tid, tmplId, 'msg', '', '12A1', 1, 'approved', now).run()
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -431,7 +431,7 @@ describe('PublicCard.from construction', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'msg', 'Học sinh A', '12A1', 0, 'approved', now).run()
+      .bind('crd1234567890abc', tid, tmplId, 'msg', 'Học sinh A', '12A1', 0, 'approved', now).run()
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -445,7 +445,7 @@ describe('PublicCard.from construction', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'msg', 'Học sinh A', '', 0, 'approved', now).run()
+      .bind('crd1234567890abc', tid, tmplId, 'msg', 'Học sinh A', '', 0, 'approved', now).run()
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -459,7 +459,7 @@ describe('PublicCard.from construction', () => {
     const tmplId = await seedTemplate(db)
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .bind('crd1234567890ab', tid, tmplId, 'msg', 'Hidden', '12B2', 0, 'approved', now).run()
+      .bind('crd1234567890abc', tid, tmplId, 'msg', 'Hidden', '12B2', 0, 'approved', now).run()
     const r = await handlePublic(
       new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv(db),
@@ -498,7 +498,7 @@ describe('Moderation invariant — no private QR token in any public response', 
       .bind(tB, 'leakpub000000002', '', 1).run()
 
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tA, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tA, tmplId, 'crd1234567890abc')
     await seedApprovedCard(db, tB, tmplId, 'crd2345678901bc')
 
     const wallRes = await handlePublic(
@@ -520,7 +520,7 @@ describe('Moderation invariant — no private QR token in any public response', 
     await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)')
       .bind(tid, 'leakpub000000003', '', 1).run()
     const tmplId = await seedTemplate(db)
-    await seedApprovedCard(db, tid, tmplId, 'crd1234567890ab')
+    await seedApprovedCard(db, tid, tmplId, 'crd1234567890abc')
 
     const res = await handlePublic(
       new Request('https://x/api/teachers/leakpub000000003', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
