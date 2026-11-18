@@ -1048,4 +1048,11 @@ describe('teacher role (chức vụ)', () => {
     const { created } = (await r.json()) as { created: AdminTeacher[] }
     expect(created.map((t) => t.role)).toEqual(['Giáo viên', 'Giáo viên'])
   })
+
+  it('update with a role on a teacher with no teacher_profile row → inserted with that role', async () => {
+    await db.prepare("INSERT INTO teacher (id, token, name, subject, created_at) VALUES (51, 'tok5134567890abc', 'Old', '', '2026-11-01')").run()
+    const r = await handleAdmin(adminReq('PUT', '/api/admin/teachers/51', { name: 'Old', role: 'Phó hiệu trưởng' }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as AdminTeacher).role).toBe('Phó hiệu trưởng')
+  })
 })

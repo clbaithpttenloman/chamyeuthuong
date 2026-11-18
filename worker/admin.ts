@@ -5,7 +5,7 @@
  *   teacher + teacher_title + teacher_profile created in one batch.
  *   Admin list uses LEFT JOINs so teachers without a profile still show.
  *
- * Bulk format: { items: [{ title, name, subject?, department? }] } (1–100 items).
+ * Bulk format: { items: [{ title, name, subject?, department? }] } (1–100 items; role ignored → Giáo viên).
  *
  * Routes to: handleTemplates, handleModeration, handleAdmins, handleImages, handleWishes,
  *            handleAbout / handleAdminAbout.

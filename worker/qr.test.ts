@@ -385,3 +385,13 @@ describe('GET /api/qr/:token — role', () => {
     expect(await get()).toBe('Phó hiệu trưởng')
   })
 })
+
+describe('GET /api/qr/:token — teacher without a teacher_profile row', () => {
+  it('role falls back to Giáo viên', async () => {
+    const { db } = testDb()
+    await db.prepare("INSERT INTO teacher (token, name, subject, created_at) VALUES (?, 'T', '', '2026-11-18')").bind(VALID_TOKEN).run()
+    const r = await handleQr(new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { teacher: { role: string } }).teacher.role).toBe('Giáo viên')
+  })
+})

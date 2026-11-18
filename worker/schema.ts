@@ -116,7 +116,9 @@ const UPGRADES: { needed(cols: Set<string>): boolean; sql: string[] }[] = [
     // plan 2026-11-18-privacy-about. SQLite cannot DROP a UNIQUE column, so copy the table.
     // Nothing references teacher_profile, so dropping it violates no foreign key.
     // The new table comes from the current DDL, so copied rows get role's default.
-    // `!role` guards against a stale probe re-running the copy and resetting role.
+    // `!role` stops the re-probe inside runUpgrades from repeating the copy. It cannot stop an
+    // isolate whose probe ran before another isolate's rebuild committed; that replay resets
+    // role to the default, which only matters if an admin set a role in that same instant.
     needed: (cols) => cols.has('public_id') && !cols.has('role'),
     sql: [
       TEACHER_PROFILE_DDL.replace('IF NOT EXISTS teacher_profile (', 'teacher_profile_new ('),
