@@ -535,3 +535,16 @@ describe('PUT /api/admin/about — validation (failing until Group 2)', () => {
     expect(r.status).toBe(405)
   })
 })
+
+describe('ABOUT_SEED content', () => {
+  it('uses the school name "Ten Lơ Man" (never "Tên Lơ Man")', async () => {
+    const { ABOUT_SEED } = await import('./aboutSeed.ts')
+    const text = JSON.stringify(ABOUT_SEED)
+    expect(text).toContain('THPT Ten Lơ Man')
+    expect(text).not.toContain('Tên Lơ Man')
+  })
+  it('every timeline step has a description', async () => {
+    const { ABOUT_SEED } = await import('./aboutSeed.ts')
+    for (const s of ABOUT_SEED.steps) expect(s.text.trim().length).toBeGreaterThan(0)
+  })
+})

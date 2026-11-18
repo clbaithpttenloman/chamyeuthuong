@@ -7,7 +7,7 @@
 import type { AboutContent } from '../shared/api.ts'
 
 export const ABOUT_SEED: AboutContent = {
-  heading: 'CLB AI - THPT Tên Lơ Man',
+  heading: 'CLB AI - THPT Ten Lơ Man',
   intro:
     'Các bạn học sinh CLB AI xây dựng trang này như một món quà cho ngày Nhà giáo Việt Nam 20/11.\n' +
     'Trí tuệ nhân tạo giúp viết code, nhưng tình cảm mới là điều tạo nên ý nghĩa thực sự.',
@@ -38,7 +38,7 @@ export const ABOUT_SEED: AboutContent = {
       title: 'Thiết kế thiệp',
       text: 'Năm bố cục, thư viện ảnh, thư viện lời chúc, tạo hàng loạt.',
     },
-    { when: '17/11/2026', title: 'Danh xưng Thầy/Cô', text: '' },
+    { when: '17/11/2026', title: 'Danh xưng Thầy/Cô', text: 'Thêm danh xưng Thầy hoặc Cô trước tên mọi thầy cô và trong lời chúc mẫu.' },
     {
       when: '17/11/2026',
       title: 'Nền tảng gửi thiệp',

@@ -82,7 +82,7 @@ describe('hasControlCharsSingleLine — allowed characters', () => {
   })
 
   it('Vietnamese text → false', () => {
-    expect(hasControlCharsSingleLine('CLB AI - THPT Tên Lơ Man')).toBe(false)
+    expect(hasControlCharsSingleLine('CLB AI - THPT Ten Lơ Man')).toBe(false)
   })
 })
 
