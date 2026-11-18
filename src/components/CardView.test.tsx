@@ -323,3 +323,51 @@ describe('CardView — photo alt text includes title (failing until Group 2)', (
     expect(html).not.toContain('null')
   })
 })
+
+// ===================================================================
+// New for privacy-about plan — FAILING until Group 2 updates CardView
+// ===================================================================
+
+describe('CardView — no photo slot rendered (failing until Group 2)', () => {
+  it('photo slot token is NOT rendered as an img element — FAILS until Group 2 removes photo rendering', () => {
+    // After Group 2: CardView ignores the "photo" key since SLOTS no longer includes it.
+    // Before Group 2: CardView renders a <img class="card-photo"> for the photo token → FAIL.
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{ photo: validToken }} />,
+    )
+    // After Group 2: no card-photo img. Before Group 2: has card-photo → FAIL.
+    expect(html).not.toContain('card-photo')
+  })
+
+  it('no photo img even when both background and photo tokens provided', () => {
+    const html = renderToString(
+      <CardView
+        card={baseCard}
+        layout="classic"
+        images={{ background: 'img001234567890a', photo: 'img001234567890b' }}
+      />,
+    )
+    expect(html).not.toContain('card-photo')
+    // Background IS rendered
+    expect(html).toContain('img001234567890a')
+  })
+})
+
+describe('CardView — subject shown as "GV môn: <subject>" (failing until Group 2)', () => {
+  it('subject "Toán" is shown as "GV môn: Toán" — FAILS until Group 2 uses subjectLabel()', () => {
+    // After Group 2: CardView calls subjectLabel() → "GV môn: Toán".
+    // Before Group 2: CardView shows raw subject "Toán" without the prefix → FAIL.
+    const html = renderToString(
+      <CardView card={baseCard} layout="classic" images={{}} />,
+    )
+    // After Group 2: contains "GV môn: Toán". Before Group 2: only contains "Toán" (no prefix) → FAIL.
+    expect(html).toContain('GV môn: Toán')
+  })
+
+  it('empty subject renders nothing — no "GV môn:" prefix for empty subject', () => {
+    const card = { ...baseCard, subject: '' }
+    const html = renderToString(<CardView card={card} layout="classic" images={{}} />)
+    // No subject label rendered when subject is empty
+    expect(html).not.toContain('GV môn:')
+  })
+})

@@ -1,9 +1,14 @@
-// Tests for shared/api.ts — formatFrom and constants.
+// Tests for shared/api.ts — formatFrom, subjectLabel and constants.
 import { describe, it, expect } from 'vitest'
 import {
   formatFrom,
+  subjectLabel,
   MAX_MESSAGE, MAX_FROM_NAME, MAX_FROM_CLASS, MAX_NEWLINES,
   PENDING_CAP, PENDING_CAP_PER_TEACHER, PAGE_SIZE, MAX_REVIEW_IDS,
+  ABOUT_HEADING_MAX, ABOUT_INTRO_MAX, ABOUT_STATS_MAX, ABOUT_STAT_VALUE_MAX,
+  ABOUT_STAT_LABEL_MAX, ABOUT_STEPS_MAX, ABOUT_STEP_WHEN_MAX, ABOUT_STEP_TEXT_MAX,
+  ABOUT_MEMBERS_MAX, ABOUT_MEMBER_NAME_MAX, ABOUT_MEMBER_ROLE_MAX, ABOUT_BODY_MAX,
+  ABOUT_NEWLINES_MAX,
 } from './api.ts'
 
 // ---- formatFrom ----
@@ -74,4 +79,51 @@ describe('API constants', () => {
   it('PENDING_CAP_PER_TEACHER = 200', () => expect(PENDING_CAP_PER_TEACHER).toBe(200))
   it('PAGE_SIZE = 200', () => expect(PAGE_SIZE).toBe(200))
   it('MAX_REVIEW_IDS = 200', () => expect(MAX_REVIEW_IDS).toBe(200))
+})
+
+// ---- subjectLabel ----
+
+describe('subjectLabel', () => {
+  it('non-empty subject → "GV môn: <subject>"', () => {
+    expect(subjectLabel('Toán')).toBe('GV môn: Toán')
+  })
+
+  it('empty string → ""', () => {
+    expect(subjectLabel('')).toBe('')
+  })
+
+  it('whitespace-only → "" (trimmed to blank)', () => {
+    expect(subjectLabel('   ')).toBe('')
+  })
+
+  it('subject with leading/trailing spaces → trimmed in label', () => {
+    expect(subjectLabel('  Vật lý  ')).toBe('GV môn: Vật lý')
+  })
+
+  it('multi-word subject → "GV môn: Ngữ văn"', () => {
+    expect(subjectLabel('Ngữ văn')).toBe('GV môn: Ngữ văn')
+  })
+
+  it('prefix is exactly "GV môn: " (not "GV mon:" etc.)', () => {
+    const result = subjectLabel('Hóa học')
+    expect(result).toMatch(/^GV môn: /)
+  })
+})
+
+// ---- AboutContent constants ----
+
+describe('AboutContent constants', () => {
+  it('ABOUT_HEADING_MAX = 80', () => expect(ABOUT_HEADING_MAX).toBe(80))
+  it('ABOUT_INTRO_MAX = 600', () => expect(ABOUT_INTRO_MAX).toBe(600))
+  it('ABOUT_STATS_MAX = 6', () => expect(ABOUT_STATS_MAX).toBe(6))
+  it('ABOUT_STAT_VALUE_MAX = 12', () => expect(ABOUT_STAT_VALUE_MAX).toBe(12))
+  it('ABOUT_STAT_LABEL_MAX = 40', () => expect(ABOUT_STAT_LABEL_MAX).toBe(40))
+  it('ABOUT_STEPS_MAX = 20', () => expect(ABOUT_STEPS_MAX).toBe(20))
+  it('ABOUT_STEP_WHEN_MAX = 20', () => expect(ABOUT_STEP_WHEN_MAX).toBe(20))
+  it('ABOUT_STEP_TEXT_MAX = 400', () => expect(ABOUT_STEP_TEXT_MAX).toBe(400))
+  it('ABOUT_MEMBERS_MAX = 40', () => expect(ABOUT_MEMBERS_MAX).toBe(40))
+  it('ABOUT_MEMBER_NAME_MAX = 60', () => expect(ABOUT_MEMBER_NAME_MAX).toBe(60))
+  it('ABOUT_MEMBER_ROLE_MAX = 60', () => expect(ABOUT_MEMBER_ROLE_MAX).toBe(60))
+  it('ABOUT_BODY_MAX = 16384 (16 KB)', () => expect(ABOUT_BODY_MAX).toBe(16384))
+  it('ABOUT_NEWLINES_MAX = 10', () => expect(ABOUT_NEWLINES_MAX).toBe(10))
 })

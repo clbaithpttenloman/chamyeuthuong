@@ -3,14 +3,17 @@ import { describe, it, expect } from 'vitest'
 import { SLOTS, LAYOUTS, DEFAULT_LAYOUT, isLayout, isSlot } from './layouts.ts'
 
 describe('SLOTS', () => {
-  it('has exactly 3 entries', () => {
-    expect(SLOTS).toHaveLength(3)
+  it('has exactly 2 entries', () => {
+    expect(SLOTS).toHaveLength(2)
   })
 
-  it('contains background, banner, photo', () => {
+  it('contains background and banner', () => {
     expect(SLOTS).toContain('background')
     expect(SLOTS).toContain('banner')
-    expect(SLOTS).toContain('photo')
+  })
+
+  it('does NOT contain photo (slot removed)', () => {
+    expect(SLOTS).not.toContain('photo')
   })
 
   it('entries are strings', () => {
@@ -90,6 +93,7 @@ describe('isSlot', () => {
     ['uppercase BACKGROUND', 'BACKGROUND'],
     ['a layout id', 'classic'],
     ['partial match', 'back'],
+    ['photo (removed slot)', 'photo'],
   ])('returns false for %s', (_, v) => {
     expect(isSlot(v)).toBe(false)
   })

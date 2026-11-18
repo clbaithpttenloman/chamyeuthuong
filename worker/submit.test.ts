@@ -526,3 +526,153 @@ describe('POST /api/cards — more invisible and malformed characters (security 
     expect(r.status).toBe(201)
   })
 })
+
+// ===================================================================
+// New for privacy-about plan — FAILING until Group 2 updates submit.ts
+// ===================================================================
+
+describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)', () => {
+  it('teacherId (show_on_home=1) → 201 — FAILS until Group 2 implements teacherId', async () => {
+    // After Group 2: teacherId accepted for show_on_home=1 teachers.
+    // Before Group 2: submit.ts requires teacherPublicId → returns 400 for teacherId.
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    // Seed teacher with show_on_home=1
+    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
+    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
+    await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890t01', '', 1).run()
+    await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
+    const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+
+    const r = await handleSubmit(
+      submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc mừng!' }),
+      makeEnv(freshDb),
+    )
+    // After Group 2: 201. Before Group 2: 400 → FAIL.
+    expect(r.status).toBe(201)
+  })
+
+  it('teacherToken (any teacher, including hidden) → 201 — FAILS until Group 2', async () => {
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    const TOKEN = 'tok1234567890abc'
+    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(TOKEN, 'T', '', now).run()
+    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind(TOKEN).first<{ id: number }>())!.id
+    await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
+    // show_on_home = 0 (hidden teacher, reachable via token only)
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890t02', '', 0).run()
+    await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
+    const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+
+    const r = await handleSubmit(
+      submitReq({ teacherToken: TOKEN, templateId: tmplId, message: 'Chúc mừng!' }),
+      makeEnv(freshDb),
+    )
+    // After Group 2: 201. Before Group 2: 400 → FAIL.
+    expect(r.status).toBe(201)
+  })
+
+  it('teacherId for show_on_home=0 teacher → 404 — FAILS until Group 2', async () => {
+    // After Group 2: teacherId only valid for show_on_home=1. Hidden teacher via id → 404.
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
+    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
+    await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890t03', '', 0).run()
+    await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
+    const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+
+    const r = await handleSubmit(
+      submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc mừng!' }),
+      makeEnv(freshDb),
+    )
+    // After Group 2: 404. Before Group 2: 400 → FAIL.
+    expect(r.status).toBe(404)
+  })
+
+  it('both teacherId AND teacherToken → 400', async () => {
+    const r = await handleSubmit(
+      submitReq({ teacherId: 1, teacherToken: 'tok1234567890abc', templateId: 1, message: 'msg' }),
+      makeEnv(db),
+    )
+    // Both are present → bad_request regardless of implementation.
+    expect(r.status).toBe(400)
+  })
+
+  it('neither teacherId nor teacherToken → 400', async () => {
+    const r = await handleSubmit(
+      submitReq({ templateId: 1, message: 'Chúc mừng!' }),
+      makeEnv(db),
+    )
+    // No identifier provided → bad_request.
+    expect(r.status).toBe(400)
+  })
+
+  it('unknown teacherId → 404 — FAILS until Group 2 (currently → 400 because teacherId not understood)', async () => {
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
+    const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+
+    const r = await handleSubmit(
+      submitReq({ teacherId: 99999, templateId: tmplId, message: 'Chúc mừng!' }),
+      makeEnv(freshDb),
+    )
+    // After Group 2: 404. Before Group 2: 400 → FAIL.
+    expect(r.status).toBe(404)
+  })
+
+  it('non-integer teacherId → 400', async () => {
+    const r = await handleSubmit(
+      submitReq({ teacherId: 1.5, templateId: 1, message: 'msg' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('string "1" as teacherId → 400 (must be numeric)', async () => {
+    const r = await handleSubmit(
+      // @ts-expect-error intentional type violation for test
+      submitReq({ teacherId: '1', templateId: 1, message: 'msg' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('marker scan: submit response body never echoes submitted message text', async () => {
+    const MARKER = 'UNIQUE_SUBMIT_MARKER_XYZ'
+    const { tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(
+      submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: MARKER }),
+      makeEnv(db),
+    )
+    const body = await r.text()
+    expect(body).not.toContain(MARKER)
+  })
+
+  it('marker scan: 404 error response body does not echo submitted text', async () => {
+    const MARKER = 'UNIQUE_NOTFOUND_MARKER_XYZ'
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
+    const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+    const r = await handleSubmit(
+      submitReq({ teacherPublicId: 'unknownpublicid1', templateId: tmplId, message: MARKER }),
+      makeEnv(freshDb),
+    )
+    const body = await r.text()
+    expect(body).not.toContain(MARKER)
+  })
+
+  it('marker scan: 429 rate-limited response does not echo submitted text', async () => {
+    const MARKER = 'UNIQUE_RATELIMIT_MARKER_XYZ'
+    const r = await handleSubmit(
+      submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: 1, message: MARKER }),
+      makeEnv(db, { submitIpLimit: false }),
+    )
+    const body = await r.text()
+    expect(body).not.toContain(MARKER)
+  })
+})

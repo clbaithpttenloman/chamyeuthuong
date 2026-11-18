@@ -330,12 +330,11 @@ describe('createTemplate atomicity', () => {
     expect(row).toBeNull()
   })
 
-  it('create with all three image slots attaches every image to the new template', async () => {
+  it('create with two image slots (background + banner) attaches every image to the new template', async () => {
     const a = await seedImage(db, 'imgslota00000001')
     const b = await seedImage(db, 'imgslotb00000001')
-    const c = await seedImage(db, 'imgslotc00000001')
     const r = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'ThreeSlots', layout: 'night', images: { background: a, banner: b, photo: c } }),
+      req('POST', '/api/admin/templates', { name: 'TwoSlots', layout: 'night', images: { background: a, banner: b } }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(200)
@@ -344,7 +343,6 @@ describe('createTemplate atomicity', () => {
     expect(rows.results).toEqual([
       { template_id: t.id, slot: 'background', image_id: a },
       { template_id: t.id, slot: 'banner', image_id: b },
-      { template_id: t.id, slot: 'photo', image_id: c },
     ])
   })
 
@@ -386,6 +384,41 @@ describe('updateTemplate FK mapping', () => {
     )
     // Before fix: unhandled error propagates → test throws (not 400).
     // After fix: FK → HttpError('bad_request') → 400.
+    expect(r.status).toBe(400)
+  })
+})
+
+// ===================================================================
+// New for privacy-about plan — photo slot removed
+// ===================================================================
+
+describe('template slot: photo slot → 400 (passes after layouts.ts SLOTS change)', () => {
+  it('POST with photo slot in images → 400 (isSlot("photo") now false)', async () => {
+    // After shared/layouts.ts removes "photo" from SLOTS,
+    // isSlot("photo") returns false → handleTemplates returns 400.
+    const imgId = await seedImage(db)
+    const r = await handleTemplates(
+      req('POST', '/api/admin/templates', { name: 'T', layout: 'classic', images: { photo: imgId } }),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PUT with photo slot in images → 400', async () => {
+    const imgId = await seedImage(db)
+    // Create a valid template first
+    const cr = await handleTemplates(
+      req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
+    const tmpl = await cr.json() as { id: number }
+    const r = await handleTemplates(
+      req('PUT', `/api/admin/templates/${tmpl.id}`, { name: 'T', layout: 'classic', images: { photo: imgId } }),
+      makeEnv(db),
+      TEST_EMAIL,
+    )
     expect(r.status).toBe(400)
   })
 })

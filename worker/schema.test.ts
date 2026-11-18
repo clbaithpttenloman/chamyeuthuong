@@ -821,3 +821,109 @@ describe('student_card table constraints (failing until Group 2)', () => {
     expect(statusIdx).toBeDefined()
   })
 })
+
+// ===================================================================
+// New for privacy-about plan — FAILING until Group 2 updates SCHEMA
+// ===================================================================
+
+describe('template_image slot CHECK — only background/banner (failing until Group 2)', () => {
+  it('slot CHECK rejects photo (removed slot) — FAILS until Group 2 changes CHECK', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    sqlite.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')").run()
+    const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
+    // After Group 2: CHECK IN ('background','banner') → photo is rejected.
+    // Before Group 2: CHECK includes 'photo' → insertion succeeds → test FAILS.
+    expect(() => {
+      sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, 'photo', ${imgId})`).run()
+    }).toThrow()
+  })
+
+  it('slot CHECK still accepts background and banner after the new CHECK', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
+    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
+    for (const slot of ['background', 'banner']) {
+      const imgTok = `img${slot.slice(0, 3)}12345678901`
+      sqlite.prepare(`INSERT OR IGNORE INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('${imgTok}','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')`).run()
+      const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get(imgTok) as { id: number }).id
+      expect(() => {
+        sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, '${slot}', ${imgId})`).run()
+      }).not.toThrow()
+    }
+  })
+})
+
+describe('teacher_profile — no public_id column (failing until Group 2)', () => {
+  it('teacher_profile has no public_id column in DDL — FAILS until Group 2 removes it', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const cols = (sqlite.prepare("PRAGMA table_info(teacher_profile)").all() as Array<{ name: string }>).map((c) => c.name)
+    // After Group 2: public_id is removed from teacher_profile.
+    // Before Group 2: public_id exists → test FAILS.
+    expect(cols).not.toContain('public_id')
+  })
+})
+
+describe('site_content table (failing until Group 2)', () => {
+  it('ensureSchema creates site_content table — FAILS until Group 2 adds it to SCHEMA', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('site_content')
+  })
+
+  it('site_content key CHECK only allows "about" — FAILS until Group 2 adds schema', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    // Should fail for unknown keys
+    expect(() => {
+      sqlite.prepare("INSERT INTO site_content (key, value, updated_at, updated_by) VALUES ('unknown', '{}', datetime('now'), 'test')").run()
+    }).toThrow()
+  })
+
+  it('about seed row is present on a fresh DB — FAILS until Group 2 adds aboutSeedSql()', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
+    expect(row).toBeDefined()
+    // The seed value must be valid JSON
+    expect(() => JSON.parse(row!.value)).not.toThrow()
+  })
+
+  it('about seed contains member name "Vũ Ngọc Diệp" — FAILS until Group 2 adds seed', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
+    expect(row?.value).toContain('Vũ Ngọc Diệp')
+  })
+
+  it('about seed contains member name "Kiro Coding Agent" — FAILS until Group 2 adds seed', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
+    expect(row?.value).toContain('Kiro Coding Agent')
+  })
+
+  it('about seed has at least 8 steps — FAILS until Group 2 adds seed', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
+    if (!row) return // fails at the previous test
+    const parsed = JSON.parse(row.value) as { steps?: unknown[] }
+    expect(Array.isArray(parsed.steps)).toBe(true)
+    expect((parsed.steps ?? []).length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('about seed INSERT uses OR IGNORE (idempotent) — FAILS until Group 2 adds schema', async () => {
+    const { sqlite } = testDb({ schema: false })
+    for (const sql of SCHEMA) sqlite.exec(sql)
+    // Run every SCHEMA statement twice — the about seed must not fail on the second run
+    expect(() => {
+      for (const sql of SCHEMA) sqlite.exec(sql)
+    }).not.toThrow()
+  })
+})

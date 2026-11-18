@@ -548,3 +548,79 @@ describe('public routes — OPTIONS returns 405 without Access-Control-* headers
     },
   )
 })
+
+// ===================================================================
+// New for privacy-about plan — FAILING until Group 2 updates public.ts
+// ===================================================================
+
+describe('GET /api/wall — no latest, id not publicId (failing until Group 2)', () => {
+  it('wall response has no "latest" field — FAILS until Group 2 removes it', async () => {
+    const r = await handlePublic(
+      new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as Record<string, unknown>
+    // After Group 2: no latest field. Before Group 2: has latest → test FAILS.
+    expect(body).not.toHaveProperty('latest')
+  })
+
+  it('wall teacher has numeric "id" field (not "publicId") — FAILS until Group 2', async () => {
+    await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
+    const r = await handlePublic(
+      new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.json() as { teachers: Array<Record<string, unknown>> }
+    expect(body.teachers.length).toBeGreaterThan(0)
+    const t = body.teachers[0]
+    // After Group 2: has id (number), no publicId. Before Group 2: has publicId → FAILS.
+    expect(t).toHaveProperty('id')
+    expect(typeof t['id']).toBe('number')
+    expect(t).not.toHaveProperty('publicId')
+  })
+
+  it('wall teacher never exposes the private token — FAILS until Group 2 (and already true)', async () => {
+    await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1 })
+    const r = await handlePublic(
+      new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.text()
+    // token value reversal of VALID_PUBLIC_ID
+    expect(body).not.toContain([...VALID_PUBLIC_ID].reverse().join(''))
+  })
+
+  it('marker scan: approved card message does NOT appear in wall response — FAILS until Group 2 removes latest', async () => {
+    // This fails because the current wall response includes "latest" cards with their messages.
+    const MARKER = 'UNIQUE_MARKER_WALL_XYZ_42'
+    const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
+    const tmplId = await seedTemplate(db)
+    await db.prepare(
+      'INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind('crdmarker1234567', tid, tmplId, MARKER, '', '', 0, 'approved', new Date().toISOString()).run()
+
+    const r = await handlePublic(
+      new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.text()
+    // After Group 2 (no latest): marker not in response. Before Group 2 (has latest): marker is in response → FAIL.
+    expect(body).not.toContain(MARKER)
+  })
+})
+
+describe('GET /api/teachers/* → 404 (route removed — failing until Group 2)', () => {
+  it('GET /api/teachers/<existing-teacher> → 404 — FAILS until Group 2 removes the route', async () => {
+    // After Group 2: the /api/teachers/* route is removed → catch-all 404.
+    // Before Group 2: the route exists and returns 200 for a known teacher.
+    const { tid } = await seedTeacher(db, { publicId: VALID_PUBLIC_ID, showOnHome: 1, title: 'Thầy' })
+    void tid
+    const r = await handlePublic(
+      new Request(`https://x/api/teachers/${VALID_PUBLIC_ID}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    // After Group 2: 404. Before Group 2: 200 → FAIL.
+    expect(r.status).toBe(404)
+  })
+})

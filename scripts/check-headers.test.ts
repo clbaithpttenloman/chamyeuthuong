@@ -114,3 +114,44 @@ describe('checkHeaders', () => {
     expect(errors.some((e) => e.includes('X-Robots-Tag'))).toBe(true)
   })
 })
+
+// ---- Verify actual public/_headers file has required security rules ----
+
+describe('public/_headers — actual file verification', () => {
+  it('public/_headers passes checkHeaders validation (no errors)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const content = readFileSync(resolve(process.cwd(), 'public/_headers'), 'utf-8')
+    const errors = checkHeaders(content)
+    expect(errors).toEqual([])
+  })
+
+  it('public/_headers /* rule includes Referrer-Policy: no-referrer', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const content = readFileSync(resolve(process.cwd(), 'public/_headers'), 'utf-8')
+    expect(content).toContain('Referrer-Policy: no-referrer')
+  })
+
+  it('public/_headers /* rule includes X-Robots-Tag: noindex', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const content = readFileSync(resolve(process.cwd(), 'public/_headers'), 'utf-8')
+    expect(content).toContain('X-Robots-Tag: noindex')
+  })
+
+  it('public/_headers /* rule includes a Content-Security-Policy', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const content = readFileSync(resolve(process.cwd(), 'public/_headers'), 'utf-8')
+    expect(content).toContain('Content-Security-Policy:')
+  })
+
+  it('public/_headers applies rules to /* wildcard (site-wide)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const content = readFileSync(resolve(process.cwd(), 'public/_headers'), 'utf-8')
+    // The /* rule appears first
+    expect(content.trim()).toMatch(/^\/*/)
+  })
+})

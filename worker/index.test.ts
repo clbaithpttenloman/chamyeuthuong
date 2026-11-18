@@ -207,3 +207,84 @@ describe('worker.fetch — DDL failure returns 503', () => {
     expect(tables).toHaveLength(0)
   })
 })
+
+// ===================================================================
+// New for privacy-about plan — FAILING until Group 2 updates index.ts
+// ===================================================================
+
+describe('worker.fetch — /api/teachers/* removed (failing until Group 2)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('GET /api/teachers/known-teacher → 404 from route removal — FAILS until Group 2', async () => {
+    // After Group 2: /api/teachers/* route is removed → catch-all 404.
+    // Before Group 2: routes to handlePublic → handleTeacherPage → 200 for known teacher.
+    const { db } = testDb()
+    const now = new Date().toISOString()
+    const pubId = 'pub1234567890xyz'
+    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890xyz', 'T', '', now).run()
+    const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890xyz').first<{ id: number }>())!.id
+    await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, pubId, '', 1).run()
+
+    const r = await worker.fetch(
+      new Request(`https://x/api/teachers/${pubId}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      { ...makeEnv(), DB: db as never },
+    )
+    // After Group 2: 404 (route removed). Before Group 2: 200 → FAIL.
+    expect(r.status).toBe(404)
+  })
+})
+
+describe('worker.fetch — /api/about routes (failing until Group 2 adds them)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('GET /api/about → 200 — FAILS until Group 2 adds the route', async () => {
+    const r = await worker.fetch(
+      new Request('https://x/api/about', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv() as never,
+    )
+    // After Group 2: 200. Currently: catch-all 404 → FAIL.
+    expect(r.status).toBe(200)
+  })
+
+  it('GET /api/admin/about with admin auth → not 404 — FAILS until Group 2 adds the route', async () => {
+    const { db } = testDb()
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)').bind('admin@test.com', now, 'seed').run()
+
+    const r = await worker.fetch(
+      new Request('https://x/api/admin/about', {
+        headers: {
+          'CF-Connecting-IP': '1.2.3.4',
+          'X-Admin-Email': 'admin@test.com',
+          'X-Requested-With': 'fetch',
+        },
+      }),
+      { ...makeEnv(), DB: db as never },
+    )
+    // After Group 2: 200. Currently: 404 from admin not-found (or 404 from catch-all) → FAIL.
+    // We just check it's NOT 404 from the absence of the route.
+    expect(r.status).not.toBe(404)
+  })
+
+  it('PUT /api/admin/about with admin auth → not 404 — FAILS until Group 2 adds the route', async () => {
+    const { db } = testDb()
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)').bind('admin@test.com', now, 'seed').run()
+
+    const r = await worker.fetch(
+      new Request('https://x/api/admin/about', {
+        method: 'PUT',
+        headers: {
+          'CF-Connecting-IP': '1.2.3.4',
+          'X-Admin-Email': 'admin@test.com',
+          'X-Requested-With': 'fetch',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ heading: 'Test', intro: 'Test intro', stats: [], stepsHeading: 'Steps', steps: [], membersHeading: 'Members', members: [] }),
+      }),
+      { ...makeEnv(), DB: db as never },
+    )
+    // After Group 2: 200. Currently: 404 or 405 from admin → FAIL.
+    expect(r.status).not.toBe(404)
+  })
+})

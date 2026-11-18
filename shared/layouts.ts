@@ -1,5 +1,5 @@
-/** Slot identifiers for image slots that every layout renders. */
-export const SLOTS = ['background', 'banner', 'photo'] as const
+/** Slot identifiers for image slots that every layout renders. Photo slot is removed. */
+export const SLOTS = ['background', 'banner'] as const
 export type Slot = (typeof SLOTS)[number]
 
 export type Layout = { id: string; name: string }

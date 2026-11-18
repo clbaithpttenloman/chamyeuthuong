@@ -17,10 +17,39 @@ export const MAX_NEWLINES = 5
 export const PENDING_CAP = 2000
 /** Per-teacher pending card cap. */
 export const PENDING_CAP_PER_TEACHER = 200
-/** Maximum cards returned per page (approved/hidden list, teacher page). */
+/** Maximum cards returned per page (approved/hidden list, QR page). */
 export const PAGE_SIZE = 200
 /** Maximum IDs in a bulk review request. */
 export const MAX_REVIEW_IDS = 200
+
+// ---- AboutContent constants ----
+
+/** Maximum length for heading / stepsHeading / membersHeading / step title fields. */
+export const ABOUT_HEADING_MAX = 80
+/** Maximum length for the intro paragraph. */
+export const ABOUT_INTRO_MAX = 600
+/** Maximum number of stat entries. */
+export const ABOUT_STATS_MAX = 6
+/** Maximum length for a stat value string. */
+export const ABOUT_STAT_VALUE_MAX = 12
+/** Maximum length for a stat label string. */
+export const ABOUT_STAT_LABEL_MAX = 40
+/** Maximum number of step entries. */
+export const ABOUT_STEPS_MAX = 20
+/** Maximum length for a step "when" string. */
+export const ABOUT_STEP_WHEN_MAX = 20
+/** Maximum length for a step "text" (body) — may be empty. */
+export const ABOUT_STEP_TEXT_MAX = 400
+/** Maximum number of member entries. */
+export const ABOUT_MEMBERS_MAX = 40
+/** Maximum length for a member name. */
+export const ABOUT_MEMBER_NAME_MAX = 60
+/** Maximum length for a member role. */
+export const ABOUT_MEMBER_ROLE_MAX = 60
+/** Maximum JSON body size for the about payload (16 KB). */
+export const ABOUT_BODY_MAX = 16384
+/** Maximum newlines allowed in multiline about fields (intro, steps[].text). */
+export const ABOUT_NEWLINES_MAX = 10
 
 // ---- Public card types ----
 
@@ -38,17 +67,9 @@ export type PublicCard = {
   createdAt: string
 }
 
-/**
- * Card in the wall `latest` list — adds a teacher reference.
- * The teacher's private QR token is NEVER included.
- */
-export type WallLatestCard = PublicCard & {
-  teacher: { publicId: string; title: string | null; name: string }
-}
-
-/** Teacher summary in the wall response. */
+/** Teacher summary in the wall response (show_on_home=1 only). */
 export type WallTeacher = {
-  publicId: string
+  id: number
   title: string | null
   name: string
   subject: string
@@ -59,23 +80,22 @@ export type WallTeacher = {
 /** Response from GET /api/wall */
 export type WallResponse = {
   teachers: WallTeacher[]
-  /** Up to 6 items, one per teacher (show_on_home=1 only), newest first. */
-  latest: WallLatestCard[]
   totals: { teachers: number; cards: number }
 }
 
-/** Teacher profile included in teacher-page and QR responses. */
+/** Teacher profile in the QR endpoint response (no publicId — the token IS the private key). */
 export type TeacherProfile = {
-  publicId: string
+  id: number
   title: string | null
   name: string
   subject: string
   department: string
 }
 
-/** Response from GET /api/teachers/:publicId */
-export type TeacherPageResponse = {
+/** Response from GET /api/qr/:token */
+export type QrResponse = {
   teacher: TeacherProfile
+  /** All approved cards, newest first, max 200. */
   cards: PublicCard[]
   total: number
 }
@@ -95,9 +115,16 @@ export type WishPublic = {
   body: string
 }
 
-/** Request body for POST /api/cards */
+/**
+ * Request body for POST /api/cards.
+ * Exactly one of teacherId or teacherToken must be present:
+ *   - teacherId (positive integer): only teachers with show_on_home = 1
+ *   - teacherToken (16-char QR token): any teacher (used by ?t=<token> flow)
+ * Providing both or neither → 400.
+ */
 export type SubmitCardRequest = {
-  teacherPublicId: string
+  teacherId?: number
+  teacherToken?: string
   templateId: number
   message: string
   fromName?: string
@@ -105,11 +132,17 @@ export type SubmitCardRequest = {
   anonymous?: boolean
 }
 
-/** Response from GET /api/qr/:token */
-export type QrResponse = {
-  teacher: TeacherProfile
-  card: PublicCard | null
-  total: number
+// ---- AboutContent ----
+
+/** Shape of the site's "about" content stored in D1 and served by GET /api/about. */
+export type AboutContent = {
+  heading: string
+  intro: string
+  stats: Array<{ value: string; label: string }>
+  stepsHeading: string
+  steps: Array<{ when: string; title: string; text: string }>
+  membersHeading: string
+  members: Array<{ name: string; role: string }>
 }
 
 // ---- Admin types ----
@@ -118,7 +151,6 @@ export type QrResponse = {
 export type AdminTeacher = {
   id: number
   token: string
-  publicId: string
   title: 'Thầy' | 'Cô' | null
   name: string
   subject: string
@@ -183,7 +215,7 @@ export type AdminCard = {
   createdAt: string
   reviewedAt: string | null
   reviewedBy: string | null
-  teacher: { id: number; publicId: string; name: string; title: string | null }
+  teacher: { id: number; name: string; title: string | null }
   template: { id: number; name: string; layout: string }
 }
 
@@ -226,4 +258,13 @@ export function formatFrom(opts: { fromName: string; fromClass: string; anonymou
     return cls ? `Một bạn học sinh · ${cls}` : 'Một bạn học sinh'
   }
   return cls ? `${name} · ${cls}` : name
+}
+
+/**
+ * Build the subject label shown on teacher tiles and card headings.
+ * Returns 'GV môn: <subject>' when subject is non-empty, '' otherwise.
+ */
+export function subjectLabel(subject: string): string {
+  const s = subject.trim()
+  return s ? `GV môn: ${s}` : ''
 }
