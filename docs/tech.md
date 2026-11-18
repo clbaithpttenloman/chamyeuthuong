@@ -65,7 +65,8 @@ Verified 2026-11-17 for the student cards platform.
 teacher_profile(
   teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
   department   TEXT NOT NULL DEFAULT '',
-  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
+  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
+  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))
 )
 
 template(
@@ -123,10 +124,21 @@ site_content(
 - **Removed:** `/thay-co/:publicId` React route (no public teacher pages)
 - **Removed:** `template_image.slot='photo'` (slots: `background`, `banner` only)
 - **Removed:** `latest` array from `/api/wall` (privacy model)
+- **Removed:** old label "GV môn: {môn}" (replaced with "Giáo viên: {môn}" or role name for leaders)
 - **Added:** `/api/qr/:token` endpoint (private teacher card page)
 - **Added:** `/api/about` (public) and `/api/admin/about` (admin editor)
 - **Added:** `POST /api/cards` accepts exactly one of `teacherId` or `teacherToken`
 - **Added:** `site_content` table for About page (seeded once via INSERT OR IGNORE)
+- **Added:** `teacher_profile.role` column (chức vụ: Giáo viên, Hiệu trưởng, Phó hiệu trưởng)
+
+### Schema Upgrades (Idempotent, Applied Automatically)
+
+`ensureSchema` runs the `UPGRADES` list in `worker/schema.ts` after the CREATE batch. It probes `PRAGMA table_info('teacher_profile')` once, and again after any step that ran. Each step is its own `db.batch` (one D1 transaction).
+
+1. **Drop `public_id`** (if `public_id` present and `role` absent): CREATE `teacher_profile_new` from the current DDL, copy `teacher_id, department, show_on_home`, DROP, RENAME. Rows get `role = 'Giáo viên'` from the DDL default.
+2. **Add `role`** (if absent): `ALTER TABLE teacher_profile ADD COLUMN role TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))`. Skipped after step 1.
+
+A failed step logs `schema: upgrade failed`, rejects (request → 503), and is retried on the next request. Two isolates racing step 2: the loser gets "duplicate column name" once, then the retry skips. Production at 4d3a5df runs step 1 only. Operator steps: `docs/runbooks/admin.md` → "Schema upgrades".
 
 ### Atomic Operations
 

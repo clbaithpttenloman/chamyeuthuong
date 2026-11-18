@@ -93,14 +93,15 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 
 ### **Thầy cô** (Teachers)
 
-- **List**: all teachers with card counts (pending, approved, hidden), `show_on_home` toggle, QR display
-- **Create**: title (Thầy/Cô, required), name, subject, department, `show_on_home` toggle
-- **Bulk add**: paste list `Thầy|Cô Tên | Môn | Tổ` (1–100 rows, all-or-nothing); all created with `show_on_home = 1`
-- **Edit**: name, subject, department, toggle `show_on_home`
+- **List**: all teachers with card counts (pending, approved, hidden), `show_on_home` toggle, QR display, **chức vụ** (role)
+- **Create**: title (Thầy/Cô, required), name, subject, department, **chức vụ** (default Giáo viên), `show_on_home` toggle
+- **Bulk add**: paste list `Thầy|Cô Tên | Môn | Tổ` (1–100 rows, all-or-nothing); all created with `chức vụ = Giáo viên` and `show_on_home = 1`. To change role, edit each teacher individually after bulk add.
+- **Edit**: name, subject, department, **chức vụ**, toggle `show_on_home`
 - **QR code**: each teacher has a unique 16-char random token that encodes their private card page (`/t/<token>`). Download and distribute privately (printed/emailed). QR link stays in browser history and Cloudflare logs — open on trusted devices only.
 - **Rotate QR**: generates new token (old QR invalid; teacher's card page URL changes but that's why it's private)
 - **Delete**: removes teacher and all their cards (cascade)
 - **Show on home**: toggle to hide/show on the wall
+- **Chức vụ (Role)**: select one of "Giáo viên" (default), "Hiệu trưởng", "Phó hiệu trưởng". Leaders (school heads) are shown by chức vụ only on tiles/cards; regular teachers show "Giáo viên: {môn}" or "Giáo viên" if no môn. Leaders' subject and department are hidden from display labels but still used for wishes and filters.
 
 ### **Thư viện lời chúc** (Wish Library)
 
@@ -154,6 +155,7 @@ Teachers with `show_on_home = 1` only; no card content. Response shows teacher p
       "name": "Nguyễn Văn Khoa",
       "subject": "Toán",
       "department": "Tổ Toán - Tin",
+      "role": "Giáo viên",
       "cardCount": 5
     }
   ],
@@ -166,6 +168,12 @@ Teachers with `show_on_home = 1` only; no card content. Response shows teacher p
 
 - Only `show_on_home = 1` teachers and their approved card counts
 - `id` is numeric; used to construct `/gui-thiep?thay=<id>` send links
+- `role` is one of: `"Giáo viên"` (default), `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
+- **Display on tiles:** `roleLabel(role, subject)` returns:
+  - `"Hiệu trưởng"` or `"Phó hiệu trưởng"` for leaders (môn ignored)
+  - `"Giáo viên: {subject}"` for teachers with subject
+  - `"Giáo viên"` for teachers without subject
+- **Department display:** `departmentLabel(role, subject, department)` returns empty string for leaders; otherwise the department unless it repeats the subject (normalized comparison)
 - No card content, no "latest" cards strip
 
 ### GET /api/qr/:token
@@ -180,7 +188,8 @@ Private teacher QR token → approved cards + teacher profile
     "title": "Thầy",
     "name": "Nguyễn Văn Khoa",
     "subject": "Toán",
-    "department": "Tổ Toán - Tin"
+    "department": "Tổ Toán - Tin",
+    "role": "Giáo viên"
   },
   "cards": [
     {
@@ -201,6 +210,7 @@ Private teacher QR token → approved cards + teacher profile
 
 - Only `status = 'approved'` cards, newest first, max 200
 - `total`: count of all approved cards (may exceed 200)
+- `role` is one of: `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
 - Unknown/malformed token → 404
 - Private token never appears in any response
 - Response header `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`
@@ -371,6 +381,7 @@ List all teachers with card counts.
     "name": "Nguyễn Văn Khoa",
     "subject": "Toán",
     "department": "Tổ Toán - Tin",
+    "role": "Giáo viên",
     "showOnHome": 1,
     "cardCounts": {
       "pending": 2,
@@ -384,6 +395,7 @@ List all teachers with card counts.
 
 - `token`: 16-char unique per teacher; never exposed to students
 - `id`: numeric identifier; internal use only
+- `role`: one of `"Giáo viên"` (default), `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
 
 #### POST /api/admin/teachers
 Create one teacher.
@@ -395,11 +407,13 @@ Create one teacher.
   "name": "Nguyễn Văn A",
   "subject": "Tiếng Anh",
   "department": "Tổ Tiếng Anh",
+  "role": "Giáo viên",
   "showOnHome": 1
 }
 ```
 
 - `title` (Thầy/Cô): **required**
+- `role`: optional; one of `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"` (any other value or non-string → 400); omitted defaults to `"Giáo viên"`
 - Others: optional
 - `showOnHome` defaults to 1
 
@@ -412,11 +426,13 @@ Update teacher.
   "name": "Nguyễn Văn A",
   "subject": "Tiếng Anh",
   "department": "Tổ Tiếng Anh",
+  "role": "Hiệu trưởng",
   "showOnHome": 0,
   "title": "Thầy"
 }
 ```
 
+- `role`: optional; one of `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"` (invalid value → 400); omitted leaves role unchanged
 - Unknown teacher ID → **400**
 
 #### DELETE /api/admin/teachers/:id
@@ -914,7 +930,7 @@ Visit `http://localhost:5173` for the frontend, and `/admin` to sign in.
 
 Tables are created automatically on the first request.
 
-**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Today that drops `teacher_profile.public_id` from databases created by 4d3a5df, including production. Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
+**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Today: drop `teacher_profile.public_id` from databases created by 4d3a5df (including production), and add `teacher_profile.role` (chức vụ, default Giáo viên) where it is missing. Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
 
 ```bash
 rm -rf .wrangler/state

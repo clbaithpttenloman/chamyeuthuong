@@ -104,6 +104,10 @@ npx wrangler deploy
 
 ## Setup Workflow (Day Before 20/11)
 
+Schema changes run automatically on the first request after a deploy. Before deploying, follow **Schema upgrades** under Local Development below (Time Travel restore point, orphan check).
+
+---
+
 ### 1. Claim Admin (First Deploy)
 
 - Visit `/admin`
@@ -131,13 +135,15 @@ Format: `Thầy|Cô Name | Subject | Department`
 - **Subject:** optional (between `|` characters)
 - **Department:** optional (after second `|`)
 - **Limit:** 1–100 rows; all-or-nothing (any error → nothing inserted)
-- All created with `showOnHome = 1` (shown on wall)
+- All created with `chức vụ = Giáo viên` (default) and `showOnHome = 1` (shown on wall)
 
 Click **Tạo** → all teachers added atomically.
 
+**To set role to Hiệu trưởng or Phó hiệu trưởng:** bulk add first, then edit each teacher individually in the admin form (search for their name, click **Chỉnh sửa**, change **Chức vụ** dropdown, save).
+
 **Option B: Add One at a Time**
 
-Click **+ Thêm giáo viên**, fill form, click **Thêm**.
+Click **+ Thêm giáo viên**, fill form (choose **Chức vụ** from dropdown: "Giáo viên" is default, or pick "Hiệu trưởng" / "Phó hiệu trưởng"), click **Thêm**.
 
 ### 3. Upload Images
 
@@ -580,7 +586,14 @@ The next request creates all tables from scratch.
 
 `ensureSchema` creates missing tables and then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Each step checks the live table shape and only rebuilds a table if it is old. The rebuild runs as one D1 transaction: if it fails, nothing changes, the request returns 503, the log shows `schema: upgrade failed`, and the next request retries.
 
-Current step: a database created by commit 4d3a5df (the first production deploy) has `teacher_profile.public_id TEXT UNIQUE NOT NULL`. Newer code no longer writes that column, so adding teachers failed with 503. On the first request after deploy, the Worker copies `teacher_id`, `department` and `show_on_home` into a new `teacher_profile` without `public_id`. Not changed: `template_image` keeps its old CHECK that also allows `photo` (the code ignores and rejects that slot), and old tables `card`, `card_style`, `card_image` are left alone if they exist.
+Steps, in order (each is its own batch; the Worker re-checks the table after a step runs):
+
+1. **Drop `public_id`.** A database created by commit 4d3a5df (the first production deploy) has `teacher_profile.public_id TEXT UNIQUE NOT NULL`; newer code no longer writes it, so adding teachers failed with 503. Runs only if `public_id` exists and `role` does not. The Worker copies `teacher_id`, `department` and `show_on_home` into a new `teacher_profile` built from the current DDL, so every row also gets `role = 'Giáo viên'`.
+2. **Add `role` (chức vụ).** Runs only if `role` is missing (databases without `public_id` from before this feature): `ALTER TABLE teacher_profile ADD COLUMN role ... DEFAULT 'Giáo viên'`. On production at 4d3a5df this step is skipped, because step 1 already created the column.
+
+If two Worker instances start at the same moment, one can fail step 2 with "duplicate column name". That request returns 503 and logs `schema: upgrade failed` once; the next request sees the column and continues. One such log line right after a deploy is not a stuck deploy; repeated lines are.
+
+Not changed: `template_image` keeps its old CHECK that also allows `photo` (the code ignores and rejects that slot), and old tables `card`, `card_style`, `card_image` are left alone if they exist.
 
 **Before deploying a release that contains an upgrade step:**
 
@@ -592,7 +605,7 @@ npx wrangler d1 time-travel info cham-yeu-thuong
 npx wrangler d1 execute cham-yeu-thuong --remote --command "SELECT count(*) AS n FROM teacher_profile WHERE teacher_id NOT IN (SELECT id FROM teacher)"
 ```
 
-After deploy, open `/admin` and add a teacher to confirm.
+After deploy, open `/admin`, add a teacher, set one teacher's Chức vụ to Hiệu trưởng, and check that the home tile shows only "Hiệu trưởng".
 
 **Rollback:** roll forward with a fix. Redeploying 4d3a5df after the upgrade breaks, because that code still reads `public_id`. If you must go back, restore the database together with the old code (destructive, overwrites all data written since):
 
@@ -674,12 +687,14 @@ Private tokens never appear in public responses.
 - [ ] Sign in to `/admin` with bootstrap email
 - [ ] Upload a test image (confirm it appears in library)
 - [ ] Create a template with the test image
-- [ ] Create a teacher
+- [ ] Create a teacher with default role (Giáo viên)
+- [ ] Create a school leader (Hiệu trưởng or Phó hiệu trưởng) teacher; verify "Chức vụ" column shows the role
 - [ ] Test send flow: `/gui-thiep?thay=<id>` → pick template → submit
 - [ ] Confirm card is pending (not visible on wall)
 - [ ] Approve the pending card
-- [ ] Confirm card now appears on wall and teacher page
-- [ ] Scan QR code on phone → random card appears
+- [ ] Confirm card now appears on wall with "Giáo viên: {subject}" label for regular teacher, role-only label for leader
+- [ ] Scan QR code on phone for the leader → random card appears with leader's role in header (no subject/department)
+- [ ] Scan QR code for regular teacher → card shows "Giáo viên: {subject}" in header
 - [ ] Try invalid upload: SVG, mismatched type, oversized dims → all get 400 errors
 - [ ] Delete test teacher → all their cards removed
 - [ ] Note image response time (first decode may be slow on cold Worker)
