@@ -1,8 +1,8 @@
-// Tests for shared/api.ts — formatFrom, subjectLabel and constants.
+// Tests for shared/api.ts — formatFrom, role labels and constants.
 import { describe, it, expect } from 'vitest'
 import {
   formatFrom,
-  subjectLabel,
+  ROLES, DEFAULT_ROLE, isRole, roleLabel,
   departmentLabel,
   MAX_MESSAGE, MAX_FROM_NAME, MAX_FROM_CLASS, MAX_NEWLINES,
   PENDING_CAP, PENDING_CAP_PER_TEACHER, PAGE_SIZE, MAX_REVIEW_IDS,
@@ -82,32 +82,38 @@ describe('API constants', () => {
   it('MAX_REVIEW_IDS = 200', () => expect(MAX_REVIEW_IDS).toBe(200))
 })
 
-// ---- subjectLabel ----
+// ---- ROLES / isRole / roleLabel ----
 
-describe('subjectLabel', () => {
-  it('non-empty subject → "GV môn: <subject>"', () => {
-    expect(subjectLabel('Toán')).toBe('GV môn: Toán')
+describe('ROLES and isRole', () => {
+  it('has exactly the three chức vụ, Giáo viên first (the default)', () => {
+    expect(ROLES).toEqual(['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng'])
+    expect(DEFAULT_ROLE).toBe('Giáo viên')
   })
-
-  it('empty string → ""', () => {
-    expect(subjectLabel('')).toBe('')
+  it('accepts each role exactly', () => { for (const r of ROLES) expect(isRole(r)).toBe(true) })
+  it('rejects anything else, including near-misses and other types', () => {
+    for (const v of ['giáo viên', ' Giáo viên', 'Giáo viên ', 'Gia\u0301o viên', 'Hieu truong', '', null, undefined, 1, ['Giáo viên'], {}]) {
+      expect(isRole(v)).toBe(false)
+    }
   })
+})
 
-  it('whitespace-only → "" (trimmed to blank)', () => {
-    expect(subjectLabel('   ')).toBe('')
+describe('roleLabel', () => {
+  it('Giáo viên + môn → "Giáo viên: <môn>" (trimmed)', () => {
+    expect(roleLabel('Giáo viên', 'Toán')).toBe('Giáo viên: Toán')
+    expect(roleLabel('Giáo viên', '  Ngữ văn ')).toBe('Giáo viên: Ngữ văn')
   })
-
-  it('subject with leading/trailing spaces → trimmed in label', () => {
-    expect(subjectLabel('  Vật lý  ')).toBe('GV môn: Vật lý')
+  it('Giáo viên without môn → "Giáo viên"', () => {
+    expect(roleLabel('Giáo viên', '')).toBe('Giáo viên')
+    expect(roleLabel('Giáo viên', '   ')).toBe('Giáo viên')
   })
-
-  it('multi-word subject → "GV môn: Ngữ văn"', () => {
-    expect(subjectLabel('Ngữ văn')).toBe('GV môn: Ngữ văn')
+  it('Hiệu trưởng / Phó hiệu trưởng → only the chức vụ (môn ignored)', () => {
+    expect(roleLabel('Hiệu trưởng', 'Toán')).toBe('Hiệu trưởng')
+    expect(roleLabel('Phó hiệu trưởng', 'Văn')).toBe('Phó hiệu trưởng')
   })
-
-  it('prefix is exactly "GV môn: " (not "GV mon:" etc.)', () => {
-    const result = subjectLabel('Hóa học')
-    expect(result).toMatch(/^GV môn: /)
+  it('missing or unknown role → treated as Giáo viên (never prints "undefined")', () => {
+    expect(roleLabel(undefined, 'Toán')).toBe('Giáo viên: Toán')
+    expect(roleLabel(null, '')).toBe('Giáo viên')
+    expect(roleLabel('x', 'Lý')).toBe('Giáo viên: Lý')
   })
 })
 
@@ -129,16 +135,22 @@ describe('AboutContent constants', () => {
   it('ABOUT_NEWLINES_MAX = 10', () => expect(ABOUT_NEWLINES_MAX).toBe(10))
 })
 
-// ---- departmentLabel (hide tổ when it repeats the môn) ----
+// ---- departmentLabel (hide tổ when it repeats the môn, or for school leaders) ----
 
 describe('departmentLabel', () => {
-  it('different tổ → shown', () => expect(departmentLabel('Toán', 'Tổ Toán - Tin')).toBe('Tổ Toán - Tin'))
-  it('same as môn → hidden', () => expect(departmentLabel('Toán', 'Toán')).toBe(''))
-  it('"Tổ <môn>" → hidden', () => expect(departmentLabel('Ngữ văn', 'Tổ Ngữ văn')).toBe(''))
+  const GV = 'Giáo viên'
+  it('different tổ → shown', () => expect(departmentLabel(GV, 'Toán', 'Tổ Toán - Tin')).toBe('Tổ Toán - Tin'))
+  it('same as môn → hidden', () => expect(departmentLabel(GV, 'Toán', 'Toán')).toBe(''))
+  it('"Tổ <môn>" → hidden', () => expect(departmentLabel(GV, 'Ngữ văn', 'Tổ Ngữ văn')).toBe(''))
   it('ignores case, spaces and Unicode form', () => {
-    expect(departmentLabel('toán', '  TỔ   TOÁN ')).toBe('')
-    expect(departmentLabel('To\u0061\u0301n', 'Toán')).toBe('')  // NFD vs NFC
+    expect(departmentLabel(GV, 'toán', '  TỔ   TOÁN ')).toBe('')
+    expect(departmentLabel(GV, 'To\u0061\u0301n', 'Toán')).toBe('')  // NFD vs NFC
   })
-  it('no môn → tổ shown', () => expect(departmentLabel('', 'Tổ Toán')).toBe('Tổ Toán'))
-  it('no tổ → ""', () => expect(departmentLabel('Toán', '  ')).toBe(''))
+  it('no môn → tổ shown', () => expect(departmentLabel(GV, '', 'Tổ Toán')).toBe('Tổ Toán'))
+  it('no tổ → ""', () => expect(departmentLabel(GV, 'Toán', '  ')).toBe(''))
+  it('Hiệu trưởng / Phó hiệu trưởng → "" (card shows only the chức vụ)', () => {
+    expect(departmentLabel('Hiệu trưởng', 'Toán', 'Tổ Toán - Tin')).toBe('')
+    expect(departmentLabel('Phó hiệu trưởng', '', 'Tổ Văn')).toBe('')
+  })
+  it('missing role → treated as Giáo viên', () => expect(departmentLabel(undefined, 'Toán', 'Tổ Lý')).toBe('Tổ Lý'))
 })

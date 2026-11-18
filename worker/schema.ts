@@ -7,6 +7,11 @@ import { aboutSeedSql } from './aboutSeed.ts'
 // step in UPGRADES below, or databases created by an older deploy keep the old shape.
 // SHORTCUT: probe-and-rebuild upgrades — move to a schema_version table or
 //   wrangler d1 migrations once there are more than a few of them.
+// Chức vụ column; the same definition is used by CREATE and by the ADD COLUMN upgrade.
+// Labels must match ROLES in shared/api.ts (tested).
+const ROLE_COLUMN =
+  "TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))"
+
 export const SCHEMA: string[] = [
   // ---- Core tables ----
   `CREATE TABLE IF NOT EXISTS teacher (
@@ -23,7 +28,8 @@ export const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS teacher_profile (
   teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
   department   TEXT    NOT NULL DEFAULT '',
-  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
+  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
+  role         ${ROLE_COLUMN}
 )`,
   `CREATE TABLE IF NOT EXISTS admin (
   id         INTEGER PRIMARY KEY,
@@ -100,19 +106,18 @@ const TEACHER_PROFILE_DDL = SCHEMA.find((q) => q.includes('IF NOT EXISTS teacher
 const PROFILE_COLUMNS_SQL = "PRAGMA table_info('teacher_profile')"
 
 /**
- * In-place upgrades for databases created by older deploys. Each entry probes the live
- * shape and, only if it is old, rebuilds the table in one batch (one D1 transaction, so a
- * failure rolls back and the next request retries).
+ * In-place upgrades for databases created by older deploys, run in order. Each entry checks
+ * the live teacher_profile columns and, only if the table is old, runs its SQL in one batch
+ * (one D1 transaction, so a failure rolls back and the next request retries).
  */
-const UPGRADES: { needed(db: D1): Promise<boolean>; sql: string[] }[] = [
+const UPGRADES: { needed(cols: Set<string>): boolean; sql: string[] }[] = [
   {
     // 4d3a5df had teacher_profile.public_id TEXT UNIQUE NOT NULL; the column was removed in
     // plan 2026-11-18-privacy-about. SQLite cannot DROP a UNIQUE column, so copy the table.
     // Nothing references teacher_profile, so dropping it violates no foreign key.
-    async needed(db) {
-      const { results } = await db.prepare(PROFILE_COLUMNS_SQL).all<{ name: string }>()
-      return results.some((c) => c.name === 'public_id')
-    },
+    // The new table comes from the current DDL, so copied rows get role's default.
+    // `!role` guards against a stale probe re-running the copy and resetting role.
+    needed: (cols) => cols.has('public_id') && !cols.has('role'),
     sql: [
       TEACHER_PROFILE_DDL.replace('IF NOT EXISTS teacher_profile (', 'teacher_profile_new ('),
       'INSERT INTO teacher_profile_new (teacher_id, department, show_on_home) ' +
@@ -121,20 +126,34 @@ const UPGRADES: { needed(db: D1): Promise<boolean>; sql: string[] }[] = [
       'ALTER TABLE teacher_profile_new RENAME TO teacher_profile',
     ],
   },
+  {
+    // Chức vụ added in plan 2026-11-18-teacher-role. Existing rows get 'Giáo viên'.
+    // Two isolates racing here: the loser fails with "duplicate column name", returns one 503,
+    // and the retry sees the column and skips.
+    needed: (cols) => !cols.has('role'),
+    sql: [`ALTER TABLE teacher_profile ADD COLUMN role ${ROLE_COLUMN}`],
+  },
 ]
 
 /** Every SQL string the upgrade step can prepare (probes included); testDb counts these as DDL. */
 export const UPGRADE_SQL: string[] = [PROFILE_COLUMNS_SQL, ...UPGRADES.flatMap((u) => u.sql)]
 
+async function profileColumns(db: D1): Promise<Set<string>> {
+  const { results } = await db.prepare(PROFILE_COLUMNS_SQL).all<{ name: string }>()
+  return new Set(results.map((c) => c.name))
+}
+
 async function runUpgrades(db: D1): Promise<void> {
+  // One probe on an up-to-date database; re-probe only after a step changed the table.
+  let cols = await profileColumns(db)
   for (const u of UPGRADES) {
-    if (await u.needed(db)) {
-      // Fixed string only: tells an operator this 503 is a failed upgrade, not a D1 outage.
-      await db.batch(u.sql.map((q) => db.prepare(q))).catch((e: unknown) => {
-        console.error('schema: upgrade failed')
-        throw e
-      })
-    }
+    if (!u.needed(cols)) continue
+    // Fixed string only: tells an operator this 503 is a failed upgrade, not a D1 outage.
+    await db.batch(u.sql.map((q) => db.prepare(q))).catch((e: unknown) => {
+      console.error('schema: upgrade failed')
+      throw e
+    })
+    cols = await profileColumns(db)
   }
 }
 

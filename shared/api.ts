@@ -74,6 +74,7 @@ export type WallTeacher = {
   name: string
   subject: string
   department: string
+  role: Role
   cardCount: number
 }
 
@@ -90,6 +91,7 @@ export type TeacherProfile = {
   name: string
   subject: string
   department: string
+  role: Role
 }
 
 /** Response from GET /api/qr/:token */
@@ -155,6 +157,7 @@ export type AdminTeacher = {
   name: string
   subject: string
   department: string
+  role: Role
   showOnHome: 0 | 1
   cardCounts: { pending: number; approved: number; hidden: number }
   created_at: string
@@ -166,6 +169,8 @@ export type AdminTeacherInput = {
   name: string
   subject?: string
   department?: string
+  /** Omitted → Giáo viên on create, unchanged on update. */
+  role?: Role
   showOnHome?: 0 | 1
 }
 
@@ -260,24 +265,39 @@ export function formatFrom(opts: { fromName: string; fromClass: string; anonymou
   return cls ? `${name} · ${cls}` : name
 }
 
+/** Chức vụ. Stored as these exact labels (DB CHECK in teacher_profile.role). */
+export const ROLES = ['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng'] as const
+export type Role = (typeof ROLES)[number]
+export const DEFAULT_ROLE: Role = 'Giáo viên'
+
+/** Strict allow-list check: exact string match, no trimming or Unicode normalization. */
+export function isRole(v: unknown): v is Role {
+  return typeof v === 'string' && (ROLES as readonly string[]).includes(v)
+}
+
+/** School leaders (Hiệu trưởng / Phó hiệu trưởng) are shown by chức vụ only. */
+const isLeader = (role: unknown) => role === 'Hiệu trưởng' || role === 'Phó hiệu trưởng'
+
 /**
- * Build the subject label shown on teacher tiles and card headings.
- * Returns 'GV môn: <subject>' when subject is non-empty, '' otherwise.
+ * The chức vụ / môn line on teacher tiles and cards.
+ * Leaders → the chức vụ only. Giáo viên (or a missing/unknown role) → "Giáo viên: <môn>",
+ * or "Giáo viên" when there is no môn.
  */
-export function subjectLabel(subject: string): string {
+export function roleLabel(role: unknown, subject: string): string {
+  if (isLeader(role)) return role as Role
   const s = subject.trim()
-  return s ? `GV môn: ${s}` : ''
+  return s ? `${DEFAULT_ROLE}: ${s}` : DEFAULT_ROLE
 }
 
 /** Lowercase, NFC, collapse spaces, drop a leading "tổ " — for comparing môn and tổ. */
 const norm = (v: string) => v.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim().replace(/^tổ /, '')
 
 /**
- * Department line for a teacher tile. Returns "" when it only repeats the
- * subject (e.g. môn "Toán", tổ "Toán" or "Tổ Toán"), so the tile shows one line.
+ * Department line for a teacher tile. Returns "" for school leaders (shown by chức vụ only)
+ * and when it only repeats the subject (e.g. môn "Toán", tổ "Toán" or "Tổ Toán").
  */
-export function departmentLabel(subject: string, department: string): string {
+export function departmentLabel(role: unknown, subject: string, department: string): string {
   const d = department.trim()
-  if (!d) return ''
+  if (!d || isLeader(role)) return ''
   return subject.trim() && norm(subject) === norm(d) ? '' : d
 }

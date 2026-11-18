@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useReducer, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { TeacherProfile, TemplatePublic, WallTeacher, WishPublic } from '../../shared/api.ts'
-import { formatFrom, departmentLabel, subjectLabel } from '../../shared/api.ts'
+import { formatFrom, departmentLabel, roleLabel } from '../../shared/api.ts'
 import { fillWish } from '../../shared/wish.ts'
 import { ApiError, getPublicWishes, getQr, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
@@ -138,6 +138,7 @@ export default function SendPage() {
           name: t.name,
           subject: t.subject,
           department: t.department,
+          role: t.role,
         })
       }
     }).finally(() => setLoadingData(false))
@@ -152,6 +153,7 @@ export default function SendPage() {
       name: t.name,
       subject: t.subject,
       department: t.department,
+      role: t.role,
     })
     dispatch({ type: 'SELECT_TEACHER', id: t.id })
   }
@@ -311,8 +313,8 @@ export default function SendPage() {
         <div className="teacher-grid">
           {filteredTeachers.map((t) => {
             const displayName = t.title ? `${t.title} ${t.name}` : t.name
-            const sub = subjectLabel(t.subject)
-            const dept = departmentLabel(t.subject, t.department)
+            const sub = roleLabel(t.role, t.subject)
+            const dept = departmentLabel(t.role, t.subject, t.department)
             return (
               <button
                 key={t.id}
@@ -473,6 +475,7 @@ export default function SendPage() {
                   subject: teacherInfo.subject,
                   message: state.text || 'Lời chúc của bạn sẽ hiện ở đây...',
                   title: teacherInfo.title as 'Thầy' | 'Cô' | null,
+                  role: teacherInfo.role,
                 }}
                 layout={currentTemplate.layout}
                 images={currentTemplate.images}

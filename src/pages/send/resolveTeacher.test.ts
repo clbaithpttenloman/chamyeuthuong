@@ -12,6 +12,7 @@ const WALL_TEACHER: WallTeacher = {
   subject: 'Toán',
   department: 'Tổ Toán',
   cardCount: 5,
+  role: 'Giáo viên',
 }
 
 describe('resolveTeacherById', () => {
@@ -23,6 +24,7 @@ describe('resolveTeacherById', () => {
       name: 'Nguyễn Văn A',
       subject: 'Toán',
       department: 'Tổ Toán',
+      role: 'Giáo viên',
     })
   })
 
@@ -38,8 +40,8 @@ describe('resolveTeacherById', () => {
 
   it('matches by id, not by position', () => {
     const teachers: WallTeacher[] = [
-      { id: 10, title: 'Cô', name: 'Trần Thị B', subject: 'Văn', department: '', cardCount: 0 },
-      { id: 20, title: null, name: 'Lê Văn C', subject: '', department: 'Tổ Lý', cardCount: 2 },
+      { id: 10, title: 'Cô', name: 'Trần Thị B', subject: 'Văn', department: '', cardCount: 0, role: 'Giáo viên' },
+      { id: 20, title: null, name: 'Lê Văn C', subject: '', department: 'Tổ Lý', cardCount: 2, role: 'Giáo viên' },
     ]
     const result = resolveTeacherById(20, teachers)
     expect(result?.name).toBe('Lê Văn C')
@@ -47,8 +49,15 @@ describe('resolveTeacherById', () => {
   })
 
   it('teacher with null title is returned correctly', () => {
-    const t: WallTeacher = { id: 5, title: null, name: 'Phạm Văn D', subject: '', department: '', cardCount: 0 }
+    const t: WallTeacher = { id: 5, title: null, name: 'Phạm Văn D', subject: '', department: '', cardCount: 0, role: 'Giáo viên' }
     const result = resolveTeacherById(5, [t])
     expect(result?.title).toBeNull()
+  })
+})
+
+describe('resolveTeacherById — role', () => {
+  it('carries the role so the send preview shows the chức vụ', () => {
+    const t: WallTeacher = { id: 9, title: 'Cô', name: 'Hà', subject: 'Toán', department: '', cardCount: 0, role: 'Hiệu trưởng' }
+    expect(resolveTeacherById(9, [t])?.role).toBe('Hiệu trưởng')
   })
 })

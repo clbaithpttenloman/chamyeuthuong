@@ -14,6 +14,7 @@ import { error, json } from './http.ts'
 import { ensureSchema } from './schema.ts'
 import { cardWhere, teacherWhere, fetchTemplateImages } from './publicSql.ts'
 import type { Env } from './types.ts'
+import type { Role } from '../shared/api.ts'
 
 // ---- GET /api/wall ----
 
@@ -21,16 +22,16 @@ async function handleWall(db: Env['DB']): Promise<Response> {
   // Teachers (show_on_home=1) with approved card count; expose numeric id (not token or publicId).
   const { results: teachers } = await db
     .prepare(
-      'SELECT t.id, tt.title, t.name, t.subject, tp.department, ' +
+      'SELECT t.id, tt.title, t.name, t.subject, tp.department, tp.role, ' +
       'COUNT(sc.id) AS cardCount ' +
       'FROM teacher t ' +
       `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')} ` +
       'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
       `LEFT JOIN student_card sc ON sc.teacher_id = t.id AND ${cardWhere('sc')} ` +
-      'GROUP BY t.id, tt.title, t.name, t.subject, tp.department ' +
+      'GROUP BY t.id, tt.title, t.name, t.subject, tp.department, tp.role ' +
       'ORDER BY t.id',
     )
-    .all<{ id: number; title: string | null; name: string; subject: string; department: string; cardCount: number }>()
+    .all<{ id: number; title: string | null; name: string; subject: string; department: string; role: Role; cardCount: number }>()
 
   // Totals (show_on_home=1 teachers and their approved cards only)
   const totalsRow = await db

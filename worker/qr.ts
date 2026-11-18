@@ -3,7 +3,7 @@
  *
  * Handles: GET /api/qr/:token
  *
- * Response: { teacher: { id, title, name, subject, department }, cards: PublicCard[] (newest first, ≤200), total }
+ * Response: { teacher: { id, title, name, subject, department, role }, cards: PublicCard[] (newest first, ≤200), total }
  *
  * Order: rate limit → method check → isToken → ensureSchema → DB.
  * http.ts BASE_HEADERS already set Cache-Control: no-store, X-Robots-Tag: noindex on all responses.
@@ -13,6 +13,7 @@ import { isToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
 import { cardWhere, fetchTemplateImages, toPublicCard, type CardRow } from './publicSql.ts'
 import type { Env } from './types.ts'
+import type { Role } from '../shared/api.ts'
 
 export async function handleQr(request: Request, env: Env): Promise<Response> {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
@@ -36,14 +37,15 @@ export async function handleQr(request: Request, env: Env): Promise<Response> {
   // Look up teacher by private QR token; expose numeric id only (never the token)
   const teacherRow = await env.DB
     .prepare(
-      'SELECT t.id, tt.title, t.name, t.subject, COALESCE(tp.department, \'\') AS department ' +
+      'SELECT t.id, tt.title, t.name, t.subject, COALESCE(tp.department, \'\') AS department, ' +
+      'COALESCE(tp.role, \'Giáo viên\') AS role ' +
       'FROM teacher t ' +
       'LEFT JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
       'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
       'WHERE t.token = ?',
     )
     .bind(token)
-    .first<{ id: number; title: string | null; name: string; subject: string; department: string }>()
+    .first<{ id: number; title: string | null; name: string; subject: string; department: string; role: Role }>()
 
   if (!teacherRow) return error('not_found')
 
@@ -79,6 +81,7 @@ export async function handleQr(request: Request, env: Env): Promise<Response> {
       name: teacherRow.name,
       subject: teacherRow.subject,
       department: teacherRow.department,
+      role: teacherRow.role,
     },
     cards,
     total: totalRow?.total ?? 0,

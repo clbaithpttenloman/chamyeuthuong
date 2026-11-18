@@ -20,6 +20,7 @@ import { handleModeration } from './moderation.ts'
 import { handleAdminAbout } from './about.ts'
 import { newToken } from './token.ts'
 import { isTitle } from '../shared/honorific.ts'
+import { DEFAULT_ROLE, isRole, type Role } from '../shared/api.ts'
 import type { Env } from './types.ts'
 import type { D1Stmt } from './types.ts'
 
@@ -39,6 +40,7 @@ type RawTeacherRow = {
   subject: string
   created_at: string
   department: string | null
+  role: Role | null
   showOnHome: number | null
   title: 'Thầy' | 'Cô' | null
   pending_count: number
@@ -49,6 +51,7 @@ type RawTeacherRow = {
 const TEACHER_SELECT =
   'SELECT t.id, t.token, t.name, t.subject, t.created_at, ' +
   'COALESCE(tp.department, \'\') AS department, ' +
+  'COALESCE(tp.role, \'Giáo viên\') AS role, ' +
   'COALESCE(tp.show_on_home, 1) AS showOnHome, tt.title, ' +
   'COALESCE(SUM(CASE WHEN sc.status = \'pending\' THEN 1 ELSE 0 END), 0) AS pending_count, ' +
   'COALESCE(SUM(CASE WHEN sc.status = \'approved\' THEN 1 ELSE 0 END), 0) AS approved_count, ' +
@@ -66,6 +69,7 @@ function toAdminTeacher(row: RawTeacherRow) {
     name: row.name,
     subject: row.subject,
     department: row.department ?? '',
+    role: row.role ?? DEFAULT_ROLE,
     showOnHome: (row.showOnHome ?? 1) as 0 | 1,
     cardCounts: {
       pending: row.pending_count ?? 0,
@@ -78,7 +82,7 @@ function toAdminTeacher(row: RawTeacherRow) {
 
 async function fetchTeacherById(db: Env['DB'], id: number) {
   return db
-    .prepare(TEACHER_SELECT + 'WHERE t.id = ? GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.show_on_home, tt.title')
+    .prepare(TEACHER_SELECT + 'WHERE t.id = ? GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.role, tp.show_on_home, tt.title')
     .bind(id)
     .first<RawTeacherRow>()
 }
@@ -87,7 +91,7 @@ async function fetchTeacherById(db: Env['DB'], id: number) {
 
 async function listTeachers(env: Env): Promise<Response> {
   const { results } = await env.DB
-    .prepare(TEACHER_SELECT + 'GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
+    .prepare(TEACHER_SELECT + 'GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.role, tp.show_on_home, tt.title ORDER BY t.id')
     .all<RawTeacherRow>()
   return json(results.map(toAdminTeacher))
 }
@@ -106,6 +110,10 @@ async function createTeacher(request: Request, env: Env): Promise<Response> {
   if (subject.length > 80) throw new HttpError('bad_request')
   if (department.length > 80) throw new HttpError('bad_request')
   if (typeof rawTitle !== 'string' || !isTitle(rawTitle)) throw new HttpError('bad_request')
+
+  // Role: a present key must be an exact allowed label (null/other types → 400); missing → default
+  if ('role' in body && !isRole(body.role)) throw new HttpError('bad_request')
+  const role: Role = 'role' in body ? (body.role as Role) : DEFAULT_ROLE
 
   // Strict 0|1 for showOnHome; default to 1 when omitted
   const rawShowOnHome = 'showOnHome' in body ? parseBit(body.showOnHome) : (1 as 0 | 1)
@@ -129,7 +137,7 @@ async function createTeacher(request: Request, env: Env): Promise<Response> {
   const stmts: D1Stmt[] = [
     env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(token, name, subject, now),
     env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(token, rawTitle),
-    env.DB.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?)').bind(token, department, showOnHome),
+    env.DB.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home, role) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(token, department, showOnHome, role),
   ]
 
   await env.DB.batch(stmts)
@@ -154,6 +162,9 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
 
   // Strict 0|1 for showOnHome when provided
   if ('showOnHome' in body && parseBit(body.showOnHome) === null) throw new HttpError('bad_request')
+
+  // Role when provided: exact allowed label only. Omitted → existing value kept (not in SET list).
+  if ('role' in body && !isRole(body.role)) throw new HttpError('bad_request')
 
   const existing = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
@@ -184,12 +195,20 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
     ? parseBit(body.showOnHome)!
     : ((profileRow?.show_on_home as 0 | 1 | null) ?? 1) as 0 | 1
 
+  // With no profile row yet, the INSERT path uses the column default ('Giáo viên') when role is omitted.
+  const profileStmt = 'role' in body
+    ? env.DB.prepare(
+        'INSERT INTO teacher_profile (teacher_id, department, show_on_home, role) VALUES (?, ?, ?, ?) ' +
+        'ON CONFLICT(teacher_id) DO UPDATE SET department = excluded.department, show_on_home = excluded.show_on_home, role = excluded.role',
+      ).bind(id, finalDepartment, finalShowOnHome, body.role as Role)
+    : env.DB.prepare(
+        'INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?) ' +
+        'ON CONFLICT(teacher_id) DO UPDATE SET department = excluded.department, show_on_home = excluded.show_on_home',
+      ).bind(id, finalDepartment, finalShowOnHome)
+
   const stmts: D1Stmt[] = [
     env.DB.prepare('UPDATE teacher SET name = ?, subject = ? WHERE id = ?').bind(name, finalSubject, id),
-    env.DB.prepare(
-      'INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?) ' +
-      'ON CONFLICT(teacher_id) DO UPDATE SET department = excluded.department, show_on_home = excluded.show_on_home',
-    ).bind(id, finalDepartment, finalShowOnHome),
+    profileStmt,
   ]
 
   if (rawTitle !== undefined) {
@@ -235,6 +254,7 @@ async function deleteTeacher(env: Env, id: number): Promise<Response> {
 }
 
 // ---- Bulk create ({ items: [{ title, name, subject?, department? }] }) ----
+// Every item gets the default role (Giáo viên); a per-item `role` key is ignored like any unknown key.
 
 async function createBulk(request: Request, env: Env): Promise<Response> {
   const body = await readJson<Record<string, unknown>>(request, 65536)
@@ -302,7 +322,7 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
 
   // Fetch created teachers
   const { results } = await env.DB
-    .prepare(TEACHER_SELECT + 'WHERE t.token IN (SELECT value FROM json_each(?)) GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
+    .prepare(TEACHER_SELECT + 'WHERE t.token IN (SELECT value FROM json_each(?)) GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.role, tp.show_on_home, tt.title ORDER BY t.id')
     .bind(JSON.stringify(tokens))
     .all<RawTeacherRow>()
 

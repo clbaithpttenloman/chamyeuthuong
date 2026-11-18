@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { WallResponse, WallTeacher } from '../../shared/api.ts'
-import { departmentLabel, subjectLabel } from '../../shared/api.ts'
+import { departmentLabel, roleLabel } from '../../shared/api.ts'
 import { getWall } from '../api'
 import site from '../content/site.json'
 
@@ -145,8 +145,8 @@ export default function Home() {
 
 function TeacherTile({ teacher }: { teacher: WallTeacher }) {
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
-  const sub = subjectLabel(teacher.subject)
-  const dept = departmentLabel(teacher.subject, teacher.department)
+  const sub = roleLabel(teacher.role, teacher.subject)
+  const dept = departmentLabel(teacher.role, teacher.subject, teacher.department)
   return (
     <Link
       to={`/gui-thiep?thay=${teacher.id}`}

@@ -2,14 +2,15 @@
  * TeachersSection — Thầy cô.
  *
  * List with card counts (pending/approved/hidden).
- * Form: Thầy/Cô required, name, subject, department, show on home.
+ * Form: Thầy/Cô required, name, chức vụ (default Giáo viên), subject, department, show on home.
  * QR show/download using private token URL `${origin}/t/${token}`.
  * Rotate QR token, delete teacher.
- * Bulk add with lines `Thầy|Cô Tên | Môn | Tổ`.
+ * Bulk add with lines `Thầy|Cô Tên | Môn | Tổ` (every bulk teacher is Giáo viên).
  */
 import { useState } from 'react'
 import QRCode from 'qrcode'
-import type { AdminTeacher, AdminTeacherInput } from '../../../shared/api.ts'
+import type { AdminTeacher, AdminTeacherInput, Role } from '../../../shared/api.ts'
+import { DEFAULT_ROLE, ROLES } from '../../../shared/api.ts'
 import {
   ApiError,
   bulkAdminTeachers,
@@ -27,6 +28,7 @@ type TeacherForm = {
   name: string
   subject: string
   department: string
+  role: Role
   showOnHome: 0 | 1
 }
 
@@ -36,6 +38,7 @@ function emptyForm(t?: AdminTeacher): TeacherForm {
     name: t?.name ?? '',
     subject: t?.subject ?? '',
     department: t?.department ?? '',
+    role: t?.role ?? DEFAULT_ROLE,
     showOnHome: t?.showOnHome ?? 1,
   }
 }
@@ -186,6 +189,7 @@ export default function TeachersSection({
       name: form.name.trim(),
       ...(form.subject.trim() ? { subject: form.subject.trim() } : {}),
       ...(form.department.trim() ? { department: form.department.trim() } : {}),
+      role: form.role,
       showOnHome: form.showOnHome,
     }
 
@@ -320,6 +324,17 @@ export default function TeachersSection({
           </label>
 
           <label>
+            Chức vụ
+            <select
+              value={form.role}
+              onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as Role }))}
+            >
+              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+            {form.role !== DEFAULT_ROLE && <small>Thiệp và trang chủ chỉ hiện chức vụ, không hiện môn và tổ.</small>}
+          </label>
+
+          <label>
             Môn dạy
             <input
               type="text"
@@ -378,6 +393,7 @@ export default function TeachersSection({
               <tr>
                 <th>Danh xưng</th>
                 <th>Họ tên</th>
+                <th>Chức vụ</th>
                 <th>Môn</th>
                 <th>Tổ</th>
                 <th>Trang chủ</th>
@@ -390,6 +406,7 @@ export default function TeachersSection({
                 <tr key={t.id} className={editing === t.id ? 'row-active' : undefined}>
                   <td>{t.title ?? '—'}</td>
                   <td>{t.name}</td>
+                  <td>{t.role}</td>
                   <td>{t.subject || '—'}</td>
                   <td>{t.department || '—'}</td>
                   <td>{t.showOnHome ? '✓' : '—'}</td>

@@ -30,7 +30,7 @@ function makeEnv(db: D1, opts: { publicIpLimit?: boolean } = {}) {
 /** Seed a full teacher record (teacher + title + profile). No public_id column. */
 async function seedTeacher(
   db: D1,
-  opts: { token?: string; title?: 'Thầy' | 'Cô'; showOnHome?: 0 | 1; name?: string } = {},
+  opts: { token?: string; title?: 'Thầy' | 'Cô'; showOnHome?: 0 | 1; name?: string; role?: string } = {},
 ) {
   const now = new Date().toISOString()
   const token = opts.token ?? 'tok1234567890abc'
@@ -42,6 +42,7 @@ async function seedTeacher(
   }
   await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)')
     .bind(tid, 'Khoa học', opts.showOnHome ?? 1).run()
+  if (opts.role) await db.prepare('UPDATE teacher_profile SET role = ? WHERE teacher_id = ?').bind(opts.role, tid).run()
   return { tid, token }
 }
 
@@ -395,4 +396,15 @@ describe('public routes — OPTIONS returns 405 without Access-Control-* headers
       expect(r.headers.get('Access-Control-Allow-Headers')).toBeNull()
     },
   )
+})
+
+describe('GET /api/wall — role', () => {
+  it('each teacher carries role (default Giáo viên, stored value otherwise)', async () => {
+    const { db } = testDb()
+    await seedTeacher(db, { token: 'tok1234567890abc', title: 'Thầy' })
+    await seedTeacher(db, { token: 'tok2234567890abc', title: 'Cô', role: 'Hiệu trưởng' })
+    const r = await handlePublic(new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
+    const body = (await r.json()) as { teachers: { role: string }[] }
+    expect(body.teachers.map((t) => t.role)).toEqual(['Giáo viên', 'Hiệu trưởng'])
+  })
 })

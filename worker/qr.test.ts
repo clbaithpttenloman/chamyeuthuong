@@ -374,3 +374,14 @@ describe('GET /api/qr/:token — card shape uses camelCase publicId', () => {
     expect(body.cards[0]).not.toHaveProperty('public_id')
   })
 })
+
+describe('GET /api/qr/:token — role', () => {
+  it('teacher carries role (default Giáo viên; stored value after update)', async () => {
+    const { db } = testDb()
+    const { tid } = await seedTeacher(db)
+    const get = async () => ((await (await handleQr(new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))).json()) as { teacher: { role: string } }).teacher.role
+    expect(await get()).toBe('Giáo viên')
+    await db.prepare("UPDATE teacher_profile SET role = 'Phó hiệu trưởng' WHERE teacher_id = ?").bind(tid).run()
+    expect(await get()).toBe('Phó hiệu trưởng')
+  })
+})

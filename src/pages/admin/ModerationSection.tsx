@@ -247,6 +247,7 @@ export default function ModerationSection({
             <ModCard
               key={card.id}
               card={card}
+              profile={teachers.find((t) => t.id === card.teacherId)}
               selected={selected.has(card.id)}
               onToggle={() => handleToggleSelect(card.id)}
               onAction={(action) => { void handleSingle(card, action) }}
@@ -268,11 +269,14 @@ export default function ModerationSection({
 
 function ModCard({
   card,
+  profile,
   selected,
   onToggle,
   onAction,
 }: {
   card: AdminCard
+  /** Admin teacher record, for the chức vụ / môn line on the thumbnail (absent → "Giáo viên"). */
+  profile?: AdminTeacher
   selected: boolean
   onToggle: () => void
   onAction: (action: 'approved' | 'hidden' | 'delete') => void
@@ -306,7 +310,8 @@ function ModCard({
               <CardView
                 card={{
                   name: teacher?.name ?? '?',
-                  subject: '',
+                  subject: profile?.subject ?? '',
+                  role: profile?.role,
                   message: card.message,
                   title: (teacher?.title as 'Thầy' | 'Cô' | null) ?? null,
                 }}

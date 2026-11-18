@@ -27,5 +27,6 @@ export function resolveTeacherById(
     name: found.name,
     subject: found.subject,
     department: found.department,
+    role: found.role,
   }
 }

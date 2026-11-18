@@ -21,6 +21,7 @@ type AdminTeacher = {
   name: string
   subject: string
   department: string
+  role: string
   showOnHome: 0 | 1
   cardCounts: { pending: number; approved: number; hidden: number }
   created_at: string
@@ -979,5 +980,72 @@ describe('worker routing — /api/image/:token', () => {
     )
     expect(r.status).toBe(404)
     expect(r.headers.get('Content-Type')).toContain('application/json')
+  })
+})
+
+// ---- Chức vụ (role) ----
+
+describe('teacher role (chức vụ)', () => {
+  const create = async (body: Record<string, unknown>) =>
+    handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'A', title: 'Thầy', ...body }), makeEnv(db))
+
+  it('create without role → Giáo viên', async () => {
+    const r = await create({})
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as AdminTeacher).role).toBe('Giáo viên')
+  })
+
+  it('create with each valid role → stored and returned', async () => {
+    for (const role of ['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng']) {
+      const r = await create({ role })
+      expect(r.status).toBe(200)
+      expect(((await r.json()) as AdminTeacher).role).toBe(role)
+    }
+  })
+
+  it('create with an invalid role → 400 (null, other strings, NFD form, non-strings)', async () => {
+    for (const role of [null, '', 'Hieu truong', 'hiệu trưởng', ' Hiệu trưởng', 'Hie\u0323\u0302u trưởng', 1, ['Hiệu trưởng'], {}]) {
+      expect((await create({ role })).status).toBe(400)
+    }
+  })
+
+  it('update sets the role', async () => {
+    const t = (await (await create({})).json()) as AdminTeacher
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${t.id}`, { name: 'A', role: 'Hiệu trưởng' }), makeEnv(db))
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as AdminTeacher).role).toBe('Hiệu trưởng')
+  })
+
+  it('update without role keeps the existing role', async () => {
+    const t = (await (await create({ role: 'Phó hiệu trưởng' })).json()) as AdminTeacher
+    const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${t.id}`, { name: 'B', department: 'Tổ Văn' }), makeEnv(db))
+    expect(((await r.json()) as AdminTeacher).role).toBe('Phó hiệu trưởng')
+  })
+
+  it('update with an invalid role → 400 and role unchanged', async () => {
+    const t = (await (await create({ role: 'Hiệu trưởng' })).json()) as AdminTeacher
+    for (const role of [null, 'x', 2]) {
+      const r = await handleAdmin(adminReq('PUT', `/api/admin/teachers/${t.id}`, { name: 'A', role }), makeEnv(db))
+      expect(r.status).toBe(400)
+    }
+    const list = (await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json()) as AdminTeacher[]
+    expect(list[0].role).toBe('Hiệu trưởng')
+  })
+
+  it('teacher with no teacher_profile row → listed as Giáo viên; update without role inserts the default', async () => {
+    await db.prepare("INSERT INTO teacher (id, token, name, subject, created_at) VALUES (50, 'tok5034567890abc', 'Old', '', '2026-11-01')").run()
+    const list = (await (await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))).json()) as AdminTeacher[]
+    expect(list.find((t) => t.id === 50)!.role).toBe('Giáo viên')
+    const r = await handleAdmin(adminReq('PUT', '/api/admin/teachers/50', { name: 'Old' }), makeEnv(db))
+    expect(((await r.json()) as AdminTeacher).role).toBe('Giáo viên')
+  })
+
+  it('bulk create → every item Giáo viên; a per-item role is ignored', async () => {
+    const r = await handleAdmin(adminReq('POST', '/api/admin/teachers/bulk', {
+      items: [{ title: 'Thầy', name: 'X' }, { title: 'Cô', name: 'Y', role: 'Hiệu trưởng' }],
+    }), makeEnv(db))
+    expect(r.status).toBe(200)
+    const { created } = (await r.json()) as { created: AdminTeacher[] }
+    expect(created.map((t) => t.role)).toEqual(['Giáo viên', 'Giáo viên'])
   })
 })

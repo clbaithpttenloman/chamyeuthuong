@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { PublicCard, QrResponse } from '../../shared/api.ts'
-import { subjectLabel } from '../../shared/api.ts'
+import { roleLabel } from '../../shared/api.ts'
 import { ApiError, getQr } from '../api'
 import CardView from '../components/CardView.tsx'
 import site from '../content/site.json'
@@ -74,7 +74,7 @@ export default function QrPage() {
 
   const { teacher, cards, total } = state.data
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
-  const sub = subjectLabel(teacher.subject)
+  const sub = roleLabel(teacher.role, teacher.subject)
   // Send link uses ?t=<token> so hidden teachers can also receive cards
   const sendLink = `/gui-thiep?t=${encodeURIComponent(token!)}`
 
@@ -119,6 +119,7 @@ export default function QrPage() {
               subject: teacher.subject,
               message: currentCard.message,
               title: teacher.title as 'Thầy' | 'Cô' | null,
+              role: teacher.role,
             }}
             layout={currentCard.layout}
             images={currentCard.images}
@@ -166,6 +167,7 @@ export default function QrPage() {
                     subject: teacher.subject,
                     message: card.message,
                     title: teacher.title as 'Thầy' | 'Cô' | null,
+              role: teacher.role,
                   }}
                   layout={card.layout}
                   images={card.images}

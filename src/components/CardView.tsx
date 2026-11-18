@@ -4,22 +4,23 @@
  * Used by SendPage (write preview), QrPage (reader view), and TemplateSection (admin preview).
  *
  * Props:
- *   card:   { name, subject, message, title? }
+ *   card:   { name, subject, message, title?, role? }
  *   layout: layout id from LAYOUTS (falls back to DEFAULT_LAYOUT if unknown)
  *   images: slot → 16-char token; invalid tokens are silently dropped
  *
  * Only the background and banner slots exist; any other key in images is ignored.
  *
- * Subject is shown as "GV môn: <subject>" via subjectLabel(); omitted when empty.
+ * The line under the name comes from roleLabel(): "Giáo viên: <môn>", "Giáo viên", or the
+ * chức vụ alone for Hiệu trưởng / Phó hiệu trưởng.
  *
  * Image URLs are only built for tokens matching ^[a-z0-9]{16}$, so no
  * user-supplied string can reach the src/style attributes in another form.
  */
 import { LAYOUTS, DEFAULT_LAYOUT, isLayout } from '../../shared/layouts.ts'
-import { subjectLabel } from '../../shared/api.ts'
+import { roleLabel } from '../../shared/api.ts'
 import site from '../content/site.json'
 
-type CardData = { name: string; subject: string; message: string; title?: 'Thầy' | 'Cô' | null }
+type CardData = { name: string; subject: string; message: string; title?: 'Thầy' | 'Cô' | null; role?: string | null }
 type ImageMap = Partial<Record<string, string>>
 
 // Accepts exactly 16 lowercase alphanumeric chars — the generated token length.
@@ -54,7 +55,7 @@ export default function CardView({
   const bannerUrl = imageUrl(images['banner'])
 
   const hasBackground = bgUrl !== null
-  const subLabel = subjectLabel(card.subject)
+  const subLabel = roleLabel(card.role, card.subject)
 
   return (
     <article

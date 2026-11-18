@@ -317,18 +317,27 @@ describe('CardView — no photo slot rendered', () => {
   })
 })
 
-describe('CardView — subject shown as "GV môn: <subject>"', () => {
-  it('subject "Toán" is shown as "GV môn: Toán"', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('GV môn: Toán')
+describe('CardView — chức vụ / môn line', () => {
+  it('no role (old data) → "Giáo viên: <môn>"', () => {
+    const html = renderToString(<CardView card={baseCard} layout="classic" images={{}} />)
+    expect(html).toContain('Giáo viên: Toán')
+    expect(html).not.toContain('GV môn')
   })
 
-  it('empty subject renders nothing — no "GV môn:" prefix for empty subject', () => {
-    const card = { ...baseCard, subject: '' }
-    const html = renderToString(<CardView card={card} layout="classic" images={{}} />)
-    // No subject label rendered when subject is empty
-    expect(html).not.toContain('GV môn:')
+  it('Giáo viên with empty môn → "Giáo viên"', () => {
+    const html = renderToString(<CardView card={{ ...baseCard, role: 'Giáo viên', subject: '' }} layout="classic" images={{}} />)
+    expect(html).toContain('>Giáo viên<')
+  })
+
+  it('Hiệu trưởng → only "Hiệu trưởng", môn not shown', () => {
+    const html = renderToString(<CardView card={{ ...baseCard, role: 'Hiệu trưởng' }} layout="classic" images={{}} />)
+    expect(html).toContain('>Hiệu trưởng<')
+    expect(html).not.toContain('Toán')
+  })
+
+  it('Phó hiệu trưởng → only "Phó hiệu trưởng"', () => {
+    const html = renderToString(<CardView card={{ ...baseCard, role: 'Phó hiệu trưởng' }} layout="classic" images={{}} />)
+    expect(html).toContain('>Phó hiệu trưởng<')
+    expect(html).not.toContain('Giáo viên')
   })
 })
