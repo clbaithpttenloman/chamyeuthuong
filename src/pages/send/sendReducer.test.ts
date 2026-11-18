@@ -9,15 +9,22 @@ describe('initialState', () => {
   it('step is 1', () => expect(initialState(null).step).toBe(1))
   it('anonymous is true (Gửi ẩn danh ON by default)', () => expect(initialState(null).anonymous).toBe(true))
   it('text is empty', () => expect(initialState(null).text).toBe(''))
-  it('stores preselectedTeacherId in both fields', () => {
-    const s = initialState('abc1234567890123')
-    expect(s.teacherPublicId).toBe('abc1234567890123')
-    expect(s.preselectedTeacherId).toBe('abc1234567890123')
+  it('stores preselectedById when given numeric id', () => {
+    const s = initialState(42)
+    expect(s.teacherId).toBe(42)
+    expect(s.preselectedById).toBe(42)
   })
-  it('preselected null leaves both fields null', () => {
+  it('stores preselectedByToken when given token', () => {
+    const s = initialState(null, 'abc1234567890ab')
+    expect(s.teacherToken).toBe('abc1234567890ab')
+    expect(s.preselectedByToken).toBe('abc1234567890ab')
+  })
+  it('preselected null leaves both teacher fields null', () => {
     const s = initialState(null)
-    expect(s.teacherPublicId).toBeNull()
-    expect(s.preselectedTeacherId).toBeNull()
+    expect(s.teacherId).toBeNull()
+    expect(s.teacherToken).toBeNull()
+    expect(s.preselectedById).toBeNull()
+    expect(s.preselectedByToken).toBeNull()
   })
 })
 
@@ -55,10 +62,15 @@ describe('SELECT_TEMPLATE', () => {
     expect(s.templateId).toBe(1)
   })
 
-  it('preselected teacher → skips to step 3', () => {
-    const s = sendReducer(initialState('abc1234567890123'), { type: 'SELECT_TEMPLATE', templateId: 2 })
+  it('preselected by id → skips to step 3', () => {
+    const s = sendReducer(initialState(42), { type: 'SELECT_TEMPLATE', templateId: 2 })
     expect(s.step).toBe(3)
     expect(s.templateId).toBe(2)
+  })
+
+  it('preselected by token → skips to step 3', () => {
+    const s = sendReducer(initialState(null, 'tok1234567890ab'), { type: 'SELECT_TEMPLATE', templateId: 3 })
+    expect(s.step).toBe(3)
   })
 
   it('clears error', () => {
@@ -71,16 +83,22 @@ describe('SELECT_TEMPLATE', () => {
 // ── SELECT_TEACHER ────────────────────────────────────────────────────────
 
 describe('SELECT_TEACHER', () => {
-  it('goes to step 3 and stores publicId', () => {
+  it('goes to step 3 and stores numeric id', () => {
     const base = sendReducer(initialState(null), { type: 'SELECT_TEMPLATE', templateId: 1 })
-    const s = sendReducer(base, { type: 'SELECT_TEACHER', publicId: 'tid123456789012' })
+    const s = sendReducer(base, { type: 'SELECT_TEACHER', id: 7 })
     expect(s.step).toBe(3)
-    expect(s.teacherPublicId).toBe('tid123456789012')
+    expect(s.teacherId).toBe(7)
+  })
+
+  it('clears teacherToken when id is selected', () => {
+    const base: SendState = { ...initialState(null), step: 2, teacherToken: 'tok1234567890ab', templateId: 1 }
+    const s = sendReducer(base, { type: 'SELECT_TEACHER', id: 7 })
+    expect(s.teacherToken).toBeNull()
   })
 
   it('clears error', () => {
     const base: SendState = { ...initialState(null), step: 2, error: 'err', templateId: 1 }
-    const s = sendReducer(base, { type: 'SELECT_TEACHER', publicId: 'tid123456789012' })
+    const s = sendReducer(base, { type: 'SELECT_TEACHER', id: 7 })
     expect(s.error).toBeNull()
   })
 })
@@ -163,12 +181,17 @@ describe('GO_BACK', () => {
   })
 
   it('step 3, no preselected teacher → step 2', () => {
-    const base: SendState = { ...initialState(null), step: 3, teacherPublicId: 'tid' }
+    const base: SendState = { ...initialState(null), step: 3, teacherId: 7 }
     expect(sendReducer(base, { type: 'GO_BACK' }).step).toBe(2)
   })
 
-  it('step 3, preselected teacher → step 1 (skips teacher picker on way back)', () => {
-    const base: SendState = { ...initialState('tid'), step: 3 }
+  it('step 3, preselected by id → step 1 (skips teacher picker on way back)', () => {
+    const base: SendState = { ...initialState(42), step: 3 }
+    expect(sendReducer(base, { type: 'GO_BACK' }).step).toBe(1)
+  })
+
+  it('step 3, preselected by token → step 1', () => {
+    const base: SendState = { ...initialState(null, 'tok1234567890ab'), step: 3 }
     expect(sendReducer(base, { type: 'GO_BACK' }).step).toBe(1)
   })
 
@@ -214,12 +237,14 @@ describe('SET_ERROR', () => {
 // ── RESET ─────────────────────────────────────────────────────────────────
 
 describe('RESET', () => {
-  it('returns to initial state with step 1', () => {
+  it('returns to initial state with step 1 and null preselection', () => {
     const filled: SendState = {
       step: 4,
       templateId: 2,
-      teacherPublicId: 'tid',
-      preselectedTeacherId: null,
+      teacherId: 7,
+      teacherToken: 'tok1234567890ab',
+      preselectedById: 42,
+      preselectedByToken: null,
       text: 'some text',
       fromName: 'Minh',
       fromClass: '11A',
@@ -227,15 +252,14 @@ describe('RESET', () => {
       error: 'err',
     }
     const s = sendReducer(filled, { type: 'RESET' })
-    expect(s).toEqual(initialState(null))
+    expect(s).toEqual(initialState(null, null))
   })
 })
 
-// ── isTextValid — trimmed text validation ────────────────────────────
+// ── isTextValid — trimmed text validation ────────────────────────
 
 describe('isTextValid — trimmed text', () => {
   it('whitespace-only text is invalid', () => {
-    // Currently fails: [...'   '].length === 3 passes the cp >= 1 check
     expect(isTextValid('   ')).toBe(false)
   })
 

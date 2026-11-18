@@ -1,14 +1,15 @@
 /**
  * Wall page — `/`
  *
- * Hero with platform intro and counters, newest cards strip, search + filter,
- * teacher grid tiles with approved card counts, CTA to send a card.
+ * Hero with platform intro and counters, teacher grid tiles with approved card counts.
+ * No "Thiệp mới nhất" strip — card content is private.
+ * Tiles link to /gui-thiep?thay=<id> (send flow only, never to card view).
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { WallLatestCard, WallResponse, WallTeacher } from '../../shared/api.ts'
+import type { WallResponse, WallTeacher } from '../../shared/api.ts'
+import { subjectLabel } from '../../shared/api.ts'
 import { getWall } from '../api'
-import CardView from '../components/CardView.tsx'
 import site from '../content/site.json'
 
 type State =
@@ -80,7 +81,7 @@ export default function Home() {
     )
   }
 
-  const { latest, totals } = state.data
+  const { totals } = state.data
 
   return (
     <div>
@@ -103,18 +104,6 @@ export default function Home() {
           ✍ Gửi thiệp
         </Link>
       </section>
-
-      {/* Newest cards strip */}
-      {latest.length > 0 && (
-        <section className="newest-strip-wrap">
-          <h2 className="strip-heading">Thiệp mới nhất</h2>
-          <div className="newest-strip">
-            {latest.map((card) => (
-              <LatestCardLink key={card.publicId} card={card} />
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* Search + filter */}
       <div className="wall-filters">
@@ -142,7 +131,7 @@ export default function Home() {
       {/* Teacher grid */}
       <div className="teacher-grid">
         {filtered.map((t) => (
-          <TeacherTile key={t.publicId} teacher={t} />
+          <TeacherTile key={t.id} teacher={t} />
         ))}
         {filtered.length === 0 && (
           <p className="wall-empty">Không tìm thấy thầy cô phù hợp.</p>
@@ -152,44 +141,20 @@ export default function Home() {
   )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────
-
-function LatestCardLink({ card }: { card: WallLatestCard }) {
-  const { teacher } = card
-  const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
-  return (
-    <Link
-      to={`/thay-co/${encodeURIComponent(teacher.publicId)}`}
-      className="strip-card-link"
-      aria-label={`Thiệp cho ${displayName}`}
-    >
-      <div className="card-mini">
-        <div className="card-mini-inner">
-          <CardView
-            card={{ name: teacher.name, subject: '', message: card.message, title: (teacher.title as 'Thầy' | 'Cô' | null) }}
-            layout={card.layout}
-            images={card.images}
-            from={card.from}
-            headingLevel="h2"
-          />
-        </div>
-      </div>
-      <span className="strip-card-label">{displayName}</span>
-    </Link>
-  )
-}
+// ── Teacher tile ─────────────────────────────────────────────────────────
 
 function TeacherTile({ teacher }: { teacher: WallTeacher }) {
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
+  const sub = subjectLabel(teacher.subject)
   return (
     <Link
-      to={`/thay-co/${encodeURIComponent(teacher.publicId)}`}
-      className={`card-tile card-tile--classic`}
-      aria-label={`${displayName}, ${teacher.subject}`}
+      to={`/gui-thiep?thay=${teacher.id}`}
+      className="card-tile card-tile--classic"
+      aria-label={`Gửi thiệp cho ${displayName}`}
     >
       <div className="card-tile-icon">🎓</div>
       <div className="card-tile-title">{displayName}</div>
-      <div className="card-tile-subject">{teacher.subject}</div>
+      {sub && <div className="card-tile-subject">{sub}</div>}
       {teacher.department && <div className="card-tile-dept">{teacher.department}</div>}
       <div className="card-tile-count">
         {teacher.cardCount === 0 ? 'Chưa có thiệp' : `${teacher.cardCount} thiệp`}

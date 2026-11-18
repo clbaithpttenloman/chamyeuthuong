@@ -3,11 +3,12 @@
  *
  * Email verification shell → admin sections:
  *   Duyệt thiệp (default) | Mẫu thiệp | Thầy cô |
- *   Thư viện lời chúc | Thư viện ảnh | Quản trị viên
+ *   Thư viện lời chúc | Thư viện ảnh | Giới thiệu CLB | Quản trị viên
  *
  * First page load: at most 2 admin API calls
  *   1. listAdminTeachers() — auth verify + data for teacher filter
  *   2. ModerationSection loads GET /api/admin/cards?status=pending on mount
+ *   AboutSection loads GET /api/admin/about only when that tab is opened.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { AdminTeacher } from '../../shared/api.ts'
@@ -19,6 +20,7 @@ import {
   messageFor,
   setAdminEmail,
 } from '../api'
+import AboutSection from './admin/AboutSection.tsx'
 import AdminsSection from './admin/AdminsSection.tsx'
 import ImageLibrary from './admin/ImageLibrary.tsx'
 import ModerationSection from './admin/ModerationSection.tsx'
@@ -85,7 +87,7 @@ function EmailInputForm({ error, onSubmit }: { error: string | null; onSubmit: (
 
 // ── Section tabs ──────────────────────────────────────────────────────────
 
-type Section = 'moderation' | 'templates' | 'teachers' | 'wishes' | 'images' | 'admins'
+type Section = 'moderation' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins'
 
 const SECTION_LABELS: Record<Section, string> = {
   moderation: 'Duyệt thiệp',
@@ -93,6 +95,7 @@ const SECTION_LABELS: Record<Section, string> = {
   teachers: 'Thầy cô',
   wishes: 'Thư viện lời chúc',
   images: 'Thư viện ảnh',
+  about: 'Giới thiệu CLB',
   admins: 'Quản trị viên',
 }
 
@@ -230,6 +233,9 @@ export default function Admin() {
         )}
         {section === 'images' && (
           <ImageLibrary onAccessError={handleAccessError} />
+        )}
+        {section === 'about' && (
+          <AboutSection onAccessError={handleAccessError} />
         )}
         {section === 'admins' && (
           <AdminsSection onAccessError={handleAccessError} />

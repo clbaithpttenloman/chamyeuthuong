@@ -274,8 +274,8 @@ describe('DELETE /api/admin/templates/:id', () => {
   it('delete template in use by a card → 409 conflict', async () => {
     const tid = await seedTeacher(db)
     await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
-    await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)')
-      .bind(tid, 'pub1234567890abc', '', 1).run()
+    await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)')
+      .bind(tid, '', 1).run()
 
     const created = await (
       await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)

@@ -223,7 +223,7 @@ describe('worker.fetch — /api/teachers/* removed (failing until Group 2)', () 
     const pubId = 'pub1234567890xyz'
     await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890xyz', 'T', '', now).run()
     const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890xyz').first<{ id: number }>())!.id
-    await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, pubId, '', 1).run()
+    await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 1).run()
 
     const r = await worker.fetch(
       new Request(`https://x/api/teachers/${pubId}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),

@@ -1,26 +1,28 @@
 /**
- * SendPage — `/gui-thiep` (?thay=<publicId>)
+ * SendPage — `/gui-thiep`
  *
- * 4-step card-sending flow driven by sendReducer (pure state machine).
+ * 4-step card-sending flow:
  *   Step 1 — Chọn mẫu thiệp  (from /api/templates)
- *   Step 2 — Chọn thầy cô    (from /api/wall teachers; skipped when ?thay is valid)
+ *   Step 2 — Chọn thầy cô    (from /api/wall; skipped when ?thay or ?t is valid)
  *   Step 3 — Viết lời chúc   (message, suggestion chips, identity, anonymous)
  *   Step 4 — Đã gửi          (pending, awaiting approval)
  *
- * Load failures are shown per-request so users know which part failed.
- * When ?thay refers to a hidden teacher (not on wall), falls back to
- * GET /api/teachers/:publicId so the send flow still works.
- * "Gửi thêm thiệp" dispatches RESET so the reducer returns to step 1.
+ * URL params:
+ *   ?thay=<id>   — preselect teacher by numeric id (from home tile, show_on_home=1 only)
+ *   ?t=<token>   — preselect teacher via QR token (hidden teachers OK); resolves via getQr
+ *
+ * Submit uses teacherId or teacherToken accordingly.
+ * Success step links to home only (no teacher page — cards are private).
  */
 import { useEffect, useMemo, useReducer, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { TeacherProfile, TemplatePublic, WallTeacher, WishPublic } from '../../shared/api.ts'
-import { formatFrom } from '../../shared/api.ts'
+import { formatFrom, subjectLabel } from '../../shared/api.ts'
 import { fillWish } from '../../shared/wish.ts'
-import { ApiError, getPublicWishes, getTeacherPage, getTemplates, getWall, submitCard } from '../api'
+import { ApiError, getPublicWishes, getQr, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
 import { initialState, isTextValid, sendReducer } from './send/sendReducer.ts'
-import { resolveTeacher } from './send/resolveTeacher.ts'
+import { resolveTeacherById } from './send/resolveTeacher.ts'
 
 const PREVIEW_CARD = {
   name: 'Tên thầy cô',
@@ -63,20 +65,28 @@ function submitErrorMessage(e: unknown): string {
 
 export default function SendPage() {
   const [searchParams] = useSearchParams()
-  const thayParam = searchParams.get('thay')
-  const preselected = thayParam ?? null
+  const thayParam = searchParams.get('thay')   // numeric teacher id
+  const tokenParam = searchParams.get('t')     // QR token
 
-  const [state, dispatch] = useReducer(sendReducer, preselected, initialState)
+  // Parse ?thay as a positive integer; fall back to null if invalid
+  const preselectedById: number | null =
+    thayParam && /^\d+$/.test(thayParam) ? parseInt(thayParam, 10) : null
+  const preselectedByToken: string | null = tokenParam || null
+
+  const [state, dispatch] = useReducer(
+    sendReducer,
+    undefined,
+    () => initialState(preselectedById, preselectedByToken),
+  )
 
   // Loaded data
   const [templates, setTemplates] = useState<TemplatePublic[]>([])
   const [wallTeachers, setWallTeachers] = useState<WallTeacher[]>([])
   const [wishes, setWishes] = useState<WishPublic[]>([])
   const [loadingData, setLoadingData] = useState(true)
-  // Per-request load errors; non-null when at least one request failed
   const [loadErrors, setLoadErrors] = useState<string | null>(null)
 
-  // Teacher info once a teacher is selected
+  // Teacher info once a teacher is selected / resolved
   const [teacherInfo, setTeacherInfo] = useState<TeacherProfile | null>(null)
 
   // Search/filter for teacher picker (step 2)
@@ -89,11 +99,15 @@ export default function SendPage() {
     setLoadingData(true)
     setLoadErrors(null)
 
+    // For ?t=<token> param, also load QR data to resolve teacher profile
+    const extra = preselectedByToken ? [getQr(preselectedByToken)] : []
+
     Promise.allSettled([
       getTemplates(),
       getWall(),
       getPublicWishes(),
-    ]).then(async ([tplsRes, wallRes, wsRes]) => {
+      ...extra,
+    ]).then(([tplsRes, wallRes, wsRes, qrRes]) => {
       if (tplsRes.status === 'fulfilled') setTemplates(tplsRes.value)
       if (wsRes.status === 'fulfilled') setWishes(wsRes.value)
 
@@ -110,29 +124,36 @@ export default function SendPage() {
       if (wsRes.status === 'rejected') failed.push('gợi ý lời chúc')
       if (failed.length > 0) setLoadErrors(`Không thể tải: ${failed.join(', ')}.`)
 
-      // Resolve preselected teacher: check wall first, then fall back to teacher API
-      if (preselected) {
-        const profile = await resolveTeacher(preselected, wallTeachersLoaded, getTeacherPage)
-        if (profile) {
-          setTeacherInfo(profile)
-        }
+      // Resolve preselected teacher
+      if (preselectedById !== null) {
+        const profile = resolveTeacherById(preselectedById, wallTeachersLoaded)
+        if (profile) setTeacherInfo(profile)
+      } else if (preselectedByToken !== null && qrRes && qrRes.status === 'fulfilled') {
+        const t = qrRes.value.teacher
+        setTeacherInfo({
+          id: t.id,
+          title: t.title,
+          name: t.name,
+          subject: t.subject,
+          department: t.department,
+        })
       }
     }).finally(() => setLoadingData(false))
-  }, [preselected])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // When a teacher is selected in step 2, store their info
+  // When a teacher is selected in step 2 from the wall picker
   function handleSelectTeacher(t: WallTeacher) {
     setTeacherInfo({
-      publicId: t.publicId,
+      id: t.id,
       title: t.title,
       name: t.name,
       subject: t.subject,
       department: t.department,
     })
-    dispatch({ type: 'SELECT_TEACHER', publicId: t.publicId })
+    dispatch({ type: 'SELECT_TEACHER', id: t.id })
   }
 
-  // When going back to step 1 (clear template), or to step 2 (keep template)
   function handleGoBack() {
     dispatch({ type: 'GO_BACK' })
   }
@@ -184,12 +205,18 @@ export default function SendPage() {
   )
 
   async function handleSubmit() {
-    if (!state.templateId || !state.teacherPublicId || !state.text.trim()) return
+    if (!state.templateId) return
+    // Need at least one teacher identifier and non-empty text
+    if (state.teacherId === null && state.teacherToken === null) return
+    if (!state.text.trim()) return
+
     setSubmitting(true)
     dispatch({ type: 'SET_ERROR', error: '' })
     try {
       await submitCard({
-        teacherPublicId: state.teacherPublicId,
+        ...(state.teacherToken !== null
+          ? { teacherToken: state.teacherToken }
+          : { teacherId: state.teacherId! }),
         templateId: state.templateId,
         message: state.text,
         fromName: state.anonymous ? undefined : state.fromName || undefined,
@@ -279,9 +306,10 @@ export default function SendPage() {
         <div className="teacher-grid">
           {filteredTeachers.map((t) => {
             const displayName = t.title ? `${t.title} ${t.name}` : t.name
+            const sub = subjectLabel(t.subject)
             return (
               <button
-                key={t.publicId}
+                key={t.id}
                 type="button"
                 className={`card-tile card-tile--${currentTemplate?.layout ?? 'classic'}`}
                 onClick={() => handleSelectTeacher(t)}
@@ -289,7 +317,7 @@ export default function SendPage() {
               >
                 <div className="card-tile-icon">🎓</div>
                 <div className="card-tile-title">{displayName}</div>
-                <div className="card-tile-subject">{t.subject}</div>
+                {sub && <div className="card-tile-subject">{sub}</div>}
                 {t.department && <div className="card-tile-dept">{t.department}</div>}
                 <div className="card-tile-count">
                   {t.cardCount === 0 ? 'Chưa có thiệp' : `${t.cardCount} thiệp`}
@@ -308,7 +336,6 @@ export default function SendPage() {
   /* ── Step 3: write ───────────────────────────────────────────────────── */
   if (state.step === 3) {
     if (!currentTemplate || !teacherInfo) {
-      // Fallback: missing data after navigation
       return (
         <div className="write-page">
           <Stepper step={1} />
@@ -454,10 +481,6 @@ export default function SendPage() {
 
   /* ── Step 4: thank you ───────────────────────────────────────────────── */
   if (state.step === 4) {
-    const teacherPageLink = teacherInfo
-      ? `/thay-co/${encodeURIComponent(teacherInfo.publicId)}`
-      : '/'
-
     return (
       <div className="write-page write-thanks">
         <Stepper step={4} />
@@ -468,14 +491,9 @@ export default function SendPage() {
             Thiệp của bạn sẽ hiện sau khi CLB duyệt.
           </p>
           <div className="thanks-actions">
-            {teacherInfo && (
-              <Link to={teacherPageLink} className="btn-primary-link">
-                Xem thiệp của {teacherInfo.title ? `${teacherInfo.title} ${teacherInfo.name}` : teacherInfo.name}
-              </Link>
-            )}
             {/* Dispatch RESET before navigation so the reducer is at step 1 when the same
                 route re-renders (same-route Link does not remount the component). */}
-            <Link to="/gui-thiep" className="btn-link-ghost" onClick={() => dispatch({ type: 'RESET' })}>
+            <Link to="/gui-thiep" className="btn-primary-link" onClick={() => dispatch({ type: 'RESET' })}>
               Gửi thêm thiệp
             </Link>
             <Link to="/" className="btn-link-ghost">

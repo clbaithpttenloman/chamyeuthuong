@@ -1,17 +1,22 @@
 /**
  * CardView — reusable card renderer.
  *
- * Used by CardPage (public view) and the admin live preview.
+ * Used by SendPage (write preview), QrPage (reader view), and TemplateSection (admin preview).
  *
  * Props:
- *   card:   { name, subject, message }
+ *   card:   { name, subject, message, title? }
  *   layout: layout id from LAYOUTS (falls back to DEFAULT_LAYOUT if unknown)
  *   images: slot → 16-char token; invalid tokens are silently dropped
+ *
+ * Only the background and banner slots exist; any other key in images is ignored.
+ *
+ * Subject is shown as "GV môn: <subject>" via subjectLabel(); omitted when empty.
  *
  * Image URLs are only built for tokens matching ^[a-z0-9]{16}$, so no
  * user-supplied string can reach the src/style attributes in another form.
  */
 import { LAYOUTS, DEFAULT_LAYOUT, isLayout } from '../../shared/layouts.ts'
+import { subjectLabel } from '../../shared/api.ts'
 import site from '../content/site.json'
 
 type CardData = { name: string; subject: string; message: string; title?: 'Thầy' | 'Cô' | null }
@@ -47,9 +52,9 @@ export default function CardView({
 
   const bgUrl = imageUrl(images['background'])
   const bannerUrl = imageUrl(images['banner'])
-  const photoUrl = imageUrl(images['photo'])
 
   const hasBackground = bgUrl !== null
+  const subLabel = subjectLabel(card.subject)
 
   return (
     <article
@@ -65,17 +70,10 @@ export default function CardView({
         />
       )}
       <div className="card-body">
-        {photoUrl && (
-          <img
-            className="card-photo"
-            src={photoUrl}
-            alt={`Ảnh đại diện của ${card.title ? `${card.title} ` : ''}${card.name}`}
-          />
-        )}
         <p className="kicker">{site.title}</p>
         <p className="to">Kính gửi</p>
         <Heading>{card.title ? `${card.title} ${card.name}` : card.name}</Heading>
-        {card.subject && <p className="sub">{card.subject}</p>}
+        {subLabel && <p className="sub">{subLabel}</p>}
         <hr />
         <p className="msg">{card.message}</p>
         <p className="from">

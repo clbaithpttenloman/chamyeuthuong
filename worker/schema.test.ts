@@ -586,7 +586,7 @@ describe('teacher_profile table constraints (failing until Group 2)', () => {
     sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
     const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890abc', '', 1)`).run()
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (${tid}, '', 1)`).run()
     }).not.toThrow()
   })
 
@@ -596,20 +596,7 @@ describe('teacher_profile table constraints (failing until Group 2)', () => {
     sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
     const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
     expect(() => {
-      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890abc', '', 2)`).run()
-    }).toThrow()
-  })
-
-  it('public_id UNIQUE constraint enforced', () => {
-    const { sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
-    const t1 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
-    sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok9876543210ab','T2','','2024-01-01')").run()
-    const t2 = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok9876543210ab') as { id: number }).id
-    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${t1}, 'samepublicid001', '', 1)`).run()
-    expect(() => {
-      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${t2}, 'samepublicid001', '', 1)`).run()
+      sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (${tid}, '', 2)`).run()
     }).toThrow()
   })
 
@@ -618,7 +605,7 @@ describe('teacher_profile table constraints (failing until Group 2)', () => {
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite.prepare("INSERT INTO teacher (token,name,subject,created_at) VALUES ('tok1234567890abc','T','','2024-01-01')").run()
     const tid = (sqlite.prepare('SELECT id FROM teacher WHERE token=?').get('tok1234567890abc') as { id: number }).id
-    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (${tid}, 'pub1234567890abc', '', 1)`).run()
+    sqlite.prepare(`INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (${tid}, '', 1)`).run()
     sqlite.prepare(`DELETE FROM teacher WHERE id=${tid}`).run()
     const row = sqlite.prepare(`SELECT * FROM teacher_profile WHERE teacher_id=${tid}`).get()
     expect(row).toBeUndefined()
@@ -659,12 +646,12 @@ describe('template_image table constraints (failing until Group 2)', () => {
     expect(names).toContain('template_image')
   })
 
-  it('slot CHECK accepts background, banner, photo', () => {
+  it('slot CHECK accepts background, banner', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
-    for (const slot of ['background', 'banner', 'photo']) {
+    for (const slot of ['background', 'banner']) {
       const imgTok = `img${slot.slice(0,3)}12345678901`
       sqlite.prepare(`INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('${imgTok}','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')`).run()
       const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get(imgTok) as { id: number }).id

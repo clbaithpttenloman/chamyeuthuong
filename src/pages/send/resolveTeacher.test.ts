@@ -1,14 +1,12 @@
 /**
- * Tests for resolveTeacher — pure function that resolves a teacher from publicId.
- * Fails until resolveTeacher.ts is created.
+ * Tests for resolveTeacher — synchronous lookup of a teacher by numeric id.
  */
-import { describe, it, expect, vi } from 'vitest'
-// Import fails until resolveTeacher.ts is created → all tests fail.
-import { resolveTeacher } from './resolveTeacher.ts'
+import { describe, it, expect } from 'vitest'
+import { resolveTeacherById } from './resolveTeacher.ts'
 import type { WallTeacher } from '../../../shared/api.ts'
 
 const WALL_TEACHER: WallTeacher = {
-  publicId: 'pub1234567890ab',
+  id: 1,
   title: 'Thầy',
   name: 'Nguyễn Văn A',
   subject: 'Toán',
@@ -16,50 +14,41 @@ const WALL_TEACHER: WallTeacher = {
   cardCount: 5,
 }
 
-describe('resolveTeacher', () => {
-  it('teacher on wall → returns TeacherProfile from wall data', async () => {
-    const fetchPage = vi.fn()
-    const result = await resolveTeacher('pub1234567890ab', [WALL_TEACHER], fetchPage)
+describe('resolveTeacherById', () => {
+  it('teacher on wall → returns TeacherProfile from wall data', () => {
+    const result = resolveTeacherById(1, [WALL_TEACHER])
     expect(result).toEqual({
-      publicId: 'pub1234567890ab',
+      id: 1,
       title: 'Thầy',
       name: 'Nguyễn Văn A',
       subject: 'Toán',
       department: 'Tổ Toán',
     })
-    expect(fetchPage).not.toHaveBeenCalled()
   })
 
-  it('hidden teacher (not on wall) → fetched via fetchTeacherPage', async () => {
-    const hiddenProfile = {
-      publicId: 'hid1234567890ab',
-      title: 'Cô',
-      name: 'Trần Thị B',
-      subject: 'Văn',
-      department: '',
-    }
-    const fetchPage = vi.fn().mockResolvedValue({ teacher: hiddenProfile, cards: [], total: 0 })
-    const result = await resolveTeacher('hid1234567890ab', [WALL_TEACHER], fetchPage)
-    expect(result).toEqual(hiddenProfile)
-    expect(fetchPage).toHaveBeenCalledWith('hid1234567890ab')
-  })
-
-  it('unknown teacher (not on wall, fetch fails) → returns null', async () => {
-    const fetchPage = vi.fn().mockRejectedValue(new Error('not found'))
-    const result = await resolveTeacher('unknown0000000ab', [WALL_TEACHER], fetchPage)
+  it('id not on wall → returns null', () => {
+    const result = resolveTeacherById(99, [WALL_TEACHER])
     expect(result).toBeNull()
   })
 
-  it('empty wall → falls back to fetchTeacherPage', async () => {
-    const hiddenProfile = {
-      publicId: 'pub1234567890ab',
-      title: 'Thầy',
-      name: 'Nguyễn Văn A',
-      subject: 'Toán',
-      department: 'Tổ Toán',
-    }
-    const fetchPage = vi.fn().mockResolvedValue({ teacher: hiddenProfile, cards: [], total: 0 })
-    const result = await resolveTeacher('pub1234567890ab', [], fetchPage)
-    expect(result).toEqual(hiddenProfile)
+  it('empty wall → returns null', () => {
+    const result = resolveTeacherById(1, [])
+    expect(result).toBeNull()
+  })
+
+  it('matches by id, not by position', () => {
+    const teachers: WallTeacher[] = [
+      { id: 10, title: 'Cô', name: 'Trần Thị B', subject: 'Văn', department: '', cardCount: 0 },
+      { id: 20, title: null, name: 'Lê Văn C', subject: '', department: 'Tổ Lý', cardCount: 2 },
+    ]
+    const result = resolveTeacherById(20, teachers)
+    expect(result?.name).toBe('Lê Văn C')
+    expect(result?.id).toBe(20)
+  })
+
+  it('teacher with null title is returned correctly', () => {
+    const t: WallTeacher = { id: 5, title: null, name: 'Phạm Văn D', subject: '', department: '', cardCount: 0 }
+    const result = resolveTeacherById(5, [t])
+    expect(result?.title).toBeNull()
   })
 })

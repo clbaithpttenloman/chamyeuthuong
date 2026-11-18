@@ -48,23 +48,26 @@ describe('fetchTemplateImages — skips unknown slots (failing until Group 2)', 
 
   it('skips slots not in SLOTS (photo) — FAILS until Group 2 makes fetchTemplateImages filter slots', async () => {
     // After Group 2: fetchTemplateImages filters results to only known SLOTS.
-    // Before Group 2: photo rows pass through unchanged.
-    // This test inserts a "photo" slot row (bypassing API validation at the DB level)
-    // and checks the returned map does NOT include it.
-    const { db, sqlite } = testDb()
-    sqlite.exec('PRAGMA foreign_keys = ON')
+    // This test verifies fetchTemplateImages skips slots not in SLOTS.
+    // Since the new schema CHECK prevents photo rows in production, we create
+    // a minimal table without the CHECK constraint to simulate an old local DB.
+    const { db } = testDb({ schema: false })
     const now = new Date().toISOString()
-    sqlite.prepare("INSERT INTO template (name,layout,active,created_at,created_by) VALUES ('T','classic',1,?,?)").run(now, TEST_EMAIL)
-    const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
-    sqlite.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgph1234567890a','ph.jpg','image/jpeg',100,'d',?,?)").run(now, TEST_EMAIL)
-    const phId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgph1234567890a') as { id: number }).id
-    // Directly insert a "photo" slot row (bypassing the CHECK constraint by using raw SQLite)
-    // This simulates old local DBs that have photo slot rows.
-    sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, 'photo', ${phId})`).run()
-    // fetchTemplateImages should skip the unknown 'photo' slot
+    // Create tables without the photo-rejecting CHECK so we can seed a photo row
+    db.prepare(`CREATE TABLE IF NOT EXISTS image (id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`).run().then()
+    db.prepare(`CREATE TABLE IF NOT EXISTS template (id INTEGER PRIMARY KEY, name TEXT NOT NULL, layout TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`).run().then()
+    // No slot CHECK — simulates old local DB
+    db.prepare(`CREATE TABLE IF NOT EXISTS template_image (template_id INTEGER NOT NULL, slot TEXT NOT NULL, image_id INTEGER NOT NULL, PRIMARY KEY (template_id, slot))`).run().then()
+
+    await db.prepare("INSERT INTO template (name,layout,active,created_at,created_by) VALUES ('T','classic',1,?,?)").bind(now, TEST_EMAIL).run()
+    const tmplId = (await db.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+    await db.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgph1234567890a','ph.jpg','image/jpeg',100,'d',?,?)").bind(now, TEST_EMAIL).run()
+    const phId = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgph1234567890a').first<{ id: number }>())!.id
+    // Insert photo slot row — allowed in this no-CHECK DB, simulates old local DB
+    await db.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (?, 'photo', ?)`).bind(tmplId, phId).run()
+    // fetchTemplateImages must skip the 'photo' slot (not in SLOTS)
     const result = await fetchTemplateImages(db, [tmplId])
     const slotMap = result.get(tmplId) ?? {}
-    // After Group 2: 'photo' should not appear. Before Group 2: it appears → FAIL.
     expect(Object.keys(slotMap)).not.toContain('photo')
   })
 })

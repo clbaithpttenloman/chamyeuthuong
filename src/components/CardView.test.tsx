@@ -105,18 +105,13 @@ describe('CardView — image URL handling', () => {
     expect(html).not.toContain('/api/image/')
   })
 
-  it('renders all three slot images when all tokens are valid', () => {
-    const images: Record<string, string> = {
-      background: 'img001234567890a',
-      banner:     'img001234567890b',
-      photo:      'img001234567890c',
-    }
+  it('renders the background and banner slots, and never a photo token', () => {
     const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={images} />,
+      <CardView card={baseCard} layout="classic" images={{ background: 'img001234567890a', banner: 'img001234567890b', photo: 'img001234567890c' }} />,
     )
-    for (const [, token] of Object.entries(images)) {
-      expect(html).toContain(`/api/image/${token}`)
-    }
+    expect(html).toContain('/api/image/img001234567890a')
+    expect(html).toContain('/api/image/img001234567890b')
+    expect(html).not.toContain('img001234567890c')
   })
 })
 
@@ -298,45 +293,17 @@ describe('CardView — message pre-line rendering', () => {
   })
 })
 
-describe('CardView — photo alt text includes title (failing until Group 2)', () => {
-  it('photo alt is "Ảnh đại diện của {title} {name}" when title is set', () => {
-    const card: CardDataWithTitle = {
-      name: 'Nguyễn Văn A',
-      subject: '',
-      message: '',
-      title: 'Thầy',
-    }
-    const html = renderToString(
-       
-      <CardView card={card as any} layout="classic" images={{ photo: validToken }} />,
-    )
-    expect(html).toContain('Ảnh đại diện của Thầy Nguyễn Văn A')
-  })
-
-  it('photo alt is "Ảnh đại diện của {name}" when title is null', () => {
-    const card: CardDataWithTitle = { name: 'Lê Thị C', subject: '', message: '', title: null }
-    const html = renderToString(
-       
-      <CardView card={card as any} layout="classic" images={{ photo: validToken }} />,
-    )
-    expect(html).toContain('Ảnh đại diện của Lê Thị C')
-    expect(html).not.toContain('null')
-  })
-})
-
 // ===================================================================
 // New for privacy-about plan — FAILING until Group 2 updates CardView
 // ===================================================================
 
-describe('CardView — no photo slot rendered (failing until Group 2)', () => {
-  it('photo slot token is NOT rendered as an img element — FAILS until Group 2 removes photo rendering', () => {
-    // After Group 2: CardView ignores the "photo" key since SLOTS no longer includes it.
-    // Before Group 2: CardView renders a <img class="card-photo"> for the photo token → FAIL.
+describe('CardView — no photo slot rendered', () => {
+  it('a photo token is ignored entirely (the slot no longer exists)', () => {
     const html = renderToString(
       <CardView card={baseCard} layout="classic" images={{ photo: validToken }} />,
     )
-    // After Group 2: no card-photo img. Before Group 2: has card-photo → FAIL.
     expect(html).not.toContain('card-photo')
+    expect(html).not.toContain(validToken)
   })
 
   it('no photo img even when both background and photo tokens provided', () => {

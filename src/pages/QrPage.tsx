@@ -1,20 +1,22 @@
 /**
  * QrPage — `/t/:token`
  *
- * Shows a random approved card for the teacher whose private QR token matches.
- * "Thiệp khác" re-fetches (server picks a new random card); if the same card
- * comes back, auto-retries once before showing it.
- * "Xem tất cả N thiệp" links to the teacher's public page.
- * Empty state shows the CLB message and a CTA to send the first card.
- * Stale responses (token or refetchKey changed before the previous fetch resolved)
- * are silently dropped.
+ * Teacher's private page. Shows cards from their QR link.
+ *   - One random card shown first (pickRandom from qrState).
+ *   - "Thiệp khác" picks another card locally (excludes current, no refetch).
+ *   - "Xem tất cả N thiệp" toggles a full grid on the same page.
+ *   - "Gửi thiệp" links to /gui-thiep?t=<token> (preserves the teacher's token).
+ *   - Empty state shows the CLB message.
+ * Data is fetched once; all navigation is local state.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import type { QrResponse } from '../../shared/api.ts'
+import type { PublicCard, QrResponse } from '../../shared/api.ts'
+import { subjectLabel } from '../../shared/api.ts'
 import { ApiError, getQr } from '../api'
 import CardView from '../components/CardView.tsx'
 import site from '../content/site.json'
+import { pickRandom } from './qr/qrState.ts'
 
 type State =
   | { status: 'loading' }
@@ -25,29 +27,22 @@ type State =
 export default function QrPage() {
   const { token } = useParams<{ token: string }>()
   const [state, setState] = useState<State>({ status: 'loading' })
-  const [refetchKey, setRefetchKey] = useState(0)
-
-  // Track last-shown card to auto-retry once if the same card comes back
-  const prevCardId = useRef<string | null>(null)
-  const hasAutoRetried = useRef(false)
+  const [currentCard, setCurrentCard] = useState<PublicCard | null>(null)
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     if (!token) { setState({ status: 'notfound' }); return }
     setState({ status: 'loading' })
+    setCurrentCard(null)
+    setShowAll(false)
     let cancelled = false
 
     getQr(token)
       .then((data) => {
         if (cancelled) return
-        // If the same card came back and we haven't retried yet, retry once automatically
-        if (data.card && prevCardId.current === data.card.publicId && !hasAutoRetried.current) {
-          hasAutoRetried.current = true
-          setRefetchKey((k) => k + 1)
-          return
-        }
-        hasAutoRetried.current = false
-        if (data.card) prevCardId.current = data.card.publicId
         setState({ status: 'ok', data })
+        // Pick the first random card on initial load
+        setCurrentCard(pickRandom(data.cards))
       })
       .catch((e) => {
         if (!cancelled) {
@@ -59,7 +54,7 @@ export default function QrPage() {
         }
       })
     return () => { cancelled = true }
-  }, [token, refetchKey])
+  }, [token])
 
   if (state.status === 'loading') {
     return (
@@ -77,19 +72,22 @@ export default function QrPage() {
     return <p className="notfound">Có lỗi xảy ra. Vui lòng thử lại sau.</p>
   }
 
-  const { teacher, card, total } = state.data
+  const { teacher, cards, total } = state.data
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
-  const sendLink = `/gui-thiep?thay=${encodeURIComponent(teacher.publicId)}`
-  const teacherPageLink = `/thay-co/${encodeURIComponent(teacher.publicId)}`
+  const sub = subjectLabel(teacher.subject)
+  // Send link uses ?t=<token> so hidden teachers can also receive cards
+  const sendLink = `/gui-thiep?t=${encodeURIComponent(token!)}`
 
   /* ── Empty state ────────────────────────────────────────────────────── */
-  if (!card || total === 0) {
+  if (total === 0) {
     return (
       <div className="qr-page">
-        <div className="qr-empty">
+        <div className="qr-header">
           <p className="kicker">{site.title}</p>
-          <h2>{displayName}</h2>
-          {teacher.subject && <p className="qr-empty-sub">{teacher.subject}</p>}
+          <h1>{displayName}</h1>
+          {sub && <p className="qr-sub">{sub}</p>}
+        </div>
+        <div className="qr-empty">
           <p>
             Chưa có lời chúc nào được duyệt. CLB AI — {displayName} gửi lời cảm ơn chân
             thành đến toàn thể học sinh nhân ngày Nhà giáo Việt Nam 20/11/2026.
@@ -105,40 +103,76 @@ export default function QrPage() {
   /* ── Card display ───────────────────────────────────────────────────── */
   return (
     <div className="qr-page">
-      <div className="qr-card-wrap">
-        <CardView
-          card={{
-            name: teacher.name,
-            subject: teacher.subject,
-            message: card.message,
-            title: teacher.title as 'Thầy' | 'Cô' | null,
-          }}
-          layout={card.layout}
-          images={card.images}
-          from={card.from}
-        />
+      {/* Teacher header */}
+      <div className="qr-header">
+        <p className="kicker">{site.title}</p>
+        <h1>{displayName}</h1>
+        {sub && <p className="qr-sub">{sub}</p>}
       </div>
+
+      {/* Current random card */}
+      {currentCard && (
+        <div className="qr-card-wrap">
+          <CardView
+            card={{
+              name: teacher.name,
+              subject: teacher.subject,
+              message: currentCard.message,
+              title: teacher.title as 'Thầy' | 'Cô' | null,
+            }}
+            layout={currentCard.layout}
+            images={currentCard.images}
+            from={currentCard.from}
+          />
+        </div>
+      )}
 
       <div className="qr-actions">
         {total > 1 && (
           <button
             type="button"
             className="btn-ghost"
-            onClick={() => {
-              hasAutoRetried.current = false  // allow one retry on the next fetch
-              setRefetchKey((k) => k + 1)
-            }}
+            onClick={() => setCurrentCard(pickRandom(cards, currentCard?.publicId ?? null))}
           >
             🔀 Thiệp khác
           </button>
         )}
-        <Link to={teacherPageLink} className="btn-primary-link">
-          Xem tất cả {total} thiệp
-        </Link>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={() => setShowAll((v) => !v)}
+        >
+          {showAll ? 'Ẩn bớt' : `Xem tất cả ${total} thiệp`}
+        </button>
         <Link to={sendLink} className="btn-link-ghost">
           ✍ Gửi thiệp
         </Link>
       </div>
+
+      {/* Full card grid (toggled) */}
+      {showAll && (
+        <section className="qr-all-cards">
+          <h2 className="strip-heading">Tất cả {total} thiệp</h2>
+          <div className="teacher-cards-grid">
+            {cards.map((card) => (
+              <div key={card.publicId} className="teacher-card-wrap">
+                <CardView
+                  card={{
+                    name: teacher.name,
+                    subject: teacher.subject,
+                    message: card.message,
+                    title: teacher.title as 'Thầy' | 'Cô' | null,
+                  }}
+                  layout={card.layout}
+                  images={card.images}
+                  from={card.from}
+                  headingLevel="h2"
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

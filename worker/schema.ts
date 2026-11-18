@@ -1,5 +1,6 @@
 import type { D1 } from './types.ts'
 import { SEEDS } from './seed.ts'
+import { aboutSeedSql } from './aboutSeed.ts'
 
 // DDL for all tables, converted to CREATE TABLE IF NOT EXISTS so each run is idempotent.
 // SHORTCUT: idempotent CREATE only — IF NOT EXISTS cannot alter or drop existing columns;
@@ -19,7 +20,6 @@ export const SCHEMA: string[] = [
 )`,
   `CREATE TABLE IF NOT EXISTS teacher_profile (
   teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
-  public_id    TEXT    UNIQUE NOT NULL,
   department   TEXT    NOT NULL DEFAULT '',
   show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
 )`,
@@ -50,7 +50,7 @@ export const SCHEMA: string[] = [
 )`,
   `CREATE TABLE IF NOT EXISTS template_image (
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
-  slot        TEXT    NOT NULL CHECK (slot IN ('background','banner','photo')),
+  slot        TEXT    NOT NULL CHECK (slot IN ('background','banner')),
   image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
   PRIMARY KEY (template_id, slot)
 )`,
@@ -81,8 +81,16 @@ export const SCHEMA: string[] = [
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 )`,
+  `CREATE TABLE IF NOT EXISTS site_content (
+  key        TEXT PRIMARY KEY CHECK (key IN ('about')),
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+)`,
   // ---- Seeds: 12 example wishes + meta flag (run once, guarded by meta flag) ----
   ...SEEDS,
+  // ---- About seed (INSERT OR IGNORE — idempotent) ----
+  aboutSeedSql(),
 ]
 
 // Per-isolate cache: one Promise<void> per D1 binding object.

@@ -2,6 +2,7 @@ import { handlePublic } from './public.ts'
 import { handleSubmit } from './submit.ts'
 import { handleQr } from './qr.ts'
 import { handleAdmin } from './admin.ts'
+import { handleAbout } from './about.ts'
 import { handlePublicImage } from './images.ts'
 import { error } from './http.ts'
 import type { Env, ExecutionContext } from './types.ts'
@@ -13,16 +14,16 @@ import type { Env, ExecutionContext } from './types.ts'
  * Routes (in order):
  *   /api/image/:token     → handlePublicImage
  *   /api/wall             → handlePublic
- *   /api/teachers/*       → handlePublic
  *   /api/templates        → handlePublic
  *   /api/wishes           → handlePublic
+ *   /api/about            → handleAbout  (public GET, rate-limited)
  *   /api/cards            → handleSubmit
  *   /api/qr/*             → handleQr
  *   /api/admin/*          → handleAdmin
  *   /api/*                → 404
  *   /*                    → ASSETS (SPA)
  *
- * /api/card/* is intentionally removed (replaced by /api/qr/:token).
+ * /api/teachers/* is intentionally removed (no public teacher detail page).
  */
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -30,9 +31,10 @@ export default {
 
     try {
       if (pathname.startsWith('/api/image/')) return await handlePublicImage(request, env, ctx)
-      if (pathname === '/api/wall' || pathname.startsWith('/api/teachers/') || pathname === '/api/templates' || pathname === '/api/wishes') {
+      if (pathname === '/api/wall' || pathname === '/api/templates' || pathname === '/api/wishes') {
         return await handlePublic(request, env)
       }
+      if (pathname === '/api/about') return await handleAbout(request, env)
       if (pathname === '/api/cards') return await handleSubmit(request, env)
       if (pathname.startsWith('/api/qr/')) return await handleQr(request, env)
       if (pathname.startsWith('/api/admin/')) return await handleAdmin(request, env)

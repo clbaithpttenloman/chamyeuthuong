@@ -7,6 +7,7 @@
  * stays consistent across endpoints.
  */
 import { formatFrom } from '../shared/api.ts'
+import { isSlot } from '../shared/layouts.ts'
 import type { Env } from './types.ts'
 
 /**
@@ -53,6 +54,8 @@ export async function fetchTemplateImages(
     .all<{ template_id: number; slot: string; token: string }>()
   const map = new Map<number, Record<string, string>>()
   for (const r of results) {
+    // Skip slots not in SLOTS (e.g. legacy 'photo' rows in old local DBs).
+    if (!isSlot(r.slot)) continue
     if (!map.has(r.template_id)) map.set(r.template_id, {})
     map.get(r.template_id)![r.slot] = r.token
   }

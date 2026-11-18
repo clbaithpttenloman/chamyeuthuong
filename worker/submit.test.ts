@@ -57,7 +57,8 @@ async function seedPendingElsewhere(db: D1, tmplId: number, count: number) {
     const tok = `oth${String(t).padStart(13, '0')}`
     await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(tok, `Other ${t}`, '', now).run()
     const oid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind(tok).first<{ id: number }>())!.id
-    await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(oid, `opb${String(t).padStart(13, '0')}`, '', 1).run()
+    await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)')
+    .bind(oid, '', 1).run()
     for (let i = 0; i < 150 && made < count; i++, made++) {
       await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
         .bind(`cap${String(made).padStart(13, '0')}`, oid, tmplId, 'msg', '', '', 0, 'pending', now).run()
@@ -65,9 +66,8 @@ async function seedPendingElsewhere(db: D1, tmplId: number, count: number) {
   }
 }
 
-async function seedTeacherAndTemplate(db: D1, opts: { publicId?: string; active?: 0 | 1 } = {}) {
+async function seedTeacherAndTemplate(db: D1, opts: { active?: 0 | 1 } = {}) {
   const now = new Date().toISOString()
-  const pubId = opts.publicId ?? VALID_PUBLIC_ID
 
   await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
     .bind(VALID_TOKEN, 'Teacher', 'Math', now).run()
@@ -75,8 +75,8 @@ async function seedTeacherAndTemplate(db: D1, opts: { publicId?: string; active?
 
   await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)')
     .bind(tid, 'Thầy').run()
-  await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)')
-    .bind(tid, pubId, '', 1).run()
+  await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)')
+    .bind(tid, '', 1).run()
   await db.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
     .bind('Default', 'classic', opts.active ?? 1, now, TEST_EMAIL).run()
   const tmplId = (await db.prepare('SELECT id FROM template WHERE name=?').bind('Default').first<{ id: number }>())!.id
@@ -95,9 +95,9 @@ beforeEach(async () => {
 
 describe('POST /api/cards — happy path', () => {
   it('valid card → 201 { status: "pending" }', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID,
+      teacherId: tid,
       templateId: tmplId,
       message: 'Chúc mừng ngày 20/11!',
     }), makeEnv(db))
@@ -107,9 +107,9 @@ describe('POST /api/cards — happy path', () => {
   })
 
   it('response does NOT echo id, publicId, message, fromName, fromClass, teacherId, templateId', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID,
+      teacherId: tid,
       templateId: tmplId,
       message: 'Secret message',
       fromName: 'Học sinh',
@@ -127,9 +127,9 @@ describe('POST /api/cards — happy path', () => {
   })
 
   it('created card is status=pending in DB', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID,
+      teacherId: tid,
       templateId: tmplId,
       message: 'Test message',
     }), makeEnv(db))
@@ -138,9 +138,9 @@ describe('POST /api/cards — happy path', () => {
   })
 
   it('fields are trimmed: message and fromName leading/trailing spaces stripped', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID,
+      teacherId: tid,
       templateId: tmplId,
       message: '  Hello  ',
       fromName: '  Nguyễn Văn A  ',
@@ -151,9 +151,9 @@ describe('POST /api/cards — happy path', () => {
   })
 
   it('anonymous=true → from_name stored empty even when fromName is provided', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID,
+      teacherId: tid,
       templateId: tmplId,
       message: 'Anon message',
       fromName: 'Should be erased',
@@ -174,7 +174,7 @@ describe('POST /api/cards — rate limit first', () => {
   it('exhausted SUBMIT_IP_LIMIT → 429, zero DB statements including DDL', async () => {
     const { db: freshDb, state } = testDb()
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: 1, message: 'x' }),
+      submitReq({ teacherId: 1, templateId: 1, message: 'x' }),
       makeEnv(freshDb, { submitIpLimit: false }),
     )
     expect(r.status).toBe(429)
@@ -207,9 +207,9 @@ describe('POST /api/cards — Content-Type validation', () => {
   })
 
   it('Content-Type: application/json; charset=utf-8 → allowed (passes media type check)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok' }, { contentType: 'application/json; charset=utf-8' }),
+      submitReq({ teacherId: tid, templateId: tmplId, message: 'ok' }, { contentType: 'application/json; charset=utf-8' }),
       makeEnv(db),
     )
     expect(r.status).toBe(201)
@@ -218,86 +218,86 @@ describe('POST /api/cards — Content-Type validation', () => {
 
 describe('POST /api/cards — message validation', () => {
   it('empty message → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: '' }), makeEnv(db))
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: '' }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('message of exactly 300 code points → 201', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const msg = 'a'.repeat(300)
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 
   it('message of 301 code points → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const msg = 'a'.repeat(301)
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('message with more than 5 newlines → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const msg = 'a\nb\nc\nd\ne\nf\ng'  // 6 newlines (> MAX_NEWLINES=5)
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('message with exactly 5 newlines → 201 (5 is the max allowed)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const msg = 'a\nb\nc\nd\ne\nf'  // 5 newlines = MAX_NEWLINES → accepted
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 
   it('message with control character (C0 except \\n) → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const msg = 'hello\x01world'
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('message with bidi control U+202A → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const msg = 'hello\u202Aworld'
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: msg }), makeEnv(db))
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: msg }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 })
 
 describe('POST /api/cards — fromName/fromClass validation', () => {
   it('fromName of 40 code points → 201', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
       fromName: 'a'.repeat(40),
     }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 
   it('fromName of 41 code points → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
       fromName: 'a'.repeat(41),
     }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('fromClass of 10 code points → 201', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
       fromClass: 'a'.repeat(10),
     }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 
   it('fromClass of 11 code points → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
       fromClass: 'a'.repeat(11),
     }), makeEnv(db))
     expect(r.status).toBe(400)
@@ -306,43 +306,43 @@ describe('POST /api/cards — fromName/fromClass validation', () => {
 
 describe('POST /api/cards — anonymous field validation', () => {
   it('anonymous=true (boolean) → 201', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok', anonymous: true,
+      teacherId: tid, templateId: tmplId, message: 'ok', anonymous: true,
     }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 
   it('anonymous="true" (string, not boolean) → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok', anonymous: 'true',
+      teacherId: tid, templateId: tmplId, message: 'ok', anonymous: 'true',
     }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('anonymous=1 (number, not boolean) → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok', anonymous: 1,
+      teacherId: tid, templateId: tmplId, message: 'ok', anonymous: 1,
     }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 })
 
 describe('POST /api/cards — teacher/template validation', () => {
-  it('unknown teacherPublicId → 404', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+  it('unknown teacherId → 404', async () => {
+    const { tmplId: tmpl } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: 'unknownpublic01a', templateId: tmplId, message: 'ok',
+      teacherId: 99999, templateId: tmpl, message: 'ok',
     }), makeEnv(db))
     expect(r.status).toBe(404)
   })
 
-  it('malformed teacherPublicId (not 16 lowercase alnum) → 400 with zero DB statements', async () => {
+  it('non-positive teacherId → 400 with zero DB statements', async () => {
     const { db: freshDb, state } = testDb()
     const r = await handleSubmit(submitReq({
-      teacherPublicId: 'BAD!!', templateId: 1, message: 'ok',
+      teacherId: 0, templateId: 1, message: 'ok',
     }), makeEnv(freshDb))
     expect(r.status).toBe(400)
     expect(state.prepares).toBe(0)
@@ -350,17 +350,17 @@ describe('POST /api/cards — teacher/template validation', () => {
   })
 
   it('inactive template → 400', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db, { active: 0 })
+    const { tid, tmplId } = await seedTeacherAndTemplate(db, { active: 0 })
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
     }), makeEnv(db))
     expect(r.status).toBe(400)
   })
 
   it('unknown templateId → 400', async () => {
-    await seedTeacherAndTemplate(db)
+    const { tid: teacherTid } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: 9999, message: 'ok',
+      teacherId: teacherTid, templateId: 9999, message: 'ok',
     }), makeEnv(db))
     expect(r.status).toBe(400)
   })
@@ -370,7 +370,7 @@ describe('POST /api/cards — body shape validation', () => {
   it('body > 2 KB → 413 or 400', async () => {
     const bigMsg = 'x'.repeat(3000)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: 1, message: bigMsg,
+      teacherId: 1, templateId: 1, message: bigMsg,
     }), makeEnv(db))
     expect([400, 413]).toContain(r.status)
   })
@@ -388,9 +388,9 @@ describe('POST /api/cards — body shape validation', () => {
   })
 
   it('unknown extra key in body → 400 (strict fields)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
       unknownField: 'injected',
     }), makeEnv(db))
     expect(r.status).toBe(400)
@@ -401,21 +401,21 @@ describe('POST /api/cards — body shape validation', () => {
 
 describe('POST /api/cards — pending caps (atomic)', () => {
   it('2000th pending card is accepted (global cap not reached)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     await seedPendingElsewhere(db, tmplId, 1999)
     vi.mocked(newToken).mockReturnValue('card2000final001')
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
     }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 
   it('2001st pending card is rejected 409 "conflict"', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     await seedPendingElsewhere(db, tmplId, 2000)
     vi.mocked(newToken).mockReturnValue('card2001reject01')
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
     }), makeEnv(db))
     expect(r.status).toBe(409)
     expect((await r.json() as { error: string }).error).toBe('conflict')
@@ -431,7 +431,7 @@ describe('POST /api/cards — pending caps (atomic)', () => {
     }
     vi.mocked(newToken).mockReturnValue('ptcextra0000001a')
     const r = await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'ok',
+      teacherId: tid, templateId: tmplId, message: 'ok',
     }), makeEnv(db))
     expect(r.status).toBe(409)
     expect((await r.json() as { error: string }).error).toBe('conflict')
@@ -442,9 +442,9 @@ describe('POST /api/cards — pending caps (atomic)', () => {
 
 describe('POST /api/cards — created card is invisible publicly', () => {
   it('pending card does not appear on /api/wall (approved-only)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     await handleSubmit(submitReq({
-      teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'Secret',
+      teacherId: tid, templateId: tmplId, message: 'Secret',
     }), makeEnv(db))
     // Verify card is pending
     const card = await db.prepare("SELECT status FROM student_card WHERE status='pending'").first<{ status: string }>()
@@ -507,8 +507,8 @@ describe('POST /api/cards — more invisible and malformed characters (security 
   ]
   for (const [label, text] of cases) {
     it(`rejects ${label} in the message`, async () => {
-      const { tmplId } = await seedTeacherAndTemplate(db)
-      const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: text }), makeEnv(db))
+      const { tid, tmplId } = await seedTeacherAndTemplate(db)
+      const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: text }), makeEnv(db))
       expect(r.status).toBe(400)
     })
   }
@@ -521,8 +521,8 @@ describe('POST /api/cards — more invisible and malformed characters (security 
     expect(r.status).toBe(400)
   })
   it('accepts Vietnamese text with emoji, including ZWJ sequences (👩‍🏫) and variation selectors (❤️)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
-    const r = await handleSubmit(submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: 'Chúc cô 20/11 vui vẻ 🌸💐 👩\u200D🏫 ❤\uFE0F' }), makeEnv(db))
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc cô 20/11 vui vẻ 🌸💐 👩\u200D🏫 ❤\uFE0F' }), makeEnv(db))
     expect(r.status).toBe(201)
   })
 })
@@ -541,7 +541,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
     const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
     await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
-    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890t01', '', 1).run()
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 1).run()
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
     const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
 
@@ -561,7 +561,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind(TOKEN).first<{ id: number }>())!.id
     await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
     // show_on_home = 0 (hidden teacher, reachable via token only)
-    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890t02', '', 0).run()
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 0).run()
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
     const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
 
@@ -580,7 +580,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
     const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
     await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
-    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890t03', '', 0).run()
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 0).run()
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
     const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
 
@@ -634,8 +634,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
 
   it('string "1" as teacherId → 400 (must be numeric)', async () => {
     const r = await handleSubmit(
-      // @ts-expect-error intentional type violation for test
-      submitReq({ teacherId: '1', templateId: 1, message: 'msg' }),
+      submitReq({ teacherId: '1', templateId: 1, message: 'msg' } as unknown),
       makeEnv(db),
     )
     expect(r.status).toBe(400)
@@ -643,9 +642,9 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
 
   it('marker scan: submit response body never echoes submitted message text', async () => {
     const MARKER = 'UNIQUE_SUBMIT_MARKER_XYZ'
-    const { tmplId } = await seedTeacherAndTemplate(db)
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: tmplId, message: MARKER }),
+      submitReq({ teacherId: tid, templateId: tmplId, message: MARKER }),
       makeEnv(db),
     )
     const body = await r.text()
@@ -669,7 +668,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
   it('marker scan: 429 rate-limited response does not echo submitted text', async () => {
     const MARKER = 'UNIQUE_RATELIMIT_MARKER_XYZ'
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: VALID_PUBLIC_ID, templateId: 1, message: MARKER }),
+      submitReq({ teacherId: 1, templateId: 1, message: MARKER }),
       makeEnv(db, { submitIpLimit: false }),
     )
     const body = await r.text()

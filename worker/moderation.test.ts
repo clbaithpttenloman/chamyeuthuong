@@ -64,7 +64,7 @@ beforeEach(async () => {
   await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'Teacher', 'Math', now).run()
   tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
   await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
-  await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid, 'pub1234567890abc', '', 1).run()
+  await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 1).run()
   await db.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, TEST_EMAIL).run()
   tmplId = (await db.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
 })
@@ -121,7 +121,8 @@ describe('GET /api/admin/cards', () => {
     expect(card).toHaveProperty('anonymous', false)
     expect(card).toHaveProperty('teacher')
     expect(card).toHaveProperty('template')
-    expect((card.teacher as Record<string, unknown>)).toHaveProperty('publicId')
+    expect((card.teacher as Record<string, unknown>)).toHaveProperty('id')
+    expect((card.teacher as Record<string, unknown>)).not.toHaveProperty('publicId')
     expect((card.template as Record<string, unknown>)).toHaveProperty('layout')
   })
 
@@ -131,7 +132,7 @@ describe('GET /api/admin/cards', () => {
     await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok9876543210ab', 'Other', 'Physics', now).run()
     const tid2 = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok9876543210ab').first<{ id: number }>())!.id
     await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid2, 'Cô').run()
-    await db.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?)').bind(tid2, 'pub9876543210ab', '', 1).run()
+    await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid2, '', 1).run()
     await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
       .bind('crd9876543210ab', tid2, tmplId, 'Other msg', '', '', 0, 'pending', now).run()
     await seedCard({ status: 'pending', publicId: 'crd1234567890abc' })

@@ -29,7 +29,6 @@ type AdminCardRow = {
   reviewed_at: string | null
   reviewed_by: string | null
   teacher_id_ref: number
-  teacher_public_id: string
   teacher_name: string
   teacher_title: string | null
   template_name: string
@@ -52,7 +51,6 @@ function toAdminCard(row: AdminCardRow) {
     reviewedBy: row.reviewed_by ?? null,
     teacher: {
       id: row.teacher_id_ref,
-      publicId: row.teacher_public_id,
       name: row.teacher_name,
       title: row.teacher_title ?? null,
     },
@@ -67,11 +65,10 @@ function toAdminCard(row: AdminCardRow) {
 const CARD_SELECT =
   'SELECT sc.id, sc.public_id, sc.teacher_id, sc.template_id, sc.message, sc.from_name, sc.from_class, ' +
   'sc.anonymous, sc.status, sc.created_at, sc.reviewed_at, sc.reviewed_by, ' +
-  't.id AS teacher_id_ref, tp.public_id AS teacher_public_id, t.name AS teacher_name, tt.title AS teacher_title, ' +
+  't.id AS teacher_id_ref, t.name AS teacher_name, tt.title AS teacher_title, ' +
   'tmpl.name AS template_name, tmpl.layout AS template_layout ' +
   'FROM student_card sc ' +
   'JOIN teacher t ON t.id = sc.teacher_id ' +
-  'LEFT JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
   'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
   'JOIN template tmpl ON tmpl.id = sc.template_id '
 

@@ -1,45 +1,31 @@
 /**
- * src/pages/send/resolveTeacher.ts — pure function that resolves a teacher profile
- * from a publicId, using the wall teacher list first and falling back to the API.
+ * src/pages/send/resolveTeacher.ts — synchronous teacher profile lookup by numeric id.
  *
  * Returns:
- *   - TeacherProfile if found on the wall
- *   - TeacherProfile if the teacher is hidden (showOnHome=0) but fetchable via API
- *   - null if the teacher does not exist anywhere
+ *   - TeacherProfile if found in the wall teacher list by numeric id
+ *   - null if no matching teacher exists (hidden teachers are not in the wall list;
+ *     they are accessed via ?t=<token> which calls getQr directly in SendPage)
  */
-import type { TeacherPageResponse, TeacherProfile, WallTeacher } from '../../../shared/api.ts'
-
-export type FetchTeacherPage = (publicId: string) => Promise<TeacherPageResponse>
+import type { TeacherProfile, WallTeacher } from '../../../shared/api.ts'
 
 /**
- * Resolve a teacher profile from a publicId.
+ * Look up a teacher profile from the wall by numeric id.
+ * Synchronous — the wall list is already loaded before this is called.
  *
- * @param publicId       The teacher's public ID (from ?thay= query param).
- * @param wallTeachers   Teachers currently visible on the wall (showOnHome=1).
- * @param fetchTeacherPage  Async function that calls GET /api/teachers/:publicId.
+ * @param id           The teacher's numeric id (from ?thay=<id> query param).
+ * @param wallTeachers Teachers currently visible on the wall (showOnHome=1).
  */
-export async function resolveTeacher(
-  publicId: string,
+export function resolveTeacherById(
+  id: number,
   wallTeachers: WallTeacher[],
-  fetchTeacherPage: FetchTeacherPage,
-): Promise<TeacherProfile | null> {
-  const wallMatch = wallTeachers.find((t) => t.publicId === publicId)
-  if (wallMatch) {
-    return {
-      publicId: wallMatch.publicId,
-      title: wallMatch.title,
-      name: wallMatch.name,
-      subject: wallMatch.subject,
-      department: wallMatch.department,
-    }
-  }
-
-  // Not on wall — may be hidden (showOnHome=0); try fetching the teacher page directly.
-  try {
-    const page = await fetchTeacherPage(publicId)
-    return page.teacher
-  } catch {
-    // Teacher does not exist or fetch failed — let the user pick manually.
-    return null
+): TeacherProfile | null {
+  const found = wallTeachers.find((t) => t.id === id)
+  if (!found) return null
+  return {
+    id: found.id,
+    title: found.title,
+    name: found.name,
+    subject: found.subject,
+    department: found.department,
   }
 }

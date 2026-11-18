@@ -197,15 +197,16 @@ describe('GET /api/about — public (failing until Group 2)', () => {
   })
 
   it('corrupted JSON in DB → returns seed instead of 500', async () => {
-    // Insert corrupted JSON into site_content
-    const { db: freshDb, sqlite } = testDb()
-    sqlite.exec(`CREATE TABLE IF NOT EXISTS site_content (
+    // Use schema: false and pre-create site_content with corrupted data.
+    // handleAbout calls ensureSchema which uses INSERT OR IGNORE → won't overwrite.
+    const { db: freshDb } = testDb({ schema: false })
+    await freshDb.prepare(`CREATE TABLE IF NOT EXISTS site_content (
       key TEXT PRIMARY KEY CHECK (key IN ('about')),
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       updated_by TEXT NOT NULL
-    )`)
-    sqlite.prepare("INSERT INTO site_content (key, value, updated_at, updated_by) VALUES ('about', 'NOT VALID JSON', datetime('now'), 'test')").run()
+    )`).run()
+    await freshDb.prepare("INSERT INTO site_content (key, value, updated_at, updated_by) VALUES ('about', 'NOT VALID JSON', '2026-01-01', 'test')").run()
     const r = await handleAbout(req('GET', '/api/about'), makePublicEnv(freshDb))
     // Must not 500; falls back to seed → 200
     expect(r.status).toBe(200)
@@ -213,15 +214,16 @@ describe('GET /api/about — public (failing until Group 2)', () => {
   })
 
   it('valid JSON but wrong shape in DB → falls back to seed', async () => {
-    const { db: freshDb, sqlite } = testDb()
-    sqlite.exec(`CREATE TABLE IF NOT EXISTS site_content (
+    // Use schema: false and pre-create site_content with wrong-shape data.
+    const { db: freshDb } = testDb({ schema: false })
+    await freshDb.prepare(`CREATE TABLE IF NOT EXISTS site_content (
       key TEXT PRIMARY KEY CHECK (key IN ('about')),
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       updated_by TEXT NOT NULL
-    )`)
+    )`).run()
     // Insert valid JSON with wrong shape (missing required keys)
-    sqlite.prepare("INSERT INTO site_content (key, value, updated_at, updated_by) VALUES ('about', '{\"wrong\":\"shape\"}', datetime('now'), 'test')").run()
+    await freshDb.prepare("INSERT INTO site_content (key, value, updated_at, updated_by) VALUES ('about', '{\"wrong\":\"shape\"}', '2026-01-01', 'test')").run()
     const r = await handleAbout(req('GET', '/api/about'), makePublicEnv(freshDb))
     expect(r.status).toBe(200)
     const body = await r.json() as AboutContent
@@ -276,7 +278,6 @@ describe('PUT /api/admin/about — validation (failing until Group 2)', () => {
     await handleAdminAbout(req('PUT', '/api/admin/about', VALID_ABOUT), makePublicEnv(db), TEST_EMAIL)
     // No direct access to updated_by from API — the test verifies the PUT succeeds at minimum.
     // A stricter test would query the DB directly.
-    const { sqlite } = testDb()
     // We can't easily share the in-memory DB between testDb() calls; skip direct DB check here.
     // The important contract: PUT returns 200 and the content is stored.
     expect(true).toBe(true) // placeholder — real check is above

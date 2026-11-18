@@ -3,9 +3,14 @@
  *
  * Steps:
  *   1 — Chọn mẫu thiệp
- *   2 — Chọn thầy cô  (skipped when preselectedTeacherId is set)
+ *   2 — Chọn thầy cô  (skipped when preselectedById or preselectedByToken is set)
  *   3 — Viết lời chúc
  *   4 — Đã gửi (pending)
+ *
+ * Teacher resolution:
+ *   - ?thay=<id>   → preselectedById (numeric); submit uses teacherId
+ *   - ?t=<token>   → preselectedByToken (string); submit uses teacherToken
+ *   - no param     → user picks from wall; select sets teacherId; submit uses teacherId
  *
  * Network calls happen in the component; this module contains only
  * deterministic state transitions.
@@ -17,9 +22,14 @@ export type SendStep = 1 | 2 | 3 | 4
 export type SendState = {
   step: SendStep
   templateId: number | null
-  teacherPublicId: string | null
-  /** Set from ?thay query param; null if not provided. */
-  preselectedTeacherId: string | null
+  /** Teacher's numeric id — set when resolved from the wall (by id or via picker). */
+  teacherId: number | null
+  /** Teacher's QR token — set when reached via /gui-thiep?t=<token>. */
+  teacherToken: string | null
+  /** Set from ?thay query param (numeric teacher id). null if not provided. */
+  preselectedById: number | null
+  /** Set from ?t query param (QR token). null if not provided. */
+  preselectedByToken: string | null
   text: string
   fromName: string
   fromClass: string
@@ -30,7 +40,7 @@ export type SendState = {
 
 export type SendAction =
   | { type: 'SELECT_TEMPLATE'; templateId: number }
-  | { type: 'SELECT_TEACHER'; publicId: string }
+  | { type: 'SELECT_TEACHER'; id: number }
   | { type: 'SET_TEXT'; text: string }
   | { type: 'SET_FROM_NAME'; name: string }
   | { type: 'SET_FROM_CLASS'; cls: string }
@@ -40,12 +50,17 @@ export type SendAction =
   | { type: 'SET_ERROR'; error: string }
   | { type: 'RESET' }
 
-export function initialState(preselectedTeacherId: string | null): SendState {
+export function initialState(
+  preselectedById: number | null,
+  preselectedByToken: string | null = null,
+): SendState {
   return {
     step: 1,
     templateId: null,
-    teacherPublicId: preselectedTeacherId,
-    preselectedTeacherId,
+    teacherId: preselectedById,
+    teacherToken: preselectedByToken,
+    preselectedById,
+    preselectedByToken,
     text: '',
     fromName: '',
     fromClass: '',
@@ -63,16 +78,19 @@ export function isTextValid(text: string): boolean {
   return newlines <= MAX_NEWLINES
 }
 
+const isPreselected = (s: SendState) =>
+  s.preselectedById !== null || s.preselectedByToken !== null
+
 export function sendReducer(state: SendState, action: SendAction): SendState {
   switch (action.type) {
     case 'SELECT_TEMPLATE': {
-      // Skip teacher step when a teacher was preselected via ?thay
-      const nextStep: SendStep = state.preselectedTeacherId !== null ? 3 : 2
+      // Skip teacher step when a teacher was preselected
+      const nextStep: SendStep = isPreselected(state) ? 3 : 2
       return { ...state, templateId: action.templateId, step: nextStep, error: null }
     }
 
     case 'SELECT_TEACHER':
-      return { ...state, teacherPublicId: action.publicId, step: 3, error: null }
+      return { ...state, teacherId: action.id, teacherToken: null, step: 3, error: null }
 
     case 'SET_TEXT': {
       // Clamp to MAX_MESSAGE code points; preserve up to MAX_NEWLINES newlines
@@ -101,7 +119,7 @@ export function sendReducer(state: SendState, action: SendAction): SendState {
       if (state.step === 3) {
         // If teacher was preselected, go back to template picker (step 1)
         // Otherwise go back to teacher picker (step 2)
-        const prev: SendStep = state.preselectedTeacherId !== null ? 1 : 2
+        const prev: SendStep = isPreselected(state) ? 1 : 2
         return { ...state, step: prev, error: null }
       }
       return state
@@ -114,7 +132,7 @@ export function sendReducer(state: SendState, action: SendAction): SendState {
       return { ...state, error: action.error }
 
     case 'RESET':
-      return initialState(null)
+      return initialState(null, null)
 
     default:
       return state

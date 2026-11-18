@@ -1,11 +1,6 @@
 import { Link, Route, Routes } from 'react-router-dom'
 import site from './content/site.json'
-import About from './pages/About'
-import Admin from './pages/Admin'
-import Home from './pages/Home'
-import QrPage from './pages/QrPage'
-import SendPage from './pages/SendPage'
-import TeacherPage from './pages/TeacherPage'
+import { ROUTES } from './routes.ts'
 
 export default function App() {
   return (
@@ -20,13 +15,9 @@ export default function App() {
       </header>
       <main>
         <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/thay-co/:publicId" element={<TeacherPage />} />
-          <Route path="/gui-thiep" element={<SendPage />} />
-          <Route path="/t/:token" element={<QrPage />} />
-          <Route path="/ve-clb-ai" element={<About />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="*" element={<p className="notfound">Không tìm thấy trang.</p>} />
+          {ROUTES.map((route) => (
+            <Route key={route.path} path={route.path} element={route.element} />
+          ))}
         </Routes>
       </main>
       <footer>

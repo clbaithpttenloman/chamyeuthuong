@@ -35,7 +35,6 @@ type TemplateForm = {
 const SLOT_LABELS: Record<Slot, string> = {
   background: 'Ảnh nền',
   banner: 'Banner',
-  photo: 'Ảnh thầy cô',
 }
 
 const SAMPLE_CARD = {

@@ -7,7 +7,8 @@
  *
  * Bulk format: { items: [{ title, name, subject?, department? }] } (1–100 items).
  *
- * Routes to: handleTemplates, handleModeration, handleAdmins, handleImages, handleWishes.
+ * Routes to: handleTemplates, handleModeration, handleAdmins, handleImages, handleWishes,
+ *            handleAbout / handleAdminAbout.
  */
 import { error, json, readJson, HttpError } from './http.ts'
 import { requireAdmin } from './auth.ts'
@@ -16,6 +17,7 @@ import { handleImages } from './images.ts'
 import { handleWishes } from './wishes.ts'
 import { handleTemplates } from './templates.ts'
 import { handleModeration } from './moderation.ts'
+import { handleAdminAbout } from './about.ts'
 import { newToken } from './token.ts'
 import { isTitle } from '../shared/honorific.ts'
 import type { Env } from './types.ts'
@@ -30,15 +32,12 @@ function parseBit(val: unknown): 0 | 1 | null {
   return null
 }
 
-
-
 type RawTeacherRow = {
   id: number
   token: string
   name: string
   subject: string
   created_at: string
-  publicId: string | null
   department: string | null
   showOnHome: number | null
   title: 'Thầy' | 'Cô' | null
@@ -49,7 +48,7 @@ type RawTeacherRow = {
 
 const TEACHER_SELECT =
   'SELECT t.id, t.token, t.name, t.subject, t.created_at, ' +
-  'tp.public_id AS publicId, COALESCE(tp.department, \'\') AS department, ' +
+  'COALESCE(tp.department, \'\') AS department, ' +
   'COALESCE(tp.show_on_home, 1) AS showOnHome, tt.title, ' +
   'COALESCE(SUM(CASE WHEN sc.status = \'pending\' THEN 1 ELSE 0 END), 0) AS pending_count, ' +
   'COALESCE(SUM(CASE WHEN sc.status = \'approved\' THEN 1 ELSE 0 END), 0) AS approved_count, ' +
@@ -63,7 +62,6 @@ function toAdminTeacher(row: RawTeacherRow) {
   return {
     id: row.id,
     token: row.token,
-    publicId: row.publicId ?? '',
     title: row.title ?? null,
     name: row.name,
     subject: row.subject,
@@ -80,7 +78,7 @@ function toAdminTeacher(row: RawTeacherRow) {
 
 async function fetchTeacherById(db: Env['DB'], id: number) {
   return db
-    .prepare(TEACHER_SELECT + 'WHERE t.id = ? GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.public_id, tp.department, tp.show_on_home, tt.title')
+    .prepare(TEACHER_SELECT + 'WHERE t.id = ? GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.show_on_home, tt.title')
     .bind(id)
     .first<RawTeacherRow>()
 }
@@ -89,7 +87,7 @@ async function fetchTeacherById(db: Env['DB'], id: number) {
 
 async function listTeachers(env: Env): Promise<Response> {
   const { results } = await env.DB
-    .prepare(TEACHER_SELECT + 'GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.public_id, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
+    .prepare(TEACHER_SELECT + 'GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
     .all<RawTeacherRow>()
   return json(results.map(toAdminTeacher))
 }
@@ -128,13 +126,10 @@ async function createTeacher(request: Request, env: Env): Promise<Response> {
     return error('unavailable')
   }
 
-  // Generate publicId (no retry needed: astronomically unlikely collision)
-  const publicId = newToken()
-
   const stmts: D1Stmt[] = [
     env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(token, name, subject, now),
     env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(token, rawTitle),
-    env.DB.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(token, publicId, department, showOnHome),
+    env.DB.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?)').bind(token, department, showOnHome),
   ]
 
   await env.DB.batch(stmts)
@@ -170,10 +165,9 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
     .first<{ subject: string }>()
 
   const profileRow = await env.DB
-    .prepare('SELECT public_id, department, show_on_home FROM teacher_profile WHERE teacher_id = ?')
+    .prepare('SELECT department, show_on_home FROM teacher_profile WHERE teacher_id = ?')
     .bind(id)
-    .first<{ public_id: string; department: string | null; show_on_home: number | null }>()
-  const publicId = profileRow?.public_id ?? newToken()
+    .first<{ department: string | null; show_on_home: number | null }>()
 
   // Keep existing values when fields are omitted
   const finalSubject = 'subject' in body
@@ -193,9 +187,9 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   const stmts: D1Stmt[] = [
     env.DB.prepare('UPDATE teacher SET name = ?, subject = ? WHERE id = ?').bind(name, finalSubject, id),
     env.DB.prepare(
-      'INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (?, ?, ?, ?) ' +
+      'INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?) ' +
       'ON CONFLICT(teacher_id) DO UPDATE SET department = excluded.department, show_on_home = excluded.show_on_home',
-    ).bind(id, publicId, finalDepartment, finalShowOnHome),
+    ).bind(id, finalDepartment, finalShowOnHome),
   ]
 
   if (rawTitle !== undefined) {
@@ -214,23 +208,18 @@ async function updateTeacher(request: Request, env: Env, id: number): Promise<Re
   return json(toAdminTeacher(row))
 }
 
-// ---- Rotate QR token (publicId stays stable) ----
+// ---- Rotate QR token ----
 
 async function rotateToken(env: Env, id: number): Promise<Response> {
   const existing = await env.DB.prepare('SELECT id FROM teacher WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
-
-  const profileRow = await env.DB
-    .prepare('SELECT public_id FROM teacher_profile WHERE teacher_id = ?')
-    .bind(id)
-    .first<{ public_id: string }>()
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const tok = newToken()
     const collision = await env.DB.prepare('SELECT id FROM teacher WHERE token = ?').bind(tok).first()
     if (collision) continue
     await env.DB.prepare('UPDATE teacher SET token = ? WHERE id = ?').bind(tok, id).run()
-    return json({ token: tok, publicId: profileRow?.public_id ?? null })
+    return json({ token: tok })
   }
 
   console.error('admin: unavailable')
@@ -277,8 +266,8 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
 
   const now = new Date().toISOString()
 
-  // Generate token + publicId for each teacher (token with up to 3 retries each)
-  const tokenPairs: Array<{ token: string; publicId: string }> = []
+  // Generate token for each teacher (up to 3 retries each)
+  const tokens: string[] = []
   for (const _item of items) {
     let token: string | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -290,18 +279,17 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
       console.error('admin: unavailable')
       return error('unavailable')
     }
-    const publicId = newToken()
-    tokenPairs.push({ token, publicId })
+    tokens.push(token)
   }
 
   // Build batch stmts
   const stmts: D1Stmt[] = []
   for (let i = 0; i < items.length; i++) {
     const item = items[i]
-    const { token, publicId } = tokenPairs[i]
+    const token = tokens[i]
     stmts.push(env.DB.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(token, item.name, item.subject, now))
     stmts.push(env.DB.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES ((SELECT id FROM teacher WHERE token = ?), ?)').bind(token, item.title))
-    stmts.push(env.DB.prepare('INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?, ?)').bind(token, publicId, item.department, 1))
+    stmts.push(env.DB.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES ((SELECT id FROM teacher WHERE token = ?), ?, ?)').bind(token, item.department, 1))
   }
 
   try {
@@ -313,9 +301,8 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
   }
 
   // Fetch created teachers
-  const tokens = tokenPairs.map((p) => p.token)
   const { results } = await env.DB
-    .prepare(TEACHER_SELECT + 'WHERE t.token IN (SELECT value FROM json_each(?)) GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.public_id, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
+    .prepare(TEACHER_SELECT + 'WHERE t.token IN (SELECT value FROM json_each(?)) GROUP BY t.id, t.token, t.name, t.subject, t.created_at, tp.department, tp.show_on_home, tt.title ORDER BY t.id')
     .bind(JSON.stringify(tokens))
     .all<RawTeacherRow>()
 
@@ -353,6 +340,11 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
 
     if (parts.length >= 3 && parts[2] === 'cards') {
       return await handleModeration(request, env, email)
+    }
+
+    // ---- About content (admin editor) ----
+    if (parts.length >= 3 && parts[2] === 'about') {
+      return await handleAdminAbout(request, env, email)
     }
 
     // ---- Teachers ----

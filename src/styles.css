@@ -115,17 +115,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   text-align: center;
 }
 
-.card-photo {
-  display: block;
-  width: 4.5rem;
-  height: 4.5rem;
-  border-radius: 50%;
-  object-fit: cover;
-  margin: 0 auto 1rem;
-  border: 3px solid #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
 /* Translucent overlay on card-body when background image is present */
 .card--has-bg .card-body {
   background: rgba(255, 255, 255, 0.88);
@@ -143,7 +132,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card--classic .card-body .sub { color: var(--gold); }
 .card--classic .card-body hr { border-top-color: var(--rose); }
 .card--classic .card-banner { border-bottom: 2px solid var(--gold); }
-.card--classic .card-photo { border-color: var(--gold); }
 
 /* ── Layout: lotus (Hoa sen) ─────────────────────────────────────────────── */
 .card--lotus {
@@ -160,7 +148,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card--lotus .card-body .msg { color: #831843; }
 .card--lotus .card-body .from { color: #9d174d; }
 .card--lotus .card-banner { border-radius: 1.25rem 1.25rem 0 0; }
-.card--lotus .card-photo { border-color: #f9a8d4; }
 .card--has-bg.card--lotus .card-body { background: rgba(255, 240, 246, 0.9); }
 
 /* ── Layout: spring (Mùa xuân) ───────────────────────────────────────────── */
@@ -179,7 +166,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card--spring .card-body .from { color: #15803d; }
 .card--spring .card-body .to { color: #4ade80; }
 .card--spring .card-banner { border-bottom: 2px solid #86efac; }
-.card--spring .card-photo { border-color: #86efac; }
 .card--has-bg.card--spring .card-body { background: rgba(240, 253, 244, 0.9); }
 
 /* ── Layout: night (Đêm sao) ─────────────────────────────────────────────── */
@@ -197,7 +183,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card--night .card-body hr { border-top-color: #334155; }
 .card--night .card-body .msg { color: #cbd5e1; }
 .card--night .card-body .from { color: #94a3b8; font-style: italic; }
-.card--night .card-photo { border-color: #334155; }
 /* Night layout: dark overlay when background image present */
 .card--has-bg.card--night .card-body {
   background: rgba(10, 20, 40, 0.82);
@@ -220,7 +205,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card--minimal .card-body hr { border-top-color: #e5e7eb; }
 .card--minimal .card-body .msg { color: #374151; font-size: 1.1rem; }
 .card--minimal .card-body .from { color: #6b7280; }
-.card--minimal .card-photo { border-color: #e5e7eb; }
 .card--has-bg.card--minimal .card-body { background: rgba(250, 250, 250, 0.9); }
 
 /* ── Admin tabs ──────────────────────────────────────────────────────────── */
@@ -581,10 +565,14 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 /* ── QR page ──────────────────────────────────────────────────────────────── */
 .qr-page { display: flex; flex-direction: column; align-items: center; gap: 1.5rem; padding: 2rem 0; }
+.qr-header { text-align: center; }
+.qr-header h1 { margin: 0.25rem 0; }
+.qr-sub { margin: 0.25rem 0 0; color: var(--gold); font-weight: 600; font-size: 0.95rem; }
 .qr-card-wrap { width: 100%; max-width: 34rem; }
 .qr-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center; }
 .qr-empty { max-width: 28rem; padding: 2rem; background: #fff; border: 1px solid #fed7aa; border-radius: 1rem; text-align: center; }
 .qr-empty-sub { margin: 0.25rem 0 1rem; color: var(--gold); font-weight: 600; }
+.qr-all-cards { width: 100%; }
 
 /* ── Admin templates section ──────────────────────────────────────────────── */
 .template-grid-admin { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: 1rem; margin-bottom: 2rem; }

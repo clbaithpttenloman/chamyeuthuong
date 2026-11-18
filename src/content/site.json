@@ -7,28 +7,5 @@
     "kicker": "Ngày Nhà giáo Việt Nam 20/11/2026",
     "heading": "Gửi thầy cô muôn vàn lời tri ân",
     "body": "Hãy chọn mẫu thiệp đẹp, chọn thầy cô bạn muốn gửi, và viết lời chúc từ trái tim. Mỗi lời chúc được CLB AI duyệt trước khi hiển thị — để thầy cô nhận được những tình cảm chân thành nhất."
-  },
-  "about": {
-    "heading": "CLB AI - THPT Ten Lơ Man",
-    "intro": "Chúng em là những học sinh yêu thích trí tuệ nhân tạo. Dự án này là món quà dành tặng thầy cô.",
-    "stats": [
-      { "value": "00", "label": "thành viên" },
-      { "value": "00", "label": "thầy cô nhận thiệp" },
-      { "value": "00", "label": "tuần thực hiện" }
-    ],
-    "stepsHeading": "Quá trình thực hiện",
-    "steps": [
-      { "when": "Tuần 1", "title": "Ý tưởng", "text": "Dùng AI để viết lời chúc, để tình cảm của chúng em làm nên ý nghĩa." },
-      { "when": "Tuần 2", "title": "Thu thập", "text": "Hỏi thông tin và kỷ niệm về từng thầy cô để lời chúc thật riêng." },
-      { "when": "Tuần 3", "title": "Thực hiện", "text": "Thiết kế website, tạo mẫu thiệp, xây dựng quy trình duyệt thiệp." },
-      { "when": "20/11", "title": "Trao gửi", "text": "Học sinh gửi thiệp; CLB duyệt và trao đến thầy cô qua mã QR riêng." }
-    ],
-    "membersHeading": "Thành viên CLB",
-    "members": [
-      { "name": "Họ và tên", "role": "Chủ nhiệm CLB" },
-      { "name": "Họ và tên", "role": "Thiết kế" },
-      { "name": "Họ và tên", "role": "Lập trình" },
-      { "name": "Họ và tên", "role": "Nội dung" }
-    ]
   }
 }

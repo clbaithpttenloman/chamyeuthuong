@@ -17,7 +17,6 @@ import { TEST_EMAIL } from './testAuth.ts'
 type AdminTeacher = {
   id: number
   token: string
-  publicId: string
   title: 'Thầy' | 'Cô' | null
   name: string
   subject: string
@@ -77,26 +76,26 @@ describe('GET /api/admin/teachers', () => {
     expect(await r.json()).toEqual([])
   })
 
-  it('returns all teachers in the new model shape (publicId, department, showOnHome, cardCounts)', async () => {
+  it('returns all teachers in the new model shape (token, department, showOnHome, cardCounts)', async () => {
     await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Teacher A', subject: 'Math', title: 'Thầy' }), makeEnv(db))
     const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db))
     expect(r.status).toBe(200)
     const list = await r.json() as AdminTeacher[]
     expect(list).toHaveLength(1)
-    expect(list[0]).toHaveProperty('publicId')
     expect(list[0]).toHaveProperty('department')
     expect(list[0]).toHaveProperty('showOnHome')
     expect(list[0]).toHaveProperty('cardCounts')
     expect(list[0]).toHaveProperty('id')
     expect(list[0]).toHaveProperty('token')
     expect(list[0]).toHaveProperty('created_at')
+    expect(list[0]).not.toHaveProperty('publicId')
   })
 })
 
 // ---- Create teacher ----
 
 describe('POST /api/admin/teachers', () => {
-  it('creates a teacher and returns AdminTeacher shape (publicId, cardCounts, department, showOnHome)', async () => {
+  it('creates a teacher and returns AdminTeacher shape (token, cardCounts, department, showOnHome)', async () => {
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Nguyen Van A', subject: 'Vietnamese', title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(200)
     const body = await r.json() as AdminTeacher
@@ -105,9 +104,8 @@ describe('POST /api/admin/teachers', () => {
     expect(typeof body.token).toBe('string')
     expect(body.token).toMatch(/^[a-z0-9]{16}$/)
     expect(typeof body.id).toBe('number')
-    // New fields
-    expect(typeof body.publicId).toBe('string')
-    expect(body.publicId).toMatch(/^[a-z0-9]{16}$/)
+    // No publicId in response
+    expect((body as Record<string, unknown>)).not.toHaveProperty('publicId')
     expect(body.department).toBe('')
     expect(body.showOnHome).toBe(1)
     expect(body.cardCounts).toEqual({ pending: 0, approved: 0, hidden: 0 })
@@ -216,7 +214,6 @@ describe('POST /api/admin/teachers', () => {
     vi.mocked(newToken)
       .mockReturnValueOnce('gn00000000000000')  // collides on token
       .mockReturnValueOnce('gn00000000000001')  // token succeeds
-      .mockReturnValueOnce('gn00000000000002')  // publicId succeeds
 
     const r = await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'New Teacher', title: 'Thầy' }), makeEnv(db))
     expect(r.status).toBe(200)
@@ -367,18 +364,16 @@ describe('PUT /api/admin/teachers/:id', () => {
 // ---- Rotate token ----
 
 describe('POST /api/admin/teachers/:id/rotate', () => {
-  it('replaces token; publicId stays the same (stable); old token no longer in DB', async () => {
+  it('replaces token; old token no longer in DB', async () => {
     const created = await (await handleAdmin(adminReq('POST', '/api/admin/teachers', { name: 'Rotate Me', title: 'Thầy' }), makeEnv(db))).json() as AdminTeacher
     const r = await handleAdmin(adminReq('POST', `/api/admin/teachers/${created.id}/rotate`), makeEnv(db))
     expect(r.status).toBe(200)
-    const body = await r.json() as { token: string; publicId: string }
+    const body = await r.json() as { token: string }
     // token CHANGES
     expect(body.token).not.toBe(created.token)
     expect(body.token).toMatch(/^[a-z0-9]{16}$/)
-    // publicId must be a string (fails until Group 2 returns it; currently undefined → type check fails)
-    expect(typeof body.publicId).toBe('string')
-    // publicId STAYS STABLE (plan § Amendments: "publicId stable on rotate")
-    expect(body.publicId).toBe(created.publicId)
+    // No publicId in rotate response (column removed)
+    expect((body as Record<string, unknown>)).not.toHaveProperty('publicId')
     // Old token no longer in DB
     const oldRow = await db.prepare('SELECT id FROM teacher WHERE token = ?').bind(created.token).first()
     expect(oldRow).toBeNull()
@@ -644,7 +639,6 @@ describe('POST /api/admin/teachers/bulk — structured items format', () => {
     vi.mocked(newToken)
       .mockReturnValueOnce('collision00000001')  // token: collision
       .mockReturnValueOnce('newtoken000000001')  // token: success
-      .mockReturnValueOnce('newpublicid00001')   // publicId: success
 
     const r = await handleAdmin(
       adminReq('POST', '/api/admin/teachers/bulk', { items: [{ title: 'Cô', name: 'Retry', subject: 'Văn' }] }),

@@ -5,6 +5,7 @@
  * Admin endpoints (/api/admin/*): X-Admin-Email + X-Requested-With (CSRF).
  */
 import type {
+  AboutContent,
   AdminCard,
   AdminTeacher,
   AdminTeacherInput,
@@ -16,14 +17,13 @@ import type {
   ReviewRequest,
   SubmitCardRequest,
   TemplatePublic,
-  TeacherPageResponse,
   WallResponse,
   WishPublic,
 } from '../shared/api.ts'
 
-export type { AdminCard, AdminTeacher, AdminTeacherInput, AdminTemplate, AdminTemplateInput,
+export type { AboutContent, AdminCard, AdminTeacher, AdminTeacherInput, AdminTemplate, AdminTemplateInput,
   BulkTeacherInputItem, BulkTeacherRequest,
-  QrResponse, ReviewRequest, SubmitCardRequest, TemplatePublic, TeacherPageResponse,
+  QrResponse, ReviewRequest, SubmitCardRequest, TemplatePublic,
   WallResponse, WishPublic }
 
 // Keep these types for ImageLibrary, WishLibrary, AdminsSection (unchanged)
@@ -126,10 +126,6 @@ export async function getWall(): Promise<WallResponse> {
   return (await expectOk(await fetch('/api/wall'))).json() as Promise<WallResponse>
 }
 
-export async function getTeacherPage(publicId: string): Promise<TeacherPageResponse> {
-  return (await expectOk(await fetch(`/api/teachers/${encodeURIComponent(publicId)}`))).json() as Promise<TeacherPageResponse>
-}
-
 export async function getTemplates(): Promise<TemplatePublic[]> {
   return (await expectOk(await fetch('/api/templates'))).json() as Promise<TemplatePublic[]>
 }
@@ -148,6 +144,11 @@ export async function submitCard(body: SubmitCardRequest): Promise<{ status: 'pe
 
 export async function getQr(token: string): Promise<QrResponse> {
   return (await expectOk(await fetch(`/api/qr/${encodeURIComponent(token)}`))).json() as Promise<QrResponse>
+}
+
+/** GET /api/about — public About content. */
+export async function getAbout(): Promise<AboutContent> {
+  return (await expectOk(await fetch('/api/about'))).json() as Promise<AboutContent>
 }
 
 // ── Admin teachers ────────────────────────────────────────────────────────
@@ -314,4 +315,20 @@ export async function updateWish(id: number, title: string, body: string): Promi
 
 export async function deleteWish(id: number): Promise<void> {
   await expectOk(await apiFetch(`/api/admin/wishes/${id}`, { method: 'DELETE' }))
+}
+
+// ── About (admin) ─────────────────────────────────────────────────────────
+
+/** GET /api/admin/about — read current About content (admin auth). */
+export async function getAdminAbout(): Promise<AboutContent> {
+  return (await expectOk(await apiFetch('/api/admin/about'))).json() as Promise<AboutContent>
+}
+
+/** PUT /api/admin/about — replace About content (admin auth). Returns stored content. */
+export async function putAdminAbout(body: AboutContent): Promise<AboutContent> {
+  return (await expectOk(await apiFetch('/api/admin/about', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }))).json() as Promise<AboutContent>
 }

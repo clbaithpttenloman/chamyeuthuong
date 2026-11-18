@@ -3,68 +3,36 @@
  *
  * Handles:
  *   GET /api/wall
- *   GET /api/teachers/:publicId
  *   GET /api/templates
  *   GET /api/wishes
  *
- * Order: rate limit → isToken check → ensureSchema → DB.
+ * Order: rate limit → ensureSchema → DB.
  * Never logs student text. Options → 405 (no CORS headers).
+ * GET /api/teachers/* is removed; the route no longer exists.
  */
 import { error, json } from './http.ts'
-import { isToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
-import { cardWhere, teacherWhere, fetchTemplateImages, toPublicCard, type CardRow } from './publicSql.ts'
+import { cardWhere, teacherWhere, fetchTemplateImages } from './publicSql.ts'
 import type { Env } from './types.ts'
 
 // ---- GET /api/wall ----
 
 async function handleWall(db: Env['DB']): Promise<Response> {
-  // Teachers (show_on_home=1) with approved card count
+  // Teachers (show_on_home=1) with approved card count; expose numeric id (not token or publicId).
   const { results: teachers } = await db
     .prepare(
-      'SELECT tp.public_id AS publicId, tt.title, t.name, t.subject, tp.department, ' +
+      'SELECT t.id, tt.title, t.name, t.subject, tp.department, ' +
       'COUNT(sc.id) AS cardCount ' +
       'FROM teacher t ' +
       `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')} ` +
       'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
       `LEFT JOIN student_card sc ON sc.teacher_id = t.id AND ${cardWhere('sc')} ` +
-      'GROUP BY t.id, tp.public_id, tt.title, t.name, t.subject, tp.department ' +
+      'GROUP BY t.id, tt.title, t.name, t.subject, tp.department ' +
       'ORDER BY t.id',
     )
-    .all<{ publicId: string; title: string | null; name: string; subject: string; department: string; cardCount: number }>()
+    .all<{ id: number; title: string | null; name: string; subject: string; department: string; cardCount: number }>()
 
-  // Latest: one per teacher (newest approved card), capped at 6, show_on_home=1 only
-  const { results: latestRows } = await db
-    .prepare(
-      'SELECT sc.public_id, sc.message, sc.from_name, sc.from_class, sc.anonymous, sc.created_at, ' +
-      'sc.template_id, tmpl.layout, ' +
-      'tp.public_id AS teacher_public_id, tt.title AS teacher_title, t.name AS teacher_name ' +
-      'FROM student_card sc ' +
-      'JOIN teacher t ON t.id = sc.teacher_id ' +
-      `JOIN teacher_profile tp ON tp.teacher_id = t.id AND ${teacherWhere('tp')} ` +
-      'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
-      'JOIN template tmpl ON tmpl.id = sc.template_id ' +
-      `WHERE ${cardWhere('sc')} ` +
-      'AND sc.id = (' +
-      '  SELECT sc2.id FROM student_card sc2 ' +
-      `  WHERE sc2.teacher_id = sc.teacher_id AND ${cardWhere('sc2')} ` +
-      '  ORDER BY sc2.created_at DESC, sc2.id DESC LIMIT 1' +
-      ') ' +
-      'ORDER BY sc.created_at DESC, sc.id DESC ' +
-      'LIMIT 6',
-    )
-    .all<CardRow & { teacher_public_id: string; teacher_title: string | null; teacher_name: string }>()
-
-  // Template images for latest cards
-  const templateIds = [...new Set(latestRows.map((r) => r.template_id))]
-  const imgMap = await fetchTemplateImages(db, templateIds)
-
-  const latest = latestRows.map((row) => ({
-    ...toPublicCard(row, imgMap.get(row.template_id) ?? {}),
-    teacher: { publicId: row.teacher_public_id, title: row.teacher_title, name: row.teacher_name },
-  }))
-
-  // Totals
+  // Totals (show_on_home=1 teachers and their approved cards only)
   const totalsRow = await db
     .prepare(
       'SELECT ' +
@@ -75,63 +43,7 @@ async function handleWall(db: Env['DB']): Promise<Response> {
 
   return json({
     teachers,
-    latest,
     totals: { teachers: totalsRow?.teachers ?? 0, cards: totalsRow?.cards ?? 0 },
-  })
-}
-
-// ---- GET /api/teachers/:publicId ----
-
-async function handleTeacherPage(db: Env['DB'], publicId: string): Promise<Response> {
-  // Single query: teacher profile + teacher_id in one statement
-  const teacherRow = await db
-    .prepare(
-      'SELECT tp.teacher_id, tp.public_id AS publicId, tt.title, t.name, t.subject, tp.department ' +
-      'FROM teacher t ' +
-      'JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
-      'LEFT JOIN teacher_title tt ON tt.teacher_id = t.id ' +
-      'WHERE tp.public_id = ?',
-    )
-    .bind(publicId)
-    .first<{ teacher_id: number; publicId: string; title: string | null; name: string; subject: string; department: string }>()
-
-  if (!teacherRow) return error('not_found')
-
-  // Approved cards, newest first, capped at 200
-  const { results: cardRows } = await db
-    .prepare(
-      'SELECT sc.public_id, sc.message, sc.from_name, sc.from_class, sc.anonymous, sc.created_at, ' +
-      'sc.template_id, tmpl.layout ' +
-      'FROM student_card sc ' +
-      'JOIN template tmpl ON tmpl.id = sc.template_id ' +
-      `WHERE sc.teacher_id = ? AND ${cardWhere('sc')} ` +
-      'ORDER BY sc.created_at DESC, sc.id DESC ' +
-      'LIMIT 200',
-    )
-    .bind(teacherRow.teacher_id)
-    .all<CardRow>()
-
-  // Total (without the 200 cap)
-  const totalRow = await db
-    .prepare(`SELECT COUNT(*) AS total FROM student_card sc WHERE sc.teacher_id = ? AND ${cardWhere('sc')}`)
-    .bind(teacherRow.teacher_id)
-    .first<{ total: number }>()
-
-  const templateIds = [...new Set(cardRows.map((r) => r.template_id))]
-  const imgMap = await fetchTemplateImages(db, templateIds)
-
-  const cards = cardRows.map((row) => toPublicCard(row, imgMap.get(row.template_id) ?? {}))
-
-  return json({
-    teacher: {
-      publicId: teacherRow.publicId,
-      title: teacherRow.title,
-      name: teacherRow.name,
-      subject: teacherRow.subject,
-      department: teacherRow.department,
-    },
-    cards,
-    total: totalRow?.total ?? 0,
   })
 }
 
@@ -168,6 +80,7 @@ async function handleWishes(db: Env['DB']): Promise<Response> {
 /**
  * Routes unauthenticated public GET requests.
  * Rate limit is checked first, before any DB access.
+ * GET /api/teachers/* is intentionally removed and returns 404.
  */
 export async function handlePublic(request: Request, env: Env): Promise<Response> {
   const { method, url } = request
@@ -181,19 +94,11 @@ export async function handlePublic(request: Request, env: Env): Promise<Response
   const { success } = await env.PUBLIC_IP_LIMIT.limit({ key: ip })
   if (!success) return error('rate_limited')
 
-  // 2. Route — isToken check before ensureSchema/DB where applicable
+  // 2. Route
   if (pathname === '/api/wall') {
     if (method !== 'GET') return error('method')
     await ensureSchema(env.DB)
     return handleWall(env.DB)
-  }
-
-  if (pathname.startsWith('/api/teachers/')) {
-    if (method !== 'GET') return error('method')
-    const publicId = pathname.slice('/api/teachers/'.length)
-    if (!isToken(publicId)) return error('not_found')
-    await ensureSchema(env.DB)
-    return handleTeacherPage(env.DB, publicId)
   }
 
   if (pathname === '/api/templates') {
@@ -207,5 +112,6 @@ export async function handlePublic(request: Request, env: Env): Promise<Response
     await ensureSchema(env.DB)
     return handleWishes(env.DB)
   }
+
   return error('not_found')
 }
