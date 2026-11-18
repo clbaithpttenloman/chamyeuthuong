@@ -106,6 +106,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   position: absolute;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   justify-content: safe center; /* if text still overflows at the minimum size, clip the end, not the greeting */
   overflow: hidden;
   padding: 2.5cqw 3cqw;
