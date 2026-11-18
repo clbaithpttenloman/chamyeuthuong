@@ -4,10 +4,9 @@ import { fillWish } from './wish.ts'
 
 // ===================================================================
 // New for honorific plan: {Thầy/Cô} and {thầy/cô} placeholders
-// (failing until Group 2 adds title support to fillWish)
 // ===================================================================
 
-describe('fillWish — {Thầy/Cô} placeholder (failing until Group 2)', () => {
+describe('fillWish — {Thầy/Cô} placeholder', () => {
   it('{Thầy/Cô} replaced with title when title is Thầy', () => {
     expect(fillWish('{Thầy/Cô} ơi', { name: 'A', title: 'Thầy' })).toBe('Thầy ơi')
   })
@@ -46,7 +45,7 @@ describe('fillWish — {Thầy/Cô} placeholder (failing until Group 2)', () => 
   })
 })
 
-describe('fillWish — {thầy/cô} placeholder (failing until Group 2)', () => {
+describe('fillWish — {thầy/cô} placeholder', () => {
   it('{thầy/cô} replaced with lowercase title when title is Thầy', () => {
     expect(fillWish('kính chào {thầy/cô}', { name: 'A', title: 'Thầy' })).toBe('kính chào thầy')
   })

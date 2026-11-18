@@ -541,10 +541,9 @@ describe('testDb — 100-parameter guard', () => {
 })
 
 // ===================================================================
-// New tables in plan — FAILING until Group 2 adds them to SCHEMA
 // ===================================================================
 
-describe('SCHEMA covers new tables (failing until Group 2)', () => {
+describe('SCHEMA covers new tables', () => {
   it('covers teacher_profile, template, template_image, student_card, image, wish, meta', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -572,7 +571,7 @@ describe('SCHEMA covers new tables (failing until Group 2)', () => {
   })
 })
 
-describe('teacher_profile table constraints (failing until Group 2)', () => {
+describe('teacher_profile table constraints', () => {
   it('ensureSchema creates teacher_profile on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -612,7 +611,7 @@ describe('teacher_profile table constraints (failing until Group 2)', () => {
   })
 })
 
-describe('template table constraints (failing until Group 2)', () => {
+describe('template table constraints', () => {
   it('ensureSchema creates template on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -638,7 +637,7 @@ describe('template table constraints (failing until Group 2)', () => {
   })
 })
 
-describe('template_image table constraints (failing until Group 2)', () => {
+describe('template_image table constraints', () => {
   it('ensureSchema creates template_image on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -700,7 +699,7 @@ describe('template_image table constraints (failing until Group 2)', () => {
   })
 })
 
-describe('student_card table constraints (failing until Group 2)', () => {
+describe('student_card table constraints', () => {
   it('ensureSchema creates student_card on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
@@ -810,19 +809,16 @@ describe('student_card table constraints (failing until Group 2)', () => {
 })
 
 // ===================================================================
-// New for privacy-about plan — FAILING until Group 2 updates SCHEMA
 // ===================================================================
 
-describe('template_image slot CHECK — only background/banner (failing until Group 2)', () => {
-  it('slot CHECK rejects photo (removed slot) — FAILS until Group 2 changes CHECK', () => {
+describe('template_image slot CHECK — only background/banner', () => {
+  it('slot CHECK rejects photo (removed slot)', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
     const tmplId = (sqlite.prepare('SELECT id FROM template WHERE name=?').get('T') as { id: number }).id
     sqlite.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('imgabc1234567890','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')").run()
     const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get('imgabc1234567890') as { id: number }).id
-    // After Group 2: CHECK IN ('background','banner') → photo is rejected.
-    // Before Group 2: CHECK includes 'photo' → insertion succeeds → test FAILS.
     expect(() => {
       sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, 'photo', ${imgId})`).run()
     }).toThrow()
@@ -844,26 +840,24 @@ describe('template_image slot CHECK — only background/banner (failing until Gr
   })
 })
 
-describe('teacher_profile — no public_id column (failing until Group 2)', () => {
-  it('teacher_profile has no public_id column in DDL — FAILS until Group 2 removes it', async () => {
+describe('teacher_profile — no public_id column', () => {
+  it('teacher_profile has no public_id column in DDL', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const cols = (sqlite.prepare("PRAGMA table_info(teacher_profile)").all() as Array<{ name: string }>).map((c) => c.name)
-    // After Group 2: public_id is removed from teacher_profile.
-    // Before Group 2: public_id exists → test FAILS.
     expect(cols).not.toContain('public_id')
   })
 })
 
-describe('site_content table (failing until Group 2)', () => {
-  it('ensureSchema creates site_content table — FAILS until Group 2 adds it to SCHEMA', async () => {
+describe('site_content table', () => {
+  it('ensureSchema creates site_content table', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
     expect(names).toContain('site_content')
   })
 
-  it('site_content key CHECK only allows "about" — FAILS until Group 2 adds schema', async () => {
+  it('site_content key CHECK only allows "about"', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     // Should fail for unknown keys
@@ -872,7 +866,7 @@ describe('site_content table (failing until Group 2)', () => {
     }).toThrow()
   })
 
-  it('about seed row is present on a fresh DB — FAILS until Group 2 adds aboutSeedSql()', async () => {
+  it('about seed row is present on a fresh DB', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
@@ -881,21 +875,21 @@ describe('site_content table (failing until Group 2)', () => {
     expect(() => JSON.parse(row!.value)).not.toThrow()
   })
 
-  it('about seed contains member name "Vũ Ngọc Diệp" — FAILS until Group 2 adds seed', async () => {
+  it('about seed contains member name "Vũ Ngọc Diệp"', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
     expect(row?.value).toContain('Vũ Ngọc Diệp')
   })
 
-  it('about seed contains member name "Kiro Coding Agent" — FAILS until Group 2 adds seed', async () => {
+  it('about seed contains member name "Kiro Coding Agent"', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
     expect(row?.value).toContain('Kiro Coding Agent')
   })
 
-  it('about seed has at least 8 steps — FAILS until Group 2 adds seed', async () => {
+  it('about seed has at least 8 steps', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
     const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
@@ -905,7 +899,7 @@ describe('site_content table (failing until Group 2)', () => {
     expect((parsed.steps ?? []).length).toBeGreaterThanOrEqual(8)
   })
 
-  it('about seed INSERT uses OR IGNORE (idempotent) — FAILS until Group 2 adds schema', async () => {
+  it('about seed INSERT uses OR IGNORE (idempotent)', async () => {
     const { sqlite } = testDb({ schema: false })
     for (const sql of SCHEMA) sqlite.exec(sql)
     // Run every SCHEMA statement twice — the about seed must not fail on the second run

@@ -2,7 +2,6 @@
 /**
  * Tests for worker/about.ts and worker/aboutSeed.ts
  *
- * ALL tests fail until Group 2 creates these modules.
  *
  * Contracts expected:
  *   worker/about.ts:
@@ -17,7 +16,6 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 
-// These imports fail until Group 2 creates the modules → all tests fail
 import { handleAbout, handleAdminAbout } from './about.ts'
 import { ABOUT_SEED, aboutSeedSql } from './aboutSeed.ts'
 import { testDb, type D1 } from './testDb.ts'
@@ -175,7 +173,7 @@ describe('aboutSeed — aboutSeedSql()', () => {
 
 // ---- GET /api/about — public endpoint ----
 
-describe('GET /api/about — public (failing until Group 2)', () => {
+describe('GET /api/about — public', () => {
   it('returns 200 with AboutContent shape', async () => {
     const r = await handleAbout(
       req('GET', '/api/about'),
@@ -231,7 +229,7 @@ describe('GET /api/about — public (failing until Group 2)', () => {
     const r = await handleAbout(req('GET', '/api/about'), makePublicEnv(freshDb))
     // Must not 500; falls back to seed → 200
     expect(r.status).toBe(200)
-    expect(() => r.json()).not.toThrow()
+    expect(await r.json()).toEqual(ABOUT_SEED)
   })
 
   it('valid JSON but wrong shape in DB → falls back to seed', async () => {
@@ -256,7 +254,7 @@ describe('GET /api/about — public (failing until Group 2)', () => {
 
 // ---- GET /api/admin/about ----
 
-describe('GET /api/admin/about (failing until Group 2)', () => {
+describe('GET /api/admin/about', () => {
   it('returns 200 with AboutContent shape', async () => {
     const r = await handleAdminAbout(
       req('GET', '/api/admin/about'),
@@ -272,7 +270,7 @@ describe('GET /api/admin/about (failing until Group 2)', () => {
 
 // ---- PUT /api/admin/about ----
 
-describe('PUT /api/admin/about — validation (failing until Group 2)', () => {
+describe('PUT /api/admin/about — validation', () => {
   it('valid body → 200 and returns stored content', async () => {
     const r = await handleAdminAbout(
       req('PUT', '/api/admin/about', VALID_ABOUT),

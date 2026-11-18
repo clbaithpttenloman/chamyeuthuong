@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for src/imageCompress.ts
- * Failing until Group 2 creates src/imageCompress.ts.
  *
  * Contract:
  *   compressImage(

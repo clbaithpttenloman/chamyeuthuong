@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for worker/templates.ts (admin template CRUD).
- * All tests fail until Group 2 creates worker/templates.ts.
  *
  * Contract expected:
  *   handleTemplates(request: Request, env: Env, email: string): Promise<Response>
@@ -14,7 +13,6 @@ vi.mock('./token.ts', () => ({
   isToken: (t: string) => /^[a-z0-9]{16}$/.test(t),
 }))
 
-// This import fails until Group 2 creates the module → all tests fail
 import { handleTemplates } from './templates.ts'
 import { ensureSchema } from './schema.ts'
 import { testDb, type D1 } from './testDb.ts'

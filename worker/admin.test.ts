@@ -394,7 +394,6 @@ describe('DELETE /api/admin/teachers/:id', () => {
     expect(r.status).toBe(200)
     // Teacher row is gone
     expect(await db.prepare('SELECT id FROM teacher WHERE id = ?').bind(created.id).first()).toBeNull()
-    // teacher_profile is gone (CASCADE — new table, fails until Group 2 adds it)
     const profile = await db.prepare('SELECT teacher_id FROM teacher_profile WHERE teacher_id = ?').bind(created.id).first()
     expect(profile).toBeNull()
     // teacher_title is gone (CASCADE)
@@ -505,7 +504,7 @@ describe('PUT /api/admin/teachers/:id — title field', () => {
   })
 })
 
-// ---- Bulk create (new structured items format) — failing until Fix Group 1 ----
+// ---- Bulk create (new structured items format) ----
 
 describe('POST /api/admin/teachers/bulk — structured items format', () => {
   // Format: { items: [{ title, name, subject?, department? }] }
@@ -695,6 +694,15 @@ describe('admin auth (via handleAdmin)', () => {
     expect((await handleAdmin(req, makeEnv(db))).status).toBe(401)
   })
 
+  it('PUT /api/admin/about without X-Admin-Email → 401', async () => {
+    const req = new Request('https://x/api/admin/about', {
+      method: 'PUT',
+      headers: { 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+      body: '{}',
+    })
+    expect((await handleAdmin(req, makeEnv(db))).status).toBe(401)
+  })
+
   it('ADMIN_FAIL_LIMIT exhausted → 429', async () => {
     expect((await handleAdmin(adminReq('GET', '/api/admin/teachers'), makeEnv(db, { adminFailLimit: false }))).status).toBe(429)
   })
@@ -703,6 +711,15 @@ describe('admin auth (via handleAdmin)', () => {
 // ---- CSRF guard via handleAdmin ----
 
 describe('CSRF guard (via handleAdmin)', () => {
+  it('PUT /api/admin/about without X-Requested-With: fetch → 403', async () => {
+    const req = new Request('https://x/api/admin/about', {
+      method: 'PUT',
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect((await handleAdmin(req, makeEnv(db))).status).toBe(403)
+  })
+
   it('POST without X-Requested-With: fetch → 403', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'POST',
@@ -795,9 +812,7 @@ describe('worker routing', () => {
     expect(r.status).toBe(401)  // no X-Admin-Email header → 401
   })
 
-  it('/api/card/* → 404 (endpoint removed — fails until Group 2 removes the route)', async () => {
-    // After Group 2 removes /api/card/ from index.ts, this returns routing-level 404.
-    // Currently routes to handleCard → may return 200 for a valid token.
+  it('/api/card/* → 404 (endpoint removed)', async () => {
     // We seed a teacher+card to prove the difference.
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
@@ -808,7 +823,6 @@ describe('worker routing', () => {
       new Request('https://x/api/card/tok1234567890ab', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       { ...makeEnv(freshDb), DB: freshDb as never },
     )
-    // After Group 2: 404. Currently: 200. Test fails until Group 2.
     expect(r.status).toBe(404)
   })
 

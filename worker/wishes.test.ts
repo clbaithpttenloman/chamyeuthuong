@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for worker/wishes.ts
- * Failing until Group 2 creates worker/wishes.ts.
  *
  * Contract:
  *   handleWishes(request, env, email): Promise<Response>

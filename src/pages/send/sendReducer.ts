@@ -48,7 +48,23 @@ export type SendAction =
   | { type: 'GO_BACK' }
   | { type: 'SUBMIT_SUCCESS' }
   | { type: 'SET_ERROR'; error: string }
+  | { type: 'CLEAR_PRESELECT' }
   | { type: 'RESET' }
+
+/**
+ * Parse the send-page URL params into the one teacher preselection to use.
+ * `?t=<token>` wins over `?thay=<id>` so the teacher shown and the teacher
+ * submitted are always the same. Invalid `?thay` values become null.
+ */
+export function parsePreselect(
+  thayParam: string | null,
+  tokenParam: string | null,
+): { byId: number | null; byToken: string | null } {
+  const byToken = tokenParam || null
+  if (byToken !== null) return { byId: null, byToken }
+  const byId = thayParam && /^\d+$/.test(thayParam) ? parseInt(thayParam, 10) : null
+  return { byId: byId !== null && byId > 0 ? byId : null, byToken: null }
+}
 
 export function initialState(
   preselectedById: number | null,
@@ -126,6 +142,10 @@ export function sendReducer(state: SendState, action: SendAction): SendState {
       }
       return state
     }
+
+    case 'CLEAR_PRESELECT':
+      // Preselected teacher could not be resolved: fall back to the step 2 picker
+      return { ...state, teacherId: null, teacherToken: null, preselectedById: null, preselectedByToken: null }
 
     case 'SUBMIT_SUCCESS':
       return { ...state, step: 4, error: null }

@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for worker/submit.ts
- * All tests fail until Group 2 creates worker/submit.ts.
  *
  * Contract expected:
  *   handleSubmit(request: Request, env: Env): Promise<Response>
@@ -14,13 +13,11 @@ vi.mock('./token.ts', () => ({
   isToken: (t: string) => /^[a-z0-9]{16}$/.test(t),
 }))
 
-// This import fails until Group 2 creates the module → all tests fail
 import { handleSubmit } from './submit.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'
 import { newToken } from './token.ts'
 
-const VALID_PUBLIC_ID = 'pub1234567890abc'
 const VALID_TOKEN = 'tok1234567890abc'
 
 function makeEnv(db: D1, opts: { submitIpLimit?: boolean } = {}) {
@@ -191,7 +188,7 @@ describe('POST /api/cards — Content-Type validation', () => {
       new Request('https://x/api/cards', {
         method: 'POST',
         headers: { 'CF-Connecting-IP': '1.2.3.4' },
-        body: JSON.stringify({ teacherPublicId: 'x', templateId: 1, message: 'y' }),
+        body: JSON.stringify({ teacherId: 1, templateId: 1, message: 'y' }),
       }),
       makeEnv(db),
     )
@@ -200,7 +197,7 @@ describe('POST /api/cards — Content-Type validation', () => {
 
   it('Content-Type: text/plain → 400', async () => {
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: 'x', templateId: 1, message: 'y' }, { contentType: 'text/plain' }),
+      submitReq({ teacherId: 1, templateId: 1, message: 'y' }, { contentType: 'text/plain' }),
       makeEnv(db),
     )
     expect(r.status).toBe(400)
@@ -482,7 +479,7 @@ describe('POST /api/cards — method guard', () => {
 describe('POST /api/cards — security headers', () => {
   it('every response has Cache-Control: no-store, X-Content-Type-Options, X-Robots-Tag', async () => {
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: 'x', templateId: 1, message: 'y' }),
+      submitReq({ teacherId: 1, templateId: 1, message: 'y' }),
       makeEnv(db, { submitIpLimit: false }),
     )
     expect(r.headers.get('Cache-Control')).toBe('no-store')
@@ -513,8 +510,11 @@ describe('POST /api/cards — more invisible and malformed characters (security 
     })
   }
   it('rejects a lone surrogate with 400 (not a database error)', async () => {
-    const { tmplId } = await seedTeacherAndTemplate(db)
-    const raw = `{"teacherPublicId":"${VALID_PUBLIC_ID}","templateId":${tmplId},"message":"hi \\ud800 there"}`
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    // Control: the same body without the surrogate is accepted, so the 400 below comes from the surrogate rule
+    const ok = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: 'hi there' }), makeEnv(db))
+    expect(ok.status).toBe(201)
+    const raw = `{"teacherId":${tid},"templateId":${tmplId},"message":"hi \\ud800 there"}`
     const r = await handleSubmit(new Request('https://x/api/cards', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '1.2.3.4' }, body: raw,
     }), makeEnv(db))
@@ -528,13 +528,10 @@ describe('POST /api/cards — more invisible and malformed characters (security 
 })
 
 // ===================================================================
-// New for privacy-about plan — FAILING until Group 2 updates submit.ts
 // ===================================================================
 
 describe('POST /api/cards — teacherId / teacherToken', () => {
   it('teacherId (show_on_home=1) → 201', async () => {
-    // After Group 2: teacherId accepted for show_on_home=1 teachers.
-    // Before Group 2: submit.ts requires teacherPublicId → returns 400 for teacherId.
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
     // Seed teacher with show_on_home=1
@@ -549,7 +546,6 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
       submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc mừng!' }),
       makeEnv(freshDb),
     )
-    // After Group 2: 201. Before Group 2: 400 → FAIL.
     expect(r.status).toBe(201)
   })
 
@@ -569,12 +565,10 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
       submitReq({ teacherToken: TOKEN, templateId: tmplId, message: 'Chúc mừng!' }),
       makeEnv(freshDb),
     )
-    // After Group 2: 201. Before Group 2: 400 → FAIL.
     expect(r.status).toBe(201)
   })
 
   it('teacherId for show_on_home=0 teacher → 404', async () => {
-    // After Group 2: teacherId only valid for show_on_home=1. Hidden teacher via id → 404.
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
     await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
@@ -588,7 +582,6 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
       submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc mừng!' }),
       makeEnv(freshDb),
     )
-    // After Group 2: 404. Before Group 2: 400 → FAIL.
     expect(r.status).toBe(404)
   })
 
@@ -620,7 +613,6 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
       submitReq({ teacherId: 99999, templateId: tmplId, message: 'Chúc mừng!' }),
       makeEnv(freshDb),
     )
-    // After Group 2: 404. Before Group 2: 400 → FAIL.
     expect(r.status).toBe(404)
   })
 

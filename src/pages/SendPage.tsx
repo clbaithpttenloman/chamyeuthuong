@@ -21,7 +21,7 @@ import { formatFrom, subjectLabel } from '../../shared/api.ts'
 import { fillWish } from '../../shared/wish.ts'
 import { ApiError, getPublicWishes, getQr, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
-import { initialState, isTextValid, sendReducer } from './send/sendReducer.ts'
+import { initialState, isTextValid, parsePreselect, sendReducer } from './send/sendReducer.ts'
 import { resolveTeacherById } from './send/resolveTeacher.ts'
 
 const PREVIEW_CARD = {
@@ -65,13 +65,9 @@ function submitErrorMessage(e: unknown): string {
 
 export default function SendPage() {
   const [searchParams] = useSearchParams()
-  const thayParam = searchParams.get('thay')   // numeric teacher id
-  const tokenParam = searchParams.get('t')     // QR token
-
-  // Parse ?thay as a positive integer; fall back to null if invalid
-  const preselectedById: number | null =
-    thayParam && /^\d+$/.test(thayParam) ? parseInt(thayParam, 10) : null
-  const preselectedByToken: string | null = tokenParam || null
+  // ?t= (QR token) wins over ?thay= (numeric id); see parsePreselect
+  const { byId: preselectedById, byToken: preselectedByToken } =
+    parsePreselect(searchParams.get('thay'), searchParams.get('t'))
 
   const [state, dispatch] = useReducer(
     sendReducer,
@@ -130,7 +126,10 @@ export default function SendPage() {
       if (preselectedById !== null) {
         const profile = resolveTeacherById(preselectedById, wallTeachersLoaded)
         if (profile) setTeacherInfo(profile)
-        else setTeacherNotFound(true)
+        else { setTeacherNotFound(true); dispatch({ type: 'CLEAR_PRESELECT' }) }
+      } else if (preselectedByToken !== null && (!qrRes || qrRes.status === 'rejected')) {
+        setTeacherNotFound(true)
+        dispatch({ type: 'CLEAR_PRESELECT' })
       } else if (preselectedByToken !== null && qrRes && qrRes.status === 'fulfilled') {
         const t = qrRes.value.teacher
         setTeacherInfo({

@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for worker/images.ts
- * Failing until Group 2 creates worker/images.ts.
  *
  * Contracts expected:
  *   handleImages(request, env, email): Promise<Response>
@@ -407,7 +406,7 @@ describe('POST /api/admin/images — name validation', () => {
 // Admin image upload — quota caps (atomic)
 // ===================================================================
 
-describe('POST /api/admin/images — 200-image cap (failing until Group 2)', () => {
+describe('POST /api/admin/images — 200-image cap', () => {
   it('201st image upload → 409 conflict', async () => {
     // Seed 200 image rows directly
     for (let i = 0; i < 200; i++) {
@@ -676,13 +675,12 @@ describe('DELETE /api/admin/images/:id', () => {
     expect(await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first()).toBeNull()
   })
 
-  it('deleting an image used by a template → 409 conflict (failing until Group 2 adds template tables)', async () => {
+  it('deleting an image used by a template → 409 conflict', async () => {
     // Create a template using the image via template_image (new plan — not card_image)
     const now = new Date().toISOString()
     await db.prepare("INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES (?,?,?,?,?,?,?)")
       .bind('imgabc1234567890', 'x.jpg', 'image/jpeg', 100, 'data', now, TEST_EMAIL).run()
     const iid = (await db.prepare('SELECT id FROM image WHERE token=?').bind('imgabc1234567890').first<{ id: number }>())!.id
-    // Insert a template row (fails until Group 2 adds template to SCHEMA)
     await db.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)")
       .bind('TestTemplate', 'classic', 1, now, TEST_EMAIL).run()
     const tid = (await db.prepare('SELECT id FROM template WHERE name=?').bind('TestTemplate').first<{ id: number }>())!.id

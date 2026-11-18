@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for worker/moderation.ts (admin card moderation).
- * All tests fail until Group 2 creates worker/moderation.ts.
  *
  * Contract expected:
  *   handleModeration(request: Request, env: Env, email: string): Promise<Response>
@@ -10,7 +9,6 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 
-// This import fails until Group 2 creates the module → all tests fail
 import { handleModeration } from './moderation.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'

@@ -24,7 +24,7 @@ describe('teacherWhere', () => {
 
 // ---- fetchTemplateImages — unknown slots skipped ----
 
-describe('fetchTemplateImages — skips unknown slots (failing until Group 2)', () => {
+describe('fetchTemplateImages — skips unknown slots', () => {
   it('returns empty map for empty templateIds', async () => {
     const { db } = testDb()
     const result = await fetchTemplateImages(db, [])

@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
  * Tests for src/components/CardView.tsx
- * Failing until Group 2 creates src/components/CardView.tsx.
  * Uses react-dom/server renderToString — no jsdom required.
  *
  * Contract:
@@ -168,7 +167,6 @@ describe('CardView — slot coverage', () => {
 
 // ===================================================================
 // New for honorific plan: title in heading and photo alt text
-// (failing until Group 2 adds title support to CardView)
 // ===================================================================
 
 type CardDataWithTitle = {
@@ -178,7 +176,7 @@ type CardDataWithTitle = {
   title?: 'Thầy' | 'Cô' | null
 }
 
-describe('CardView — teacher title in heading (failing until Group 2)', () => {
+describe('CardView — teacher title in heading', () => {
   it('heading shows "{title} {name}" when title is Thầy', () => {
     const card: CardDataWithTitle = {
       name: 'Nguyễn Văn A',
@@ -294,7 +292,6 @@ describe('CardView — message pre-line rendering', () => {
 })
 
 // ===================================================================
-// New for privacy-about plan — FAILING until Group 2 updates CardView
 // ===================================================================
 
 describe('CardView — no photo slot rendered', () => {
@@ -320,14 +317,11 @@ describe('CardView — no photo slot rendered', () => {
   })
 })
 
-describe('CardView — subject shown as "GV môn: <subject>" (failing until Group 2)', () => {
-  it('subject "Toán" is shown as "GV môn: Toán" — FAILS until Group 2 uses subjectLabel()', () => {
-    // After Group 2: CardView calls subjectLabel() → "GV môn: Toán".
-    // Before Group 2: CardView shows raw subject "Toán" without the prefix → FAIL.
+describe('CardView — subject shown as "GV môn: <subject>"', () => {
+  it('subject "Toán" is shown as "GV môn: Toán"', () => {
     const html = renderToString(
       <CardView card={baseCard} layout="classic" images={{}} />,
     )
-    // After Group 2: contains "GV môn: Toán". Before Group 2: only contains "Toán" (no prefix) → FAIL.
     expect(html).toContain('GV môn: Toán')
   })
 

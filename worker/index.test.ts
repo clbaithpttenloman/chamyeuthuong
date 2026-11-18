@@ -60,7 +60,7 @@ describe('worker index — catch boundary (real index.ts)', () => {
   })
 })
 
-// ---- /api/card/* route is REMOVED — failing until Group 2 ----
+// ---- /api/card/* route is REMOVED ----
 
 describe('worker.fetch — /api/card/* → 404 (route removed)', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -81,13 +81,12 @@ describe('worker.fetch — /api/card/* → 404 (route removed)', () => {
   })
 })
 
-// ---- New routes — failing until Group 2 ----
+// ---- New routes ----
 
-describe('worker.fetch — new public routes (failing until Group 2 adds them to index.ts)', () => {
+describe('worker.fetch — new public routes', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('GET /api/wall → handled (not 404)', async () => {
-    // After Group 2: routes to handlePublic → 200 or 429.
     const r = await worker.fetch(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
@@ -113,8 +112,9 @@ describe('worker.fetch — new public routes (failing until Group 2 adds them to
       new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
     )
-    // unknown token → 404 from qr handler (not from catch-all)
-    expect(r.status).toBeLessThan(600)
+    // unknown token → 404 from the qr handler (not the catch-all)
+    expect(r.status).toBe(404)
+    expect(await r.json()).toEqual({ error: 'not_found' })
   })
 
   it('GET /api/templates → handled (not 404)', async () => {
@@ -122,7 +122,6 @@ describe('worker.fetch — new public routes (failing until Group 2 adds them to
       new Request('https://x/api/templates', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
     )
-    // After Group 2: 200. Currently 404.
     expect(r.status).toBe(200)
   })
 
@@ -131,24 +130,22 @@ describe('worker.fetch — new public routes (failing until Group 2 adds them to
       new Request('https://x/api/wishes', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
     )
-    // After Group 2: 200. Currently 404.
     expect(r.status).toBe(200)
   })
 })
 
-// ---- OPTIONS on public routes → 405 without Access-Control-* headers (failing until Group 2) ----
+// ---- OPTIONS on public routes → 405 without Access-Control-* headers ----
 
-describe('worker.fetch — OPTIONS on public routes → 405 without CORS headers (failing until Group 2)', () => {
+describe('worker.fetch — OPTIONS on public routes → 405 without CORS headers', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it.each(['/api/wall', '/api/templates', '/api/wishes'])(
-    'OPTIONS %s → 405 without Access-Control-* headers (fails until Group 2)',
+    'OPTIONS %s → 405 without Access-Control-* headers',
     async (path) => {
       const r = await worker.fetch(
         new Request(`https://x${path}`, { method: 'OPTIONS', headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
         makeEnv() as never,
       )
-      // After Group 2: 405. Currently: 404 from catch-all.
       expect(r.status).toBe(405)
       expect(r.headers.get('Access-Control-Allow-Origin')).toBeNull()
       expect(r.headers.get('Access-Control-Allow-Methods')).toBeNull()
@@ -156,7 +153,7 @@ describe('worker.fetch — OPTIONS on public routes → 405 without CORS headers
     },
   )
 
-  it('OPTIONS /api/cards → 405 without CORS headers (failing until Group 2)', async () => {
+  it('OPTIONS /api/cards → 405 without CORS headers', async () => {
     const r = await worker.fetch(
       new Request('https://x/api/cards', { method: 'OPTIONS', headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
@@ -191,7 +188,6 @@ describe('worker.fetch — DDL failure returns 503', () => {
 })
 
 // ===================================================================
-// New for privacy-about plan — FAILING until Group 2 updates index.ts
 // ===================================================================
 
 describe('worker.fetch — /api/teachers/* removed', () => {

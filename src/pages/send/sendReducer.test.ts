@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { initialState, isTextValid, sendReducer, type SendState } from './sendReducer.ts'
+import { initialState, isTextValid, parsePreselect, sendReducer, type SendState } from './sendReducer.ts'
 import { MAX_FROM_CLASS, MAX_FROM_NAME, MAX_MESSAGE, MAX_NEWLINES } from '../../../shared/api.ts'
 
 // ── initialState ──────────────────────────────────────────────────────────
@@ -290,5 +290,35 @@ describe('isTextValid — trimmed text', () => {
 
   it('text with leading/trailing whitespace is valid when non-empty content exists', () => {
     expect(isTextValid('  hello  ')).toBe(true)
+  })
+})
+
+// ── parsePreselect (URL params → one preselection) ───────────────────────
+
+describe('parsePreselect', () => {
+  it('?thay only → byId', () => expect(parsePreselect('42', null)).toEqual({ byId: 42, byToken: null }))
+  it('?t only → byToken', () => expect(parsePreselect(null, 'abc1234567890abc')).toEqual({ byId: null, byToken: 'abc1234567890abc' }))
+  it('both → token wins, id dropped (shown teacher = submitted teacher)', () =>
+    expect(parsePreselect('42', 'abc1234567890abc')).toEqual({ byId: null, byToken: 'abc1234567890abc' }))
+  it('invalid ?thay → null', () => {
+    for (const v of ['abc', '-1', '1.5', '0', '']) expect(parsePreselect(v, null)).toEqual({ byId: null, byToken: null })
+  })
+  it('empty ?t falls back to ?thay', () => expect(parsePreselect('7', '')).toEqual({ byId: 7, byToken: null }))
+})
+
+// ── CLEAR_PRESELECT (unresolved teacher → back to picker) ────────────────
+
+describe('CLEAR_PRESELECT', () => {
+  it('clears token preselection so step 2 is no longer skipped', () => {
+    let s = sendReducer(initialState(null, 'abc1234567890abc'), { type: 'CLEAR_PRESELECT' })
+    expect(s.teacherToken).toBeNull()
+    expect(s.teacherId).toBeNull()
+    s = sendReducer(s, { type: 'SELECT_TEMPLATE', templateId: 1 })
+    expect(s.step).toBe(2)
+  })
+  it('clears id preselection', () => {
+    const s = sendReducer(sendReducer(initialState(42), { type: 'CLEAR_PRESELECT' }), { type: 'SELECT_TEMPLATE', templateId: 1 })
+    expect(s.teacherId).toBeNull()
+    expect(s.step).toBe(2)
   })
 })

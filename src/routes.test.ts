@@ -1,7 +1,6 @@
 /**
  * Tests for src/routes.ts
  *
- * ALL tests fail until Group 2 creates routes.ts.
  *
  * Contract expected:
  *   ROUTES: Array<{ path: string; element: unknown }>
@@ -12,14 +11,11 @@
  */
 import { describe, it, expect } from 'vitest'
 
-// This import fails until Group 2 creates the module → all tests fail
 import { ROUTES } from './routes.ts'
 
-describe('ROUTES — /thay-co removed (failing until Group 2)', () => {
-  it('has no route with path /thay-co/:publicId — FAILS until Group 2 removes TeacherPage', () => {
+describe('ROUTES — /thay-co removed', () => {
+  it('has no route with path /thay-co/:publicId', () => {
     const paths = ROUTES.map((r: { path: string }) => r.path)
-    // After Group 2: /thay-co/:publicId route is removed.
-    // Before Group 2: routes.ts doesn't exist → import fails → FAIL.
     expect(paths).not.toContain('/thay-co/:publicId')
     expect(paths.some((p: string) => p.startsWith('/thay-co'))).toBe(false)
   })

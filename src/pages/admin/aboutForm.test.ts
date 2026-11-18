@@ -1,7 +1,6 @@
 /**
  * Tests for src/pages/admin/aboutForm.ts
  *
- * ALL tests fail until Group 2 creates aboutForm.ts.
  *
  * Contract expected:
  *   serializeAboutForm(fields: AboutFormFields): AboutContent
@@ -13,11 +12,10 @@
  */
 import { describe, it, expect } from 'vitest'
 
-// This import fails until Group 2 creates the module → all tests fail
 import { serializeAboutForm } from './aboutForm.ts'
 import type { AboutContent } from '../../../shared/api.ts'
 
-describe('serializeAboutForm — basic shape (failing until Group 2)', () => {
+describe('serializeAboutForm — basic shape', () => {
   it('returns an object with all required AboutContent keys', () => {
     const result = serializeAboutForm({
       heading: 'CLB AI',
