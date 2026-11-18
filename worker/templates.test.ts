@@ -460,3 +460,50 @@ describe('templates — card v3 layouts and slots', () => {
     expect(((await r.json()) as { layout: string }).layout).toBe('doc-tren')
   })
 })
+
+// ---- Card v3: templates on an old DB that still has banner/photo links ----
+
+describe('templates — legacy banner/photo links (pre-v3 template_image CHECK)', () => {
+  const LEGACY_TI = `CREATE TABLE template_image (
+    template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
+    slot        TEXT    NOT NULL CHECK (slot IN ('background','banner','photo')),
+    image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+    PRIMARY KEY (template_id, slot))`
+
+  async function legacy() {
+    const t = testDb()
+    t.sqlite.exec('DROP TABLE template_image')
+    t.sqlite.exec(LEGACY_TI)
+    t.sqlite.exec(`INSERT INTO admin (email, created_at, created_by) VALUES ('${TEST_EMAIL}', 'x', 'seed')`)
+    t.sqlite.exec(`INSERT INTO image (id, token, name, mime, size, data, created_at, created_by) VALUES
+      (1, 'img0000000000001', 'bg', 'image/png', 1, 'AA==', 'x', 'a'),
+      (2, 'img0000000000002', 'banner', 'image/png', 1, 'AA==', 'x', 'a'),
+      (3, 'img0000000000003', 'photo', 'image/png', 1, 'AA==', 'x', 'a'),
+      (4, 'img0000000000004', 'new bg', 'image/png', 1, 'AA==', 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (1, 'Cũ', 'lotus', 1, 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template_image (template_id, slot, image_id) VALUES (1, 'background', 1), (1, 'banner', 2), (1, 'photo', 3)`)
+    return t
+  }
+  const slots = (t: ReturnType<typeof testDb>) =>
+    (t.sqlite.prepare('SELECT slot, image_id FROM template_image WHERE template_id = 1 ORDER BY slot').all() as { slot: string; image_id: number }[])
+
+  it('GET lists only the background image (legacy links filtered)', async () => {
+    const t = await legacy()
+    const list = (await (await handleTemplates(req('GET', '/api/admin/templates'), makeEnv(t.db), TEST_EMAIL)).json()) as { images: Record<string, unknown> }[]
+    expect(list[0].images).toEqual({ background: { id: 1, token: 'img0000000000001' } })
+  })
+
+  it('PUT with a new background → 200; response has no banner; legacy rows are left in place', async () => {
+    const t = await legacy()
+    const r = await handleTemplates(req('PUT', '/api/admin/templates/1', { name: 'Cũ', layout: 'doc-duoi', images: { background: 4, banner: null } }), makeEnv(t.db), TEST_EMAIL)
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { layout: string; images: Record<string, unknown> }
+    expect(body.layout).toBe('doc-duoi')
+    expect(body.images).toEqual({ background: { id: 4, token: 'img0000000000004' } })
+    expect(slots(t)).toEqual([
+      { slot: 'background', image_id: 4 },
+      { slot: 'banner', image_id: 2 },
+      { slot: 'photo', image_id: 3 },
+    ])
+  })
+})

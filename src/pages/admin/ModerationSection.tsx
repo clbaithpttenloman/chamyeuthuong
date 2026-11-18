@@ -303,8 +303,9 @@ function ModCard({
         />
       </div>
       <div className="mod-item-layout">
-        {/* Thumbnail: the student's card at small size. Moderators review the plain-text
-            message beside it (no student font, ink or shrink). */}
+        {/* Thumbnail: the student's card at small size, on plain paper (the template background
+            is not in AdminCard). Moderators review the plain-text message beside it (no
+            student font, ink or shrink). */}
         <div className="mod-card-thumb">
           <div className="card-mini">
             <CardView

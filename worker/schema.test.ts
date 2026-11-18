@@ -820,7 +820,7 @@ describe('student_card table constraints', () => {
 // ===================================================================
 // ===================================================================
 
-describe('template_image slot CHECK — only background/banner', () => {
+describe('template_image slot CHECK — background only on a fresh DB', () => {
   it('slot CHECK rejects photo (removed slot)', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
@@ -1232,6 +1232,8 @@ describe('ensureSchema — one-time image seed', () => {
     sqlite.exec(`INSERT INTO image (token, name, mime, size, data, created_at, created_by) VALUES ('${SEED_IMAGES[0].token}', 'giữ nguyên', 'image/png', 1, 'AA==', 'x', 'a@b.c')`)
     await ensureSchema(db)
     expect(sqlite.prepare('SELECT name, data FROM image WHERE token = ?').get(SEED_IMAGES[0].token)).toEqual({ name: 'giữ nguyên', data: 'AA==' })
+    expect(sqlite.prepare('SELECT i.token FROM template_image ti JOIN template t ON t.id = ti.template_id JOIN image i ON i.id = ti.image_id WHERE t.name = ?').get(SEED_IMAGES[0].name))
+      .toEqual({ token: SEED_IMAGES[0].token })
   })
 
   it('an admin template that happens to use a seed name is never linked', async () => {
@@ -1291,6 +1293,10 @@ describe('seed images — shipped files are safe', () => {
     }
     return out
   }
+  it('SEED_STATEMENT_COUNT matches the seed (image + template + link per image, plus the flag)', () => {
+    expect(SEED_STATEMENT_COUNT).toBe(SEED_IMAGES.length * 3 + 1)
+  })
+
   it('six images, one per layout, unique seed tokens', () => {
     expect(SEED_IMAGES.map((s) => s.layout)).toEqual(LAYOUTS.map((l) => l.id))
     expect(new Set(SEED_IMAGES.map((s) => s.token)).size).toBe(6)

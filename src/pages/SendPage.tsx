@@ -435,7 +435,7 @@ export default function SendPage() {
                       checked={state.font === f.id}
                       onChange={() => dispatch({ type: 'SET_FONT', font: f.id })}
                     />
-                    <span className="font-option-sample" style={{ fontFamily: f.stack }}>Kính gửi</span>
+                    <span className="font-option-sample" style={{ fontFamily: f.stack }} aria-hidden="true">Kính gửi</span>
                     <span className="font-option-label">{f.label}</span>
                   </label>
                 ))}

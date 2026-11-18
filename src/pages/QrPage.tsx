@@ -169,7 +169,7 @@ export default function QrPage() {
                     subject: teacher.subject,
                     message: card.message,
                     title: teacher.title as 'Thầy' | 'Cô' | null,
-              role: teacher.role,
+                    role: teacher.role,
                   }}
                   layout={card.layout}
                   images={card.images}

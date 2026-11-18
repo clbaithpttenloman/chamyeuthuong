@@ -9,7 +9,7 @@
  * - Text is written in the student's ink and font. Both go through resolveInk / resolveFont and
  *   React style objects, so only lowercase #rrggbb and a fixed font stack can reach CSS.
  * - Sizes are in container-query units (cqw), so a 150 px thumbnail looks exactly like the full
- *   card. After layout, the zone's font size shrinks step by step until the text fits.
+ *   card. After layout, fitText shrinks the zone's font size until the text fits (bounded).
  * - The line under the name comes from roleLabel(): "Giáo viên: <môn>", "Giáo viên", or the
  *   chức vụ alone for Hiệu trưởng / Phó hiệu trưởng.
  * - Image URLs are built only for tokens matching ^[a-z0-9]{16}$. Only the background slot is used.
@@ -18,6 +18,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { resolveLayout } from '../../shared/layouts.ts'
 import { resolveFont, resolveInk } from '../../shared/fonts.ts'
 import { roleLabel } from '../../shared/api.ts'
+import { fitText } from './fitText.ts'
 import site from '../content/site.json'
 
 type CardData = { name: string; subject: string; message: string; title?: 'Thầy' | 'Cô' | null; role?: string | null }
@@ -28,21 +29,6 @@ const TOKEN_RE = /^[a-z0-9]{16}$/
 function imageUrl(token: string | undefined): string | null {
   if (!token || !TOKEN_RE.test(token)) return null
   return `/api/image/${token}`
-}
-
-/** Starting zone font size in cqw (card-width units) per ratio; shrinks from here to fit. */
-const BASE_SIZE = { portrait: 5.6, landscape: 4.2 } as const
-const SHRINK = 0.92
-const MAX_STEPS = 12 // 0.92^12 ≈ 0.37 of the base; beyond that the text is clipped by the zone
-
-/** Shrink the zone's font size until its content fits (bounded steps; no layout thrash loops). */
-function fitText(zone: HTMLElement, base: number) {
-  let size = base
-  zone.style.fontSize = `${size}cqw`
-  for (let i = 0; i < MAX_STEPS && zone.scrollHeight > zone.clientHeight + 1; i++) {
-    size *= SHRINK
-    zone.style.fontSize = `${size.toFixed(2)}cqw`
-  }
 }
 
 export default function CardView({
@@ -80,11 +66,13 @@ export default function CardView({
   useLayoutEffect(() => {
     const zone = zoneRef.current
     if (!zone) return
-    const run = () => fitText(zone, BASE_SIZE[l.ratio])
-    run()
-    // Web fonts change text metrics once loaded; refit then (no-op if already loaded).
+    fitText(zone, l.ratio)
+    // A web font that is still loading changes the text metrics: fit once more when it arrives.
+    // Skipped when fonts are already loaded, so a page of 200 cards fits each card once.
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    if (!fonts || fonts.status === 'loaded') return
     let alive = true
-    document.fonts?.ready.then(() => { if (alive) run() })
+    fonts.ready.then(() => { if (alive) fitText(zone, l.ratio) })
     return () => { alive = false }
   }, [l.ratio, l.id, card.message, card.name, card.title, subLabel, from, fontStack])
 

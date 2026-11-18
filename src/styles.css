@@ -85,8 +85,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .admin-signin h1 { margin-top: 0; }
 .admin-signin-error { color: #991b1b; background: #fef2f2; border: 1px solid #fca5a5; padding: 0.75rem 1rem; border-radius: 0.4rem; font-size: 0.9rem; }
 
-/* ── CardView slots ──────────────────────────────────────────────────────── */
-
 /* ── Card face (card v3) ─────────────────────────────────────────────────────
    A physical card: fixed ratio from the layout, background image at 100%, wish written
    in the writing zone. Sizes are in cqw (card width) so thumbnails match the full card;
@@ -98,6 +96,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   width: 100%;
   margin: 0;
   border-radius: 10px;
+  white-space: normal; /* cards sit inside buttons (template gallery), which use nowrap */
   background: #fffaf0 center / cover no-repeat;
   box-shadow: 0 8px 24px rgb(136 19 55 / 0.18);
 }
@@ -107,7 +106,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   position: absolute;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: safe center; /* if text still overflows at the minimum size, clip the end, not the greeting */
   overflow: hidden;
   padding: 2.5cqw 3cqw;
   text-align: center;
@@ -222,31 +221,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   border-radius: 0.25rem;
   border: 1px solid #e7e5e4;
 }
-
-.slot-picker-library {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.5rem;
-  background: #fff;
-  border: 1px solid #e7e5e4;
-  border-radius: 0.4rem;
-  max-height: 10rem;
-  overflow-y: auto;
-}
-
-.slot-picker-empty { font-size: 0.82rem; color: #a8a29e; padding: 0.25rem; }
-
-.img-thumb-btn {
-  padding: 0;
-  border: 2px solid transparent;
-  background: none;
-  border-radius: 0.25rem;
-  cursor: pointer;
-}
-.img-thumb-btn:hover { border-color: var(--rose); }
-.img-thumb-btn--selected { border-color: var(--rose-dark); }
-.img-thumb-btn .slot-thumb { display: block; }
 
 /* ── Wish picker ─────────────────────────────────────────────────────────── */
 
@@ -459,7 +433,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .font-option, .ink-option { position: relative; display: flex; cursor: pointer; background: #fff; border: 2px solid #e7e5e4; border-radius: 0.5rem; font-size: 0.85rem; }
 .font-option { flex-direction: column; padding: 0.35rem 0.5rem; }
 .ink-option { align-items: center; gap: 0.4rem; padding: 0.3rem 0.75rem 0.3rem 0.4rem; border-radius: 99px; }
-.font-option--selected, .ink-option--selected { border-color: var(--rose-dark); }
+.font-option--selected, .ink-option--selected { border-color: var(--rose-dark); box-shadow: inset 0 0 0 1px var(--rose-dark); background: #fff1f2; }
+.font-option--selected .font-option-label::after, .ink-option--selected::after { content: ' ✓'; font-weight: 700; color: var(--rose-dark); }
 .font-option:focus-within, .ink-option:focus-within { outline: 2px solid var(--rose); outline-offset: 1px; }
 .font-option input[type=radio], .ink-option input[type=radio] { position: absolute; opacity: 0; pointer-events: none; }
 .font-option-sample { font-size: 1.2rem; line-height: 1.25; white-space: nowrap; }
@@ -493,8 +468,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .template-admin-tile--editing { border-color: var(--rose-dark); background: #fff1f2; }
 .template-admin-name { font-size: 0.82rem; font-weight: 700; color: var(--rose-dark); }
 .template-admin-usage { font-size: 0.75rem; color: #78716c; margin-bottom: 0.25rem; }
-.template-slot-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.4rem 0; border-bottom: 1px solid #f5f5f4; }
-.template-slot-label { font-size: 0.85rem; color: #57534e; }
 .template-active-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
 .template-active { background: #dcfce7; color: #166534; }
 .template-inactive { background: #f5f5f4; color: #57534e; }

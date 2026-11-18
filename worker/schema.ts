@@ -7,8 +7,6 @@ import { aboutSeedSql } from './aboutSeed.ts'
 // step in UPGRADES below, or databases created by an older deploy keep the old shape.
 // SHORTCUT: probe-and-rebuild upgrades — move to a schema_version table or
 //   wrangler d1 migrations once there are more than a few of them.
-// Chức vụ column; the same definition is used by CREATE and by the ADD COLUMN upgrade.
-// Labels must match ROLES in shared/api.ts (tested).
 // Card v3 columns on student_card (also used by the ADD COLUMN upgrades). Font ids are checked
 // in the app (shared/fonts.ts) so the list can change without a table rebuild; only the length
 // is bounded here. Ink is always stored as lowercase #rrggbb.
@@ -16,6 +14,8 @@ const FONT_COLUMN = "TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <=
 const INK_COLUMN =
   "TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')"
 
+// Chức vụ column; the same definition is used by CREATE and by the ADD COLUMN upgrade.
+// Labels must match ROLES in shared/api.ts (tested).
 const ROLE_COLUMN =
   "TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))"
 
@@ -244,7 +244,7 @@ const _ready = new WeakMap<D1, Promise<void>>()
  * The seed is best-effort and never rejects.
  * Concurrent callers share the same promise. On rejection the cache entry is evicted
  * (only if the map still holds that exact promise) so the next request retries.
- * Never logs.
+ * Logs only fixed strings: `schema: upgrade failed`, `schema: seed images failed`.
  */
 export function ensureSchema(db: D1): Promise<void> {
   const cached = _ready.get(db)
