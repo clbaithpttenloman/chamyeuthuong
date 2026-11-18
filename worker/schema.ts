@@ -128,7 +128,13 @@ export const UPGRADE_SQL: string[] = [PROFILE_COLUMNS_SQL, ...UPGRADES.flatMap((
 
 async function runUpgrades(db: D1): Promise<void> {
   for (const u of UPGRADES) {
-    if (await u.needed(db)) await db.batch(u.sql.map((q) => db.prepare(q)))
+    if (await u.needed(db)) {
+      // Fixed string only: tells an operator this 503 is a failed upgrade, not a D1 outage.
+      await db.batch(u.sql.map((q) => db.prepare(q))).catch((e: unknown) => {
+        console.error('schema: upgrade failed')
+        throw e
+      })
+    }
   }
 }
 

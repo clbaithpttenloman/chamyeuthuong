@@ -563,8 +563,8 @@ Tables are created automatically on the first request via idempotent `CREATE TAB
 
 **If you have an old local D1 database** (from before this privacy model plan):
 - Old schema may have `teacher_profile.public_id` and `template_image.slot='photo'`
-- `ensureSchema` only runs `CREATE TABLE IF NOT EXISTS`, so it never alters existing tables. The old NOT NULL `teacher_profile.public_id` column stays, and creating a teacher then fails. The production D1 was created with the new schema, so this only affects local state.
-- To get a fresh schema:
+- `ensureSchema` upgrades `teacher_profile` in place (see Schema upgrades below), so an old local database keeps working.
+- To start from an empty database anyway:
 
 ```bash
 # Remove local D1 state
@@ -574,7 +574,32 @@ rm -rf .wrangler/state
 npm run worker:dev
 ```
 
-The next request will re-initialize with the new schema (no `public_id`, slots are `background` and `banner` only).
+The next request creates all tables from scratch.
+
+### Schema upgrades (automatic)
+
+`ensureSchema` creates missing tables and then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Each step checks the live table shape and only rebuilds a table if it is old. The rebuild runs as one D1 transaction: if it fails, nothing changes, the request returns 503, the log shows `schema: upgrade failed`, and the next request retries.
+
+Current step: a database created by commit 4d3a5df (the first production deploy) has `teacher_profile.public_id TEXT UNIQUE NOT NULL`. Newer code no longer writes that column, so adding teachers failed with 503. On the first request after deploy, the Worker copies `teacher_id`, `department` and `show_on_home` into a new `teacher_profile` without `public_id`. Not changed: `template_image` keeps its old CHECK that also allows `photo` (the code ignores and rejects that slot), and old tables `card`, `card_style`, `card_image` are left alone if they exist.
+
+**Before deploying a release that contains an upgrade step:**
+
+```bash
+# 1. Note the restore point (Time Travel: 7 days on Free, 30 days on Paid)
+npx wrangler d1 time-travel info cham-yeu-thuong
+
+# 2. Check for orphan profile rows (should be 0; non-zero would make the copy fail)
+npx wrangler d1 execute cham-yeu-thuong --remote --command "SELECT count(*) AS n FROM teacher_profile WHERE teacher_id NOT IN (SELECT id FROM teacher)"
+```
+
+After deploy, open `/admin` and add a teacher to confirm.
+
+**Rollback:** roll forward with a fix. Redeploying 4d3a5df after the upgrade breaks, because that code still reads `public_id`. If you must go back, restore the database together with the old code (destructive, overwrites all data written since):
+
+```bash
+npx wrangler d1 time-travel restore cham-yeu-thuong --bookmark=<bookmark from step 1>
+```
+
 
 ### Curl Tests
 

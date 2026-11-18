@@ -914,14 +914,14 @@ Visit `http://localhost:5173` for the frontend, and `/admin` to sign in.
 
 Tables are created automatically on the first request.
 
-**Local D1 state from before this plan:** if you have an old D1 database (before privacy model), it may have `teacher_profile.public_id` and `template_image.slot='photo'`. `ensureSchema` only runs `CREATE TABLE IF NOT EXISTS`, so it never alters existing tables; the old NOT NULL `public_id` column stays and creating a teacher fails. To get a fresh schema (recommended):
+**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Today that drops `teacher_profile.public_id` from databases created by 4d3a5df, including production. Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
 
 ```bash
 rm -rf .wrangler/state
 # Restart npm run worker:dev
 ```
 
-The next request will re-initialize all tables with the new schema.
+The next request creates all tables from scratch.
 
 ### Testing
 
