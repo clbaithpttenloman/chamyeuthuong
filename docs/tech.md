@@ -57,97 +57,111 @@ Verified 2026-11-17 for the student cards platform.
 - **Testing**: guard in tests: if `caches` is unavailable, skip the cache write; verify with a stub-cache test that a hit skips the DB query.
 - **Deletion**: when an image is deleted from D1, the cached copy remains (up to 1 year). To immediately replace a published image in cards, upload a new one and switch the card reference (documented in admin runbook).
 
-## Student Cards Platform — Schema & APIs (2026-11-17)
+## Student Cards Platform — Schema & APIs (2026-11-18)
 
 ### New Tables (Idempotent CREATE TABLE IF NOT EXISTS via ensureSchema)
 
 ```sql
 teacher_profile(
-  teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
-  public_id TEXT UNIQUE NOT NULL,
-  department TEXT NOT NULL DEFAULT '',
+  teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  department   TEXT NOT NULL DEFAULT '',
   show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
 )
--- Used in public URLs; private teacher.token never exposed
 
 template(
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  layout TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  layout     TEXT NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at TEXT NOT NULL,
   created_by TEXT NOT NULL
 )
--- Layouts: lotus, spring, night, classic, minimal (checked in isLayout())
 
 template_image(
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
-  slot TEXT NOT NULL CHECK (slot IN ('background','banner','photo')),
-  image_id INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+  slot        TEXT NOT NULL CHECK (slot IN ('background','banner')),
+  image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
   PRIMARY KEY (template_id, slot)
 )
--- Prevents template deletion if cards use it (RESTRICT)
 
 student_card(
-  id INTEGER PRIMARY KEY,
-  public_id TEXT UNIQUE NOT NULL,
-  teacher_id INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+  id          INTEGER PRIMARY KEY,
+  public_id   TEXT UNIQUE NOT NULL,
+  teacher_id  INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE RESTRICT,
-  message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
-  from_name TEXT NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
-  from_class TEXT NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
-  anonymous INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
-  created_at TEXT NOT NULL,
+  message     TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+  from_name   TEXT NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
+  from_class  TEXT NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
+  anonymous   INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
+  created_at  TEXT NOT NULL,
   reviewed_at TEXT,
   reviewed_by TEXT
 )
--- Indexes: (teacher_id, status) for QR random-card query; (status, created_at) for moderation list
+
+site_content(
+  key        TEXT PRIMARY KEY CHECK (key IN ('about')),
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+)
 ```
 
 ### Unchanged Tables
 
-- `teacher(id, token UNIQUE, name, subject, created_at)` — private QR token
+- `teacher(id, token UNIQUE, name, subject, created_at)` — `token` is the private QR identifier (16 chars)
 - `teacher_title(teacher_id PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE, title CHECK IN ('Thầy','Cô'))`
 - `image(id, token UNIQUE, name, mime, size, data, created_at, created_by)` — base64 TEXT (no R2)
 - `wish(id, title, body, created_at, created_by)` — 12 example seeds
 - `admin(id, email UNIQUE, created_at, created_by)` — normalized email (trim, lowercase)
 - `meta(key PRIMARY KEY, value)` — schema seeding marker
 
-### Removed from Code
+### Changes from Prior Versions
 
-- Old tables `card`, `card_style`, `card_image` removed from `SCHEMA` constant
-- Old endpoint `/api/card/:token` → 404 (replaced by `/api/qr/:token`)
-- React routes `/mockup/*` and component `src/mockup/` deleted
-- `CardPage` component deleted
-- `BulkCreate` component deleted
-
-### Public API SQL Fragments
-
-**Constants** in `worker/publicSql.ts`:
-
-- `PUBLIC_CARD_WHERE = "sc.status = 'approved'"` — every public read filters on this
-- `PUBLIC_TEACHER_WHERE = "tp.show_on_home = 1"` — wall and latest only show active teachers
-- Used by `/api/wall`, `/api/teachers/:publicId`, `/api/qr/:token`
+- **Removed:** `teacher_profile.public_id` (teachers identified only by numeric `id` internally, `token` for private QR)
+- **Removed:** `/api/teachers/:publicId` endpoint (404)
+- **Removed:** `/thay-co/:publicId` React route (no public teacher pages)
+- **Removed:** `template_image.slot='photo'` (slots: `background`, `banner` only)
+- **Removed:** `latest` array from `/api/wall` (privacy model)
+- **Added:** `/api/qr/:token` endpoint (private teacher card page)
+- **Added:** `/api/about` (public) and `/api/admin/about` (admin editor)
+- **Added:** `POST /api/cards` accepts exactly one of `teacherId` or `teacherToken`
+- **Added:** `site_content` table for About page (seeded once via INSERT OR IGNORE)
 
 ### Atomic Operations
 
-#### Submit Card (Plan § Amendment: Pending Caps)
+#### Submit Card (Plan § Amendment: teacherId or teacherToken)
 
+Two paths; exactly one required:
+
+**Path A: Public teacherId (show_on_home = 1 only):**
 ```sql
 INSERT INTO student_card (public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at)
-SELECT ?, tp.teacher_id, ?, ?, ?, ?, ?, 'pending', ?
-FROM teacher_profile tp
-WHERE tp.public_id = ?
+SELECT ?, t.id, ?, ?, ?, ?, ?, 'pending', ?
+FROM teacher t
+JOIN teacher_profile tp ON tp.teacher_id = t.id
+WHERE t.id = ? AND tp.show_on_home = 1
   AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1)
   AND (SELECT COUNT(*) FROM student_card WHERE status = 'pending') < 2000
-  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = tp.teacher_id AND sc2.status = 'pending') < 200
+  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = t.id AND sc2.status = 'pending') < 200
 ```
 
-- **Atomicity:** all checks (teacher exists, template active, global cap, per-teacher cap) in one INSERT…SELECT
+**Path B: Private teacherToken (any teacher):**
+```sql
+INSERT INTO student_card (public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at)
+SELECT ?, t.id, ?, ?, ?, ?, ?, 'pending', ?
+FROM teacher t
+WHERE t.token = ?
+  AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1)
+  AND (SELECT COUNT(*) FROM student_card WHERE status = 'pending') < 2000
+  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = t.id AND sc2.status = 'pending') < 200
+```
+
+- **Atomicity:** all checks in one INSERT…SELECT
 - **Disambiguation on changes=0:** one follow-up read to distinguish teacher not found (404) from inactive/missing template (400) from caps exceeded (409)
-- **Per-teacher cap:** 200 pending cards per teacher (prevents one teacher's spam filling the queue)
-- **Global cap:** 2000 pending cards (system-wide limit; must delete to free space)
+- **Per-teacher cap:** 200 pending cards per teacher
+- **Global cap:** 2000 pending cards (must delete to free space)
+- **Request validation:** both or neither → 400 before DB
 
 #### Bulk Review (Plan § Amendment: D1 100-Parameter Limit)
 
@@ -196,7 +210,7 @@ INSERT INTO template_image VALUES ((SELECT MAX(id) FROM template), 'banner', ?);
 
 **Configured** in `wrangler.jsonc` under `ratelimits`:
 
-- `PUBLIC_IP_LIMIT` (namespace 2004): 120/60 s — `/api/wall`, `/api/teachers/*`, `/api/templates`, `/api/wishes`
+- `PUBLIC_IP_LIMIT` (namespace 2004): 120/60 s — `/api/wall`, `/api/templates`, `/api/wishes`, `/api/about`
 - `SUBMIT_IP_LIMIT` (namespace 2005): 20/60 s — `POST /api/cards` (tight on 20/11; raise if needed)
 - `CARD_IP_LIMIT` (namespace 2001): 60/60 s — `GET /api/qr/:token` (QR scanners)
 - `IMAGE_IP_LIMIT` (namespace 2003): 300/60 s — `GET /api/image/:token` (fast card loads)

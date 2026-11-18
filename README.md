@@ -4,7 +4,7 @@
 **Built by:** CLB AI — THPT Ten Lơ Man  
 **Date:** 20/11/2026
 
-A platform where students send personalized cards to teachers. Admins create card **templates** (layout + images); students pick a template, choose a teacher, and write a wish. Every card is pending until approved. Teachers get a QR code that opens a random approved card.
+A platform where students send personalized cards to teachers. Admins create card **templates** (layout + images); students pick a template, choose a teacher, and write a wish. Every card is pending until approved. Teachers access their cards via a private QR code.
 
 **Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
 
@@ -12,14 +12,13 @@ A platform where students send personalized cards to teachers. Admins create car
 
 | Route | Purpose |
 |---|---|
-| `/` | Home — wall showing latest approved cards (one per teacher, 6 total), teacher count, card count |
-| `/thay-co/:publicId` | Teacher page — all approved cards for one teacher, newest first, capped at 200 |
-| `/gui-thiep` | Student send flow — pick teacher → pick template → write wish → submit (4 steps) |
-| `/t/:token` | QR page — teacher's private QR token opens a random approved card, "View all", empty state |
-| `/ve-clb-ai` | About — club info and project timeline |
-| `/admin` | Admin dashboard — templates, moderation, teachers, wishes, images, admins (email verified, risk R1) |
+| `/` | Home — teacher wall showing approved card count per teacher, teacher count, total cards |
+| `/gui-thiep` | Send flow — pick teacher → pick template → write message → submit (4 steps). From query `?thay=<id>` or `?t=<token>` |
+| `/t/:token` | QR page — teacher's private QR token; shows a random approved card + "View all" + empty state. One link per teacher, distributed privately |
+| `/ve-clb-ai` | About — club timeline, members, stats from database |
+| `/admin` | Admin dashboard — moderation, templates, teachers, wishes, images, admins (email typed, risk R1) |
 
-All text is in `/src/content/site.json` (home, about, admin sections).
+Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About content (timeline, members) is stored in D1 and edited via `/admin`.
 
 ---
 
@@ -27,16 +26,16 @@ All text is in `/src/content/site.json` (home, about, admin sections).
 
 ### Student Journey
 
-1. **Visit home** (`/`) — see the teacher wall (latest approved cards, all teachers with `show_on_home = 1`)
-2. **Click "Gửi thiệp"** → send flow at `/gui-thiep?thay=<publicId>` or start from scratch
-3. **Pick a teacher** — from the dropdown (only `show_on_home = 1` teachers)
-4. **Pick a template** — from active templates (layout + image set)
+1. **Visit home** (`/`) — see the teacher wall with card counts per teacher
+2. **Click a teacher tile** or visit `/gui-thiep?thay=<id>` → send flow
+3. **Alternatively:** if a teacher shared their private QR link, scan it or visit `/t/<token>`, which also has "Gửi thiệp" button linking to `/gui-thiep?t=<token>`
+4. **Pick a template** — from active templates (layout + images)
 5. **Write a message** — 1–300 characters, max 5 newlines, trimmed, no control characters
-6. **Optional: name and class** — `anonymous` is on by default; turn it off to show `"Name · Class"` or `"Name"` on the card
+6. **Optional: name and class** — `anonymous` is on by default; turn it off to show `"Name · Class"` or `"Name"`
 7. **Submit** → `POST /api/cards` sends the card as **pending**
-8. Confirmation: "Đã gửi thành công!"
+8. Confirmation: "Đã gửi thành công!" (redirects to home)
 9. **Card is hidden** until an admin approves it
-10. **Approved**: appears on the wall and teacher's page; visible via QR
+10. **Approved**: appears on that teacher's QR page; visible to anyone with the QR link
 
 ### Admin Workflow (Setup Order)
 
@@ -44,10 +43,11 @@ All text is in `/src/content/site.json` (home, about, admin sections).
 2. **Claim admin** — go to `/admin`, type the bootstrap email (or set `ALLOW_FIRST_CLAIM=1`)
 3. **Add teachers** — bulk paste list `Thầy|Cô Tên | Môn | Tổ` (1–100) or add one at a time
 4. **Upload images** — JPG/PNG/WebP, max 1280 px, ≤ 300 KB (browser compresses, strips EXIF)
-5. **Create templates** — pick layout, assign images to slots (background, banner, photo), set active
-6. **Print QR codes** — from the Thầy cô section; `Rotate` gives a new token (old QR becomes invalid)
-7. **Share the site link** (`/`) — students send cards
-8. **Moderate on 20/11** — approve or hide pending cards in "Duyệt thiệp"; bulk approve up to 200 at once
+5. **Create templates** — pick layout, assign images to slots (`background`, `banner`), set active
+6. **Print QR codes** — from the Thầy cô section; each QR is a private link to that teacher's card page. `Rotate` gives a new token (old QR becomes invalid)
+7. **Distribute QR privately** — email, print, or hand to each teacher. Students access the public home page (`/`), or use the private QR to see that teacher's cards
+8. **Share the site link** (`/`) — students send cards
+9. **Moderate on 20/11** — approve or hide pending cards in "Duyệt thiệp"
 
 ### Admin Moderation
 
@@ -74,7 +74,7 @@ All text is in `/src/content/site.json` (home, about, admin sections).
 
 ### **Mẫu thiệp** (Templates)
 
-- **Create**: name (≤ 60 chars), pick layout (5 presets), assign images to slots (background, banner, photo), active flag
+- **Create**: name (≤ 60 chars), pick layout (5 presets), assign images to slots (`background`, `banner`), active flag
 - **List**: grid of active templates only; click to edit
 - **Edit**: update name, layout, images, toggle active
 - **Delete**: 409 if any card uses it; deactivate instead to hide from students while keeping existing cards rendering
@@ -90,7 +90,6 @@ All text is in `/src/content/site.json` (home, about, admin sections).
 **Image Slots**:
 - `background` — full-card cover; text sits on translucent panel
 - `banner` — wide image at the top
-- `photo` — round photo above teacher name
 
 ### **Thầy cô** (Teachers)
 
@@ -98,9 +97,10 @@ All text is in `/src/content/site.json` (home, about, admin sections).
 - **Create**: title (Thầy/Cô, required), name, subject, department, `show_on_home` toggle
 - **Bulk add**: paste list `Thầy|Cô Tên | Môn | Tổ` (1–100 rows, all-or-nothing); all created with `show_on_home = 1`
 - **Edit**: name, subject, department, toggle `show_on_home`
-- **Rotate QR**: generates new `token` (old QR invalid; public page URL stays the same because it uses `public_id`)
+- **QR code**: each teacher has a unique 16-char random token that encodes their private card page (`/t/<token>`). Download and distribute privately (printed/emailed). QR link stays in browser history and Cloudflare logs — open on trusted devices only.
+- **Rotate QR**: generates new token (old QR invalid; teacher's card page URL changes but that's why it's private)
 - **Delete**: removes teacher and all their cards (cascade)
-- **Show on home**: toggle to hide/show on the wall and latest cards
+- **Show on home**: toggle to hide/show on the wall
 
 ### **Thư viện lời chúc** (Wish Library)
 
@@ -141,36 +141,20 @@ All JSON endpoints; rate limit first, before DB.
 ### GET /api/wall
 Rate limit: **120/60 s per IP**
 
-Returns: `{ teachers: [...], latest: [...], totals: {...} }`
+Returns: `{ teachers: [...], totals: {...} }`
+
+Teachers with `show_on_home = 1` only; no card content. Response shows teacher profile and approved card count.
 
 ```json
 {
   "teachers": [
     {
-      "publicId": "j801z7t0npju2m8g",
+      "id": 1,
       "title": "Thầy",
       "name": "Nguyễn Văn Khoa",
       "subject": "Toán",
       "department": "Tổ Toán - Tin",
       "cardCount": 5
-    }
-  ],
-  "latest": [
-    {
-      "publicId": "gzz8y7pvsmkrc6mc",
-      "layout": "lotus",
-      "images": {
-        "background": "uuy01p4h10is8946",
-        "banner": "aaz02p5i11jt9j57"
-      },
-      "message": "Em cảm ơn thầy...",
-      "from": "Minh Anh · 11A1",
-      "createdAt": "2026-11-17T15:15:25Z",
-      "teacher": {
-        "publicId": "j801z7t0npju2m8g",
-        "title": "Thầy",
-        "name": "Nguyễn Văn Khoa"
-      }
     }
   ],
   "totals": {
@@ -180,19 +164,19 @@ Returns: `{ teachers: [...], latest: [...], totals: {...} }`
 }
 ```
 
-- Only `show_on_home = 1` teachers and `status = 'approved'` cards
-- `latest`: ≤ 6 items, one per teacher (newest approved), newest first
-- `from` is built server-side: `anonymous || !name → "Một bạn học sinh"` + ` · class` if present, else `"name"` + ` · class` if present
+- Only `show_on_home = 1` teachers and their approved card counts
+- `id` is numeric; used to construct `/gui-thiep?thay=<id>` send links
+- No card content, no "latest" cards strip
 
-### GET /api/teachers/:publicId
-Rate limit: **120/60 s per IP**
+### GET /api/qr/:token
+Rate limit: **60/60 s per IP** (blunts QR scanners)
 
-Returns: `{ teacher: {...}, cards: [...], total: ... }`
+Private teacher QR token → approved cards + teacher profile
 
 ```json
 {
   "teacher": {
-    "publicId": "j801z7t0npju2m8g",
+    "id": 1,
     "title": "Thầy",
     "name": "Nguyễn Văn Khoa",
     "subject": "Toán",
@@ -206,7 +190,7 @@ Returns: `{ teacher: {...}, cards: [...], total: ... }`
         "background": "uuy01p4h10is8946",
         "banner": "aaz02p5i11jt9j57"
       },
-      "message": "Em cảm ơn thầy dạy em yêu môn Toán.",
+      "message": "Em cảm ơn thầy...",
       "from": "Minh Anh · 11A1",
       "createdAt": "2026-11-17T15:15:25Z"
     }
@@ -216,8 +200,10 @@ Returns: `{ teacher: {...}, cards: [...], total: ... }`
 ```
 
 - Only `status = 'approved'` cards, newest first, max 200
-- Unknown/malformed `publicId` → 404
-- Teachers with `show_on_home = 0` are reachable (needed after sending a card) but not listed on the wall
+- `total`: count of all approved cards (may exceed 200)
+- Unknown/malformed token → 404
+- Private token never appears in any response
+- Response header `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`
 
 ### GET /api/templates
 Rate limit: **120/60 s per IP**
@@ -258,35 +244,40 @@ Returns: array of all wishes
 
 - Never includes `created_by` (admin only)
 
-### GET /api/qr/:token
-Rate limit: **60/60 s per IP** (blunts QR scanners)
+### GET /api/about
+Rate limit: **120/60 s per IP**
 
-Private teacher QR token → random approved card + teacher info
+Returns: About content from D1 (timeline, members, stats), or seed content if database is empty/corrupted.
 
 ```json
 {
-  "teacher": {
-    "publicId": "j801z7t0npju2m8g",
-    "title": "Thầy",
-    "name": "Nguyễn Văn Khoa",
-    "subject": "Toán",
-    "department": "Tổ Toán - Tin"
-  },
-  "card": {
-    "publicId": "gzz8y7pvsmkrc6mc",
-    "layout": "lotus",
-    "images": { "background": "...", "banner": "..." },
-    "message": "Em cảm ơn thầy...",
-    "from": "Một bạn học sinh · 11A1",
-    "createdAt": "2026-11-17T15:15:25Z"
-  },
-  "total": 5
+  "heading": "CLB AI - THPT Ten Lơ Man",
+  "intro": "Em chúc bạn...",
+  "stats": [
+    { "value": "2", "label": "ngày phát triển" },
+    { "value": "5", "label": "mẫu giao diện" }
+  ],
+  "stepsHeading": "Quá trình thực hiện",
+  "steps": [
+    {
+      "when": "16/11/2026",
+      "title": "Khởi tạo dự án",
+      "text": "..."
+    }
+  ],
+  "membersHeading": "Thành viên",
+  "members": [
+    { "name": "Vũ Ngọc Diệp", "role": "Chủ nhiệm CLB" },
+    { "name": "Kiro Coding Agent", "role": "Thiết kế & phát triển" }
+  ]
 }
 ```
 
-- `card: null` and `total: 0` if no approved cards for this teacher
-- Unknown/malformed token → 404 (isToken check before DB)
-- Private `token` never appears in any public response
+- Editable in admin dashboard (`/admin` → "Giới thiệu CLB")
+- Public: always shows current stored content (or seed if corrupted)
+
+### GET /api/templates
+See above.
 
 ### GET /api/image/:token
 Rate limit: **300/60 s per IP**
@@ -302,7 +293,6 @@ Raw image bytes (JPEG/PNG/WebP)
 - `X-Robots-Tag: noindex`
 
 - Cached at Cloudflare edge (immutable, 1-year TTL)
-- Deleting an image does not purge caches (up to 1 year stale)
 - Unknown/malformed token → 404
 
 ### POST /api/cards
@@ -311,11 +301,23 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
 **Request:**
 ```json
 {
-  "teacherPublicId": "j801z7t0npju2m8g",
+  "teacherId": 1,
   "templateId": 1,
-  "message": "Em cảm ơn thầy đã dạy em.",
+  "message": "Em cảm ơn thầy dạy em.",
   "fromName": "Minh Anh",
   "fromClass": "11A1",
+  "anonymous": false
+}
+```
+
+**Or with private QR token (for `/gui-thiep?t=<token>` flow):**
+```json
+{
+  "teacherToken": "abc1234567890xyz",
+  "templateId": 1,
+  "message": "...",
+  "fromName": "...",
+  "fromClass": "...",
   "anonymous": false
 }
 ```
@@ -330,13 +332,16 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
 - Status code: **201** on success; **never returns the card**
 - `Content-Type` must be `application/json` (optional `; charset=utf-8`), else **400**
 - Body ≤ 2 KB
+- Exactly one of `teacherId` or `teacherToken` must be present; providing both or neither → **400**
+- `teacherId`: positive integer (only teachers with `show_on_home = 1`)
+- `teacherToken`: 16-char random token (any teacher, used by private QR links)
+- Unknown teacher → **404**
 - `message`: 1–300 code points, max 5 newlines, required
 - `fromName`: ≤ 40 code points, optional; if `anonymous = true` stored as empty
 - `fromClass`: ≤ 10 code points, optional
 - `anonymous`: boolean, optional, defaults false
 - Strings: NFC-normalized, trimmed
 - Rejected: control characters (except `\n` in message), zero-width characters, format characters, lone surrogates
-- Unknown `teacherPublicId` → **404**
 - Inactive/unknown template → **400**
 - Global pending cap (2000) or per-teacher cap (200) hit → **409** `"đang có quá nhiều thiệp chờ duyệt"`
 - Rate limit exceeded → **429**
@@ -348,7 +353,7 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
 
 All endpoints behind `requireAdmin` (typed email sent as `X-Admin-Email` header, checked against D1).
 
-Rate limit: **60/60 s per IP** (ADMIN_FAIL_LIMIT; doubled from 30/60 s to allow upload sessions).
+Rate limit: **60/60 s per IP** (doubled from 30/60 to allow upload sessions).
 
 All admin endpoints require `X-Requested-With: fetch` header (CSRF defense).
 
@@ -362,7 +367,6 @@ List all teachers with card counts.
   {
     "id": 1,
     "token": "xus7sivp0zztkyv7",
-    "publicId": "j801z7t0npju2m8g",
     "title": "Thầy",
     "name": "Nguyễn Văn Khoa",
     "subject": "Toán",
@@ -377,6 +381,9 @@ List all teachers with card counts.
   }
 ]
 ```
+
+- `token`: 16-char unique per teacher; never exposed to students
+- `id`: numeric identifier; internal use only
 
 #### POST /api/admin/teachers
 Create one teacher.
@@ -424,7 +431,8 @@ Generate new QR token.
 }
 ```
 
-- Old QR invalid; public page link (via `public_id`) stays the same
+- Old QR (with old token) becomes invalid immediately
+- New token creates a new private card page URL `/t/<new-token>`
 
 #### POST /api/admin/teachers/bulk
 Create 1–100 teachers atomically.
@@ -435,18 +443,13 @@ Create 1–100 teachers atomically.
   "items": [
     { "title": "Thầy", "name": "Nguyễn Văn A", "subject": "Toán", "department": "Tổ Toán - Tin" },
     { "title": "Cô", "name": "Trần Thị B", "subject": "Văn" }
-  ],
-  "layout": "lotus",
-  "images": { "background": 1, "banner": 2 },
-  "showOnHome": 1
+  ]
 }
 ```
 
 - 1–100 items, body ≤ 64 KB
 - `title` (Thầy/Cô): **required** per item
-- `layout` (optional): applied to first card of each teacher
-- `images` (optional): slot → image ID mapping
-- `showOnHome` (optional): defaults to 1 for all
+- All created with `showOnHome = 1`
 - All-or-nothing: any error → nothing inserted
 
 ### Templates
@@ -482,8 +485,7 @@ Create template.
   "active": 1,
   "images": {
     "background": 1,
-    "banner": 2,
-    "photo": null
+    "banner": 2
   }
 }
 ```
@@ -491,7 +493,7 @@ Create template.
 - `name`: ≤ 60 chars, required
 - `layout`: one of lotus, spring, night, classic, minimal; required
 - `active`: 0 or 1, defaults to 1
-- `images`: object mapping slot → image ID (1–200) or null (empty slot)
+- `images`: object mapping slot → image ID (1–200) or null (empty slot). Valid slots: `background`, `banner`
 - Returns created template with full image metadata
 
 #### PUT /api/admin/templates/:id
@@ -527,7 +529,6 @@ List cards with raw student fields.
     "reviewedBy": null,
     "teacher": {
       "id": 1,
-      "publicId": "j801z7t0npju2m8g",
       "name": "Nguyễn Văn Khoa",
       "title": "Thầy"
     },
@@ -675,6 +676,51 @@ Delete wish.
 
 - Always allowed (even if used by cards; they keep stored copy)
 
+### About
+
+#### GET /api/admin/about
+Returns current About content (from D1, or seed if empty/corrupted).
+
+```json
+{
+  "heading": "CLB AI - THPT Ten Lơ Man",
+  "intro": "Em chúc bạn...",
+  "stats": [
+    { "value": "2", "label": "ngày phát triển" }
+  ],
+  "stepsHeading": "Quá trình thực hiện",
+  "steps": [
+    { "when": "16/11/2026", "title": "Khởi tạo", "text": "..." }
+  ],
+  "membersHeading": "Thành viên",
+  "members": [
+    { "name": "Vũ Ngọc Diệp", "role": "Chủ nhiệm CLB" }
+  ]
+}
+```
+
+#### PUT /api/admin/about
+Replace entire About content.
+
+**Request:** full content object (same shape as GET response)
+
+**Validation:**
+- `heading`: 1–80 chars, required
+- `intro`: 1–600 chars, required, max 10 newlines
+- `stats`: 0–6 items; each has `value` (1–12 chars) and `label` (1–40 chars)
+- `stepsHeading`: 1–80 chars, required
+- `steps`: 0–20 items; each has `when` (1–20 chars), `title` (1–80 chars), `text` (0–400 chars, max 10 newlines)
+- `membersHeading`: 1–80 chars, required
+- `members`: 0–40 items; each has `name` (1–60 chars) and `role` (1–60 chars)
+- Body ≤ 16 KB
+- All strings: NFC-normalized, trimmed, no control characters (except `\n` in `intro` and `steps[].text`)
+- Unknown keys → **400**
+- Invalid values → **400**
+
+Returns the stored content (or seed if new).
+
+Sets `updated_at` and `updated_by` (admin email) on update.
+
 ### Admins
 
 #### GET /api/admin/admins
@@ -745,23 +791,27 @@ All errors: `{ error: "<code>" }`
 | Image name | 80 ASCII chars | no control characters |
 | Image file | 300 KB | bytes read |
 | Image dimensions | 4096 × 4096 px max | ≤ 8 MP total |
-| Bulk add teachers | 100 items | body ≤ 64 KB |
-| Bulk review cards | 200 IDs | single status change |
+| About heading / stepsHeading / membersHeading | 80 chars | required |
+| About intro | 600 chars | required, max 10 newlines |
+| About stats | 6 items max | each value 1–12 chars, label 1–40 chars |
+| About steps | 20 items max | each when 1–20 chars, title 1–80 chars, text 0–400 chars (max 10 newlines) |
+| About members | 40 items max | each name 1–60 chars, role 1–60 chars |
+| About body | 16 KB | JSON payload |
 | Pending cards list | 200 per page | cursor pagination |
-| Teacher page cards | 200 | no pagination |
+| Teacher page cards | 200 | max returned from /api/qr/:token |
 | Wishes count | 200 | per instance |
 | Images count | 200 | per instance |
 | Images total | 40 MB raw | base64 storage ~1.33× size |
 
 ### Rate Limits (Per IP, Per Minute)
 
-| Endpoint | Limit | Namespace | Purpose |
-|---|---|---|---|
-| Public reads (wall, teachers, templates, wishes) | 120 | 2004 | generous for school NAT |
-| POST /api/cards | 20 | 2005 | tight; raise for 20/11 |
-| GET /api/qr/:token | 60 | 2001 | blunts QR scanners |
-| GET /api/image/:token | 300 | 2003 | fast card loads |
-| All /api/admin/* | 60 | 2002 | upload sessions + R1 brake |
+| Endpoint | Limit | Purpose |
+|---|---|---|
+| Public reads (wall, templates, wishes, about) | 120 | generous for school NAT |
+| POST /api/cards | 20 | tight; raise for 20/11 |
+| GET /api/qr/:token | 60 | blunts QR scanners |
+| GET /api/image/:token | 300 | fast card loads |
+| All /api/admin/* | 60 | upload sessions + R1 brake |
 
 **School NAT consideration:** all students on school Wi-Fi share one IP. 20 card submissions per minute may be tight on 20/11 (about 1 submission per 3 seconds for the whole school). Raise in `wrangler.jsonc` if needed (documented in admin runbook).
 
@@ -773,48 +823,54 @@ All errors: `{ error: "<code>" }`
 
 ```sql
 teacher_profile(
-  teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
-  public_id TEXT UNIQUE NOT NULL,
-  department TEXT NOT NULL DEFAULT '',
+  teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  department   TEXT NOT NULL DEFAULT '',
   show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
 )
 
 template(
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  layout TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  layout     TEXT NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at TEXT NOT NULL,
   created_by TEXT NOT NULL
 )
 
 template_image(
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
-  slot TEXT NOT NULL CHECK (slot IN ('background','banner','photo')),
-  image_id INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+  slot        TEXT NOT NULL CHECK (slot IN ('background','banner')),
+  image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
   PRIMARY KEY (template_id, slot)
 )
 
 student_card(
-  id INTEGER PRIMARY KEY,
-  public_id TEXT UNIQUE NOT NULL,
-  teacher_id INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+  id          INTEGER PRIMARY KEY,
+  public_id   TEXT UNIQUE NOT NULL,
+  teacher_id  INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE RESTRICT,
-  message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
-  from_name TEXT NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
-  from_class TEXT NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
-  anonymous INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
-  created_at TEXT NOT NULL,
+  message     TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+  from_name   TEXT NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
+  from_class  TEXT NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
+  anonymous   INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
+  created_at  TEXT NOT NULL,
   reviewed_at TEXT,
   reviewed_by TEXT
 )
 -- Indexes on (teacher_id, status) and (status, created_at)
+
+site_content(
+  key        TEXT PRIMARY KEY CHECK (key IN ('about')),
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+)
 ```
 
 ### Unchanged Tables
 
-- `teacher(id, token UNIQUE, name, subject, created_at)`
+- `teacher(id, token UNIQUE, name, subject, created_at)` — `token` is the private QR identifier
 - `teacher_title(teacher_id PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE, title)`
 - `image(id, token UNIQUE, name, mime, size, data, created_at, created_by)` (base64 TEXT)
 - `wish(id, title, body, created_at, created_by)`
@@ -854,9 +910,18 @@ Terminal 2 — Vite:
 npm run dev
 ```
 
-Visit `http://localhost:5173/admin` and type the email.
+Visit `http://localhost:5173` for the frontend, and `/admin` to sign in.
 
 Tables are created automatically on the first request.
+
+**Local D1 state from before this plan:** if you have an old D1 database (before privacy model), it may have `teacher_profile.public_id` and `template_image.slot='photo'`. `ensureSchema` only runs `CREATE TABLE IF NOT EXISTS`, so it never alters existing tables; the old NOT NULL `public_id` column stays and creating a teacher fails. To get a fresh schema (recommended):
+
+```bash
+rm -rf .wrangler/state
+# Restart npm run worker:dev
+```
+
+The next request will re-initialize all tables with the new schema.
 
 ### Testing
 
@@ -866,8 +931,6 @@ npm test
 
 Runs `eslint src` and `vitest run` on unit tests.
 
-**Linting** includes React hooks rules (`rules-of-hooks` error, `exhaustive-deps` warn on `src/**/*.tsx`).
-
 ### Curl Examples
 
 ```bash
@@ -876,7 +939,7 @@ curl -H "X-Admin-Email: you@example.com" \
      http://localhost:8787/api/admin/teachers
 
 curl -H "Content-Type: application/json" \
-     -d '{"teacherPublicId":"...","templateId":1,"message":"Em cảm ơn thầy."}' \
+     -d '{"teacherId":1,"templateId":1,"message":"Em cảm ơn thầy."}' \
      http://localhost:8787/api/cards
 ```
 
@@ -959,6 +1022,7 @@ npm run deploy           # Wrangler deploy to Cloudflare
 
 ## Security Notes
 
+- **Card privacy:** only holders of the private QR token can read a teacher's cards. The public wall shows only card counts, not content.
 - **Admin email:** unverified (risk R1); only brake is rate limit (60 req/min)
 - **Student anonymity:** anonymous flag defaults on; raw name/class shown only after approval
 - **Input validation:** control characters, zero-width chars, surrogates rejected; newlines capped at 5
@@ -966,7 +1030,7 @@ npm run deploy           # Wrangler deploy to Cloudflare
 - **Images:** EXIF/GPS/ICC stripped by browser re-encoding; server-side magic-bytes validation
 - **CSRF:** all admin requests require `X-Requested-With: fetch` header
 - **Foreign keys:** cascade on teacher delete; RESTRICT on template/image use
-- **Tokens:** 16-char random ([a-z0-9], ~82 bits); public_id and private token separate
+- **Tokens:** QR token is 16-char random ([a-z0-9], ~82 bits); never appears in public responses or logs
 
 ---
 
@@ -974,7 +1038,8 @@ npm run deploy           # Wrangler deploy to Cloudflare
 
 - **Site-wide noindex** (advisory; students can opt-in to search indexing later)
 - **Photo consent:** photos carry potential EXIF metadata; school should get consent before launching
+- **QR tokens:** are private URLs; keep them confidential. Cloudflare logs all requests (check their privacy policy)
 - **Pending caps:** 2000 global, 200 per teacher — prevents unbounded spam; must be deleted to free space
 - **Data retention:** no automatic deletion; school must have a retention policy
 
-See `docs/runbooks/admin.md` for recovery steps and operational details.
+See `docs/runbooks/admin.md` for recovery steps, privacy model details, and operational instructions.

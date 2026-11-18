@@ -2,6 +2,39 @@
 
 ---
 
+## Privacy Model: Private Cards, Private QR Tokens
+
+**The problem:** student cards are personal messages to teachers. They should not be discoverable via public searches or browsing.
+
+**The solution:** each teacher gets one private QR link that shows their approved cards only.
+
+### How It Works
+
+- **Home page** (`/`): shows only teacher names, subjects, and card counts. No card content. Links point to `/gui-thiep?thay=<id>` to send a card.
+- **QR page** (`/t/<token>`): private link (one per teacher, 16-char random token). Shows a random approved card + "View all" button. This URL stays in browser history and Cloudflare logs, so **open on trusted devices only**.
+- **Send page** (`/gui-thiep`): students can pick a teacher from the wall list (by numeric id), or use `?thay=<id>` or `?t=<token>` query params (the latter from the private QR link).
+- **No public teacher pages:** `/thay-co/*` and the `publicId` field are removed. Cards are only readable via the private QR link.
+
+### Risk: QR Link Leakage
+
+If a QR link is accidentally shared publicly or forwarded beyond the intended teacher:
+- The token is exposed
+- Anyone with the URL can see that teacher's cards
+- The token cannot be revoked retroactively (already shared)
+
+**Mitigation:** `Rotate` button generates a new token. The old QR link becomes invalid immediately; create a new QR and distribute it.
+
+### Example Flow
+
+1. Admin prints QR codes and hands them to teachers (or emails the `/t/<token>` URL)
+2. Teacher scans QR → sees their cards + gets a "Send card" button
+3. Students visit home (`/`) → see teacher list → click a tile → send flow
+4. Or students use a teacher's private QR → see their cards → click "Send"
+5. Card is pending until admin approves
+6. Approved card shows up on that teacher's QR page
+
+---
+
 ## ⚠️ Important: Email is NOT Verified
 
 The admin email is typed in the browser and sent to the Worker as the `X-Admin-Email` header — **there is no identity verification**. Anyone who knows or guesses an admin email can edit cards, delete teachers, approve/hide content, and add more admins. This is **accepted risk R1** (see plan and decisions).
@@ -135,7 +168,6 @@ In **Mẫu thiệp**:
 4. Assign images:
    - **background** — full-card cover (optional)
    - **banner** — top image (optional)
-   - **photo** — round photo above name (optional)
 5. Set **active** flag (on by default; off hides from students)
 6. Click **Tạo**
 
@@ -143,24 +175,27 @@ Live preview shows the layout with sample text and images in real-time.
 
 **Later:** click **Chỉnh sửa** to edit, click **Xóa** to remove (fails with 409 if any card uses it — deactivate instead).
 
-### 5. Print QR Codes
+### 5. Print QR Codes & Distribute Privately
 
 In **Thầy cô** section:
 
 For each teacher:
 1. Click **Hiển thị mã QR** — QR code appears
 2. Click **Tải xuống** — saves as PNG
-3. Print and post in the school
+3. **Distribute privately** to the teacher (email, print handout, etc.)
+   - Do NOT post on public social media or the class chat
+   - Each teacher keeps their QR private
+   - Students either access the home page, or the teacher shares their link in person
 
-QR codes encode the private `token` (not the public `publicId`).
+Each QR encodes the teacher's private 16-char token (e.g., `/t/abc1234567890xyz`).
 
-**Rotate token:** click **Xoay lại mã** to generate a new token (old QR becomes invalid; public page link via `publicId` stays the same).
+**Rotate token (if leaked):** click **Xoay lại mã** to generate a new token. Old QR link stops working immediately; create a new QR and redistribute. URLs stay in browser history and Cloudflare logs, so only open the QR on trusted devices.
 
-### 6. Share the Site
+### 6. Share the Home URL Publicly
 
-- Share the home URL (`/`) with students
-- Or share individual teacher page links (`/thay-co/<publicId>`)
-- Post QR codes in classrooms
+- Post the home page link (`https://your-site.com/`) in the class chat, school website, etc.
+- Do **not** post teacher's private QR links publicly
+- Students can access the public home page, or the teacher can share their private link if students ask
 
 ---
 
@@ -168,15 +203,10 @@ QR codes encode the private `token` (not the public `publicId`).
 
 ### What Students See
 
-1. **Home** (`/`): wall showing ≤ 6 latest cards (one per teacher), teacher count, card count
-2. **Teacher page** (`/thay-co/:publicId`): all approved cards for that teacher, newest first
-3. **Send flow** (`/gui-thiep`): 4 steps
-   - Pick teacher
-   - Pick template (active only)
-   - Write message (1–300 chars, max 5 newlines) + optional name/class
-   - `Anonymous` on by default; toggle to show name
-   - Submit
-4. **QR page** (`/t/:token`): random approved card from that teacher, "View all", empty state if no cards
+1. **Home** (`/`): wall showing only teacher names, subjects, and card counts (no card content)
+2. **Send flow** (`/gui-thiep`): pick a teacher from the wall or use `?thay=<id>` / `?t=<token>` query params
+3. **QR page** (`/t/:token`): random approved card from that teacher, "View all", empty state if no cards
+4. Write message (1–300 chars, max 5 newlines) + optional name/class; `Anonymous` on by default
 
 ### What Students Cannot See (Until Approved)
 
@@ -272,7 +302,7 @@ Use **delete** for spam. Use **hide** for genuinely inappropriate cards the teac
 - **Create**: title (Thầy/Cô, required), name, subject, department
 - **Bulk add**: paste list `Thầy|Cô Name | Subject | Department` (1–100)
 - **Edit**: name, subject, department, `showOnHome`
-- **Rotate QR**: new token (old QR invalid, public page link stable)
+- **Rotate QR**: generates new private token (old QR invalid, new `/t/<token>` page URL created)
 - **Delete**: removes teacher and all their cards
 
 ### Thư viện lời chúc (Wish Library)
@@ -283,6 +313,36 @@ Use **delete** for spam. Use **hide** for genuinely inappropriate cards the teac
 - **Delete**: always allowed (existing cards keep stored copy)
 
 Wishes are used in the student send flow as suggestions.
+
+### Giới thiệu CLB (About)
+
+Edit the club timeline, members, and statistics shown on `/ve-clb-ai`:
+
+- **Form:** add/remove/reorder stats, steps, members
+- **Live preview:** see changes as you edit
+- **Persistence:** saved to D1; visible on public About page immediately
+
+**Fields:**
+- **Heading** (≤ 80 chars): e.g. "CLB AI - THPT Ten Lơ Man"
+- **Intro** (≤ 600 chars, max 10 newlines): club's mission or description
+- **Stats** (0–6): key metrics like "2 ngày phát triển", "5 mẫu giao diện"
+  - Each stat: value (≤ 12 chars) and label (≤ 40 chars)
+- **Steps heading** (≤ 80 chars): e.g. "Quá trình thực hiện"
+- **Steps** (0–20): timeline events
+  - When (≤ 20 chars): date or period, e.g. "16/11/2026"
+  - Title (≤ 80 chars): e.g. "Khởi tạo dự án"
+  - Text (≤ 400 chars, max 10 newlines): description
+- **Members heading** (≤ 80 chars): e.g. "Thành viên"
+- **Members** (0–40): team members
+  - Name (≤ 60 chars)
+  - Role (≤ 60 chars)
+
+**Seeded content** (visible on first deploy):
+- Timeline from commit history (2 days of development)
+- Stats: 2 days, 5 templates, 20/11 (the day of the event)
+- Members: Vũ Ngọc Diệp (Chủ nhiệm CLB), Kiro Coding Agent (Thiết kế & phát triển)
+
+The seeded content is inserted once (INSERT OR IGNORE) and never overwrites edits. To reset to seed: re-enter the content manually in the form (or use the D1 delete command below).
 
 ### Thư viện ảnh (Image Library)
 
@@ -423,7 +483,7 @@ Uploaded photos may carry GPS, camera model, date, time, and other metadata in E
 
 **Direct API uploads:** server rejects files with EXIF chunks (app/json sends as base64, so EXIF is visible and rejected).
 
-**Published card URLs:** once in use, URLs are public (16-char unguessable tokens). Guardians and students see the photos. Privacy depends on informed consent.
+**Template images are public:** images attached to an active template are served to anyone at `/api/image/<token>` (16-char random token), because every student sees the templates when writing a card. Do not upload photos of people who have not agreed. Student cards themselves are private and readable only through the teacher's QR link.
 
 **Recommendation:** include photo privacy expectations in the school's Terms of Use before launching.
 
@@ -455,6 +515,16 @@ npx wrangler d1 execute cham-yeu-thuong --remote --command "SELECT COUNT(*) FROM
 npx wrangler d1 execute cham-yeu-thuong --remote --command "SELECT COUNT(*) FROM teacher"
 ```
 
+### Reset About Content to Seed
+
+If the About page is corrupted or you want to reset it to the original timeline and members:
+
+```bash
+npx wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM site_content WHERE key='about'"
+```
+
+With no stored row, `/api/about` serves the seed from `worker/aboutSeed.ts` right away; the row is re-inserted on the next Worker cold start. The production run needs Wrangler logged in (`npx wrangler login`).
+
 ---
 
 ## Local Development
@@ -485,7 +555,26 @@ Terminal 2:
 npm run dev
 ```
 
-Visit `http://localhost:5173/admin` and type the email.
+Visit `http://localhost:5173` (frontend) and `/admin` to sign in.
+
+### Local D1 Database
+
+Tables are created automatically on the first request via idempotent `CREATE TABLE IF NOT EXISTS` statements.
+
+**If you have an old local D1 database** (from before this privacy model plan):
+- Old schema may have `teacher_profile.public_id` and `template_image.slot='photo'`
+- `ensureSchema` only runs `CREATE TABLE IF NOT EXISTS`, so it never alters existing tables. The old NOT NULL `teacher_profile.public_id` column stays, and creating a teacher then fails. The production D1 was created with the new schema, so this only affects local state.
+- To get a fresh schema:
+
+```bash
+# Remove local D1 state
+rm -rf .wrangler/state
+
+# Restart worker
+npm run worker:dev
+```
+
+The next request will re-initialize with the new schema (no `public_id`, slots are `background` and `banner` only).
 
 ### Curl Tests
 
@@ -510,10 +599,11 @@ curl -H "X-Admin-Email: you@example.com" \
 Tables are created automatically on the first request via `ensureSchema` in `worker/schema.ts` (idempotent `CREATE TABLE IF NOT EXISTS`). No migration step needed.
 
 **New tables:**
-- `teacher_profile` — `public_id` (for URLs), `department`, `show_on_home` flag
+- `teacher_profile` — `department`, `show_on_home` flag
 - `template` — layout + active flag
-- `template_image` — slot → image mapping
-- `student_card` — pending/approved/hidden status, student fields (name/class/anonymous), review metadata
+- `template_image` — slot → image mapping (slots: `background`, `banner`)
+- `student_card` — pending/approved/hidden status, student fields, review metadata
+- `site_content` — About page content
 
 **Unchanged tables:**
 - `teacher`, `teacher_title`, `image`, `wish`, `admin`, `meta`
@@ -527,8 +617,7 @@ Tables are created automatically on the first request via `ensureSchema` in `wor
 ### URL Tokens
 
 - **Private QR token:** 16-char random ([a-z0-9], ~82 bits), stored in `teacher.token`, appears in `/t/:token`
-- **Public teacher ID:** 16-char random, stored in `teacher_profile.public_id`, appears in `/thay-co/:publicId` and API
-- **Card public ID:** 16-char random, stored in `student_card.public_id`, appears in API responses
+- **Card public ID:** 16-char random, stored in `student_card.public_id`, appears in API responses and moderation UI
 
 Private tokens never appear in public responses.
 
@@ -561,7 +650,7 @@ Private tokens never appear in public responses.
 - [ ] Upload a test image (confirm it appears in library)
 - [ ] Create a template with the test image
 - [ ] Create a teacher
-- [ ] Test send flow: `/gui-thiep?thay=<publicId>` → pick template → submit
+- [ ] Test send flow: `/gui-thiep?thay=<id>` → pick template → submit
 - [ ] Confirm card is pending (not visible on wall)
 - [ ] Approve the pending card
 - [ ] Confirm card now appears on wall and teacher page
