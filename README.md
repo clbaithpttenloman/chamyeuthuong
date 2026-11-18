@@ -12,7 +12,7 @@ A platform where students send personalized cards to teachers. Admins create car
 
 | Route | Purpose |
 |---|---|
-| `/` | Home — teacher wall showing approved card count per teacher, teacher count, total cards |
+| `/` | Home — intro, teacher count, approved card count, and the "Gửi thiệp" button. No teacher list: students find a teacher inside `/gui-thiep` (step 2) |
 | `/gui-thiep` | Send flow — pick teacher → pick template → write message → submit (4 steps). From query `?thay=<id>` or `?t=<token>` |
 | `/t/:token` | QR page — teacher's private QR token; shows a random approved card + "View all" + empty state. One link per teacher, distributed privately |
 | `/ve-clb-ai` | About — club timeline, members, stats from database |
@@ -26,7 +26,7 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 
 ### Student Journey
 
-1. **Visit home** (`/`) — see the teacher wall with card counts per teacher
+1. **Visit home** (`/`) — read the intro and press "Gửi thiệp"
 2. **Click a teacher tile** or visit `/gui-thiep?thay=<id>` → send flow
 3. **Alternatively:** if a teacher shared their private QR link, scan it or visit `/t/<token>`, which also has "Gửi thiệp" button linking to `/gui-thiep?t=<token>`
 4. **Pick a template** — from active templates (layout + images)
@@ -107,7 +107,7 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 - **QR code**: each teacher has a unique 16-char random token that encodes their private card page (`/t/<token>`). Download and distribute privately (printed/emailed). QR link stays in browser history and Cloudflare logs — open on trusted devices only.
 - **Rotate QR**: generates new token (old QR invalid; teacher's card page URL changes but that's why it's private)
 - **Delete**: removes teacher and all their cards (cascade)
-- **Show on home**: toggle to hide/show on the wall
+- **Show on home** (`showOnHome`, admin label "Hiện trong danh sách chọn thầy cô"): whether the teacher is listed in the send page's teacher picker and counted on the home page. Hidden teachers can still receive cards through their private QR link
 - **Chức vụ (Role)**: select one of "Giáo viên" (default), "Hiệu trưởng", "Phó hiệu trưởng". Leaders (school heads) are shown by chức vụ only on tiles/cards; regular teachers show "Giáo viên: {môn}" or "Giáo viên" if no môn. Leaders' subject and department are hidden from display labels but still used for wishes and filters.
 
 ### **Thư viện lời chúc** (Wish Library)
@@ -1056,7 +1056,7 @@ npm run deploy           # Wrangler deploy to Cloudflare
 
 ## Security Notes
 
-- **Card privacy:** only holders of the private QR token can read a teacher's cards. The public wall shows only card counts, not content.
+- **Card privacy:** only holders of the private QR token can read a teacher's cards. The public `/api/wall` returns teacher names and card counts (used by the send page's picker and the home counters), never card content.
 - **Admin email:** unverified (risk R1); only brake is rate limit (60 req/min)
 - **Student anonymity:** anonymous flag defaults on; raw name/class shown only after approval
 - **Input validation:** control characters, zero-width chars, surrogates rejected; newlines capped at 5

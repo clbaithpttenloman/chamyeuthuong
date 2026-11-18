@@ -10,7 +10,7 @@
 
 ### How It Works
 
-- **Home page** (`/`): shows only teacher names, subjects, and card counts. No card content. Links point to `/gui-thiep?thay=<id>` to send a card.
+- **Home page** (`/`): intro, total teachers and approved cards, and a "Gửi thiệp" button. No teacher list and no card content. Links of the form `/gui-thiep?thay=<id>` still preselect a teacher.
 - **QR page** (`/t/<token>`): private link (one per teacher, 16-char random token). Shows a random approved card + "View all" button. This URL stays in browser history and Cloudflare logs, so **open on trusted devices only**.
 - **Send page** (`/gui-thiep`): students can pick a teacher from the wall list (by numeric id), or use `?thay=<id>` or `?t=<token>` query params (the latter from the private QR link).
 - **No public teacher pages:** `/thay-co/*` and the `publicId` field are removed. Cards are only readable via the private QR link.
@@ -28,7 +28,7 @@ If a QR link is accidentally shared publicly or forwarded beyond the intended te
 
 1. Admin prints QR codes and hands them to teachers (or emails the `/t/<token>` URL)
 2. Teacher scans QR → sees their cards + gets a "Send card" button
-3. Students visit home (`/`) → see teacher list → click a tile → send flow
+3. Students visit home (`/`) → press "Gửi thiệp" → pick a template → find the teacher (search / tổ filter) → write
 4. Or students use a teacher's private QR → see their cards → click "Send"
 5. Card is pending until admin approves
 6. Approved card shows up on that teacher's QR page
@@ -211,8 +211,8 @@ Each QR encodes the teacher's private 16-char token (e.g., `/t/abc1234567890xyz`
 
 ### What Students See
 
-1. **Home** (`/`): wall showing only teacher names, subjects, and card counts (no card content)
-2. **Send flow** (`/gui-thiep`): pick a teacher from the wall or use `?thay=<id>` / `?t=<token>` query params
+1. **Home** (`/`): intro, counters and the "Gửi thiệp" button (no teacher list, no card content)
+2. **Send flow** (`/gui-thiep`): pick a template, then find the teacher in step 2 (search by name or môn, filter by tổ), or arrive with `?thay=<id>` / `?t=<token>`
 3. **QR page** (`/t/:token`): random approved card from that teacher, "View all", empty state if no cards
 4. Write message (1–300 chars, max 5 newlines) + optional name/class; `Anonymous` on by default
 
@@ -245,7 +245,7 @@ Each QR encodes the teacher's private 16-char token (e.g., `/t/abc1234567890xyz`
 1. Find the pending card in the list
 2. Click **Approve** (or **Duyệt**)
 3. Status changes to `approved` immediately
-4. Card appears on wall, teacher page, QR
+4. Card appears on the teacher's QR page (and counts toward the home page total)
 
 ### Single Hide
 

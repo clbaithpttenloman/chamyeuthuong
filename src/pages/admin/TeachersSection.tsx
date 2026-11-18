@@ -360,7 +360,7 @@ export default function TeachersSection({
               checked={form.showOnHome === 1}
               onChange={(e) => setForm((f) => ({ ...f, showOnHome: e.target.checked ? 1 : 0 }))}
             />
-            Hiện trên trang chủ
+            Hiện trong danh sách chọn thầy cô (Gửi thiệp)
           </label>
 
           <div className="form-actions">
@@ -396,7 +396,7 @@ export default function TeachersSection({
                 <th>Chức vụ</th>
                 <th>Môn</th>
                 <th>Tổ</th>
-                <th>Trang chủ</th>
+                <th>Trong danh sách</th>
                 <th>Thiệp</th>
                 <th>Thao tác</th>
               </tr>
