@@ -527,8 +527,6 @@ describe('POST /api/cards — more invisible and malformed characters (security 
   })
 })
 
-// ===================================================================
-// ===================================================================
 
 describe('POST /api/cards — teacherId / teacherToken', () => {
   it('teacherId (show_on_home=1) → 201', async () => {

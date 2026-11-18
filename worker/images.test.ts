@@ -837,7 +837,7 @@ describe('GET /api/image/:token — public image', () => {
 })
 
 // ===================================================================
-// Fix Group 1 — new tests (must fail before fixes)
+// Regression tests
 // ===================================================================
 
 // ---- Extra fixtures ----

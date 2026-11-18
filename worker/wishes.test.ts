@@ -287,7 +287,7 @@ describe('wishes cap — max 200', () => {
 })
 
 // ===================================================================
-// Fix Group 1 — new tests (must fail before fixes)
+// Regression tests
 // ===================================================================
 
 describe('wishes — RETURNING and atomic cap (Fix Group 1)', () => {
