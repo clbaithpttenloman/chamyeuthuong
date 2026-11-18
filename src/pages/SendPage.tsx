@@ -4,7 +4,7 @@
  * 4-step card-sending flow:
  *   Step 1 — Chọn mẫu thiệp  (from /api/templates)
  *   Step 2 — Chọn thầy cô    (from /api/wall; skipped when ?thay or ?t is valid)
- *   Step 3 — Viết lời chúc   (message, suggestion chips, identity, anonymous)
+ *   Step 3 — Viết lời chúc   (message, suggestion chips, font, ink, identity, anonymous; live preview)
  *   Step 4 — Đã gửi          (pending, awaiting approval)
  *
  * URL params:
@@ -367,7 +367,7 @@ export default function SendPage() {
     })
 
     return (
-      <div className="write-page">
+      <div className="write-page write-page--wide">
         <Stepper step={3} />
 
         <div className="write-teacher-header">
@@ -435,7 +435,7 @@ export default function SendPage() {
                       checked={state.font === f.id}
                       onChange={() => dispatch({ type: 'SET_FONT', font: f.id })}
                     />
-                    <span className="font-option-sample" style={{ fontFamily: f.stack }}>Kính gửi thầy cô</span>
+                    <span className="font-option-sample" style={{ fontFamily: f.stack }}>Kính gửi</span>
                     <span className="font-option-label">{f.label}</span>
                   </label>
                 ))}
