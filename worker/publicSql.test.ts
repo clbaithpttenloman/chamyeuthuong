@@ -31,7 +31,7 @@ describe('fetchTemplateImages — skips unknown slots', () => {
     expect(result.size).toBe(0)
   })
 
-  it('returns slot→token map for known slots (background, banner)', async () => {
+  it('returns slot→token map for the background slot', async () => {
     const { db, sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     // Create template + images
@@ -83,10 +83,14 @@ describe('toPublicCard', () => {
       anonymous: 0 as number,
       created_at: '2024-01-01T00:00:00.000Z',
       template_id: 1,
+      font: 'charm',
+      ink: '#6b21a8',
     }
     const card = toPublicCard(row, { background: 'imgbg1234567890a' })
     expect(card.publicId).toBe('crd1234567890abc')
-    expect(card.layout).toBe('classic')
+    expect(card.layout).toBe('doc-giua') // legacy 'classic' resolved
+    expect(card.font).toBe('charm')
+    expect(card.ink).toBe('#6b21a8')
     expect(card.images).toEqual({ background: 'imgbg1234567890a' })
     expect(card.message).toBe('Chúc mừng!')
     expect(card.from).toBe('Nguyễn Văn A · 12A1')
@@ -103,8 +107,20 @@ describe('toPublicCard', () => {
       anonymous: 1 as number,
       created_at: '2024-01-01T00:00:00.000Z',
       template_id: 1,
+      font: 'patrick-hand',
+      ink: '#1d3fa6',
     }
     const card = toPublicCard(row, {})
     expect(card.from).toBe('Một bạn học sinh')
+  })
+})
+
+describe('toPublicCard — invalid stored values never reach the client', () => {
+  it('unknown font, malformed ink and unknown layout fall back to defaults', () => {
+    const card = toPublicCard({
+      public_id: 'crd1234567890abc', layout: 'x', message: 'm', from_name: '', from_class: '', anonymous: 1,
+      created_at: 'x', template_id: 1, font: 'comic', ink: 'red;x:y',
+    }, {})
+    expect([card.layout, card.font, card.ink]).toEqual(['doc-giua', 'patrick-hand', '#1d3fa6'])
   })
 })

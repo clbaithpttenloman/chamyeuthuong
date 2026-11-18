@@ -11,7 +11,7 @@
  */
 import { error, json, readJson, HttpError } from './http.ts'
 import { parseId } from './admins.ts'
-import { isLayout, isSlot } from '../shared/layouts.ts'
+import { isLayout, isSlot, resolveLayout } from '../shared/layouts.ts'
 import type { Env } from './types.ts'
 import type { D1Stmt } from './types.ts'
 
@@ -28,7 +28,7 @@ async function fetchImagesForTemplate(
     .bind(templateId)
     .all<{ slot: string; id: number; token: string }>()
   const images: Record<string, { id: number; token: string }> = {}
-  for (const r of results) images[r.slot] = { id: r.id, token: r.token }
+  for (const r of results) if (isSlot(r.slot)) images[r.slot] = { id: r.id, token: r.token } // legacy banner/photo ignored
   return images
 }
 
@@ -36,7 +36,8 @@ function toAdminTemplate(
   row: { id: number; name: string; layout: string; active: number; created_at: string; created_by: string },
   images: Record<string, { id: number; token: string }>,
 ) {
-  return { id: row.id, name: row.name, layout: row.layout, active: row.active, images, created_at: row.created_at, created_by: row.created_by }
+  // Legacy layout ids (pre card v3) are returned as their mapped layout so the editor can save them.
+  return { id: row.id, name: row.name, layout: resolveLayout(row.layout).id, active: row.active, images, created_at: row.created_at, created_by: row.created_by }
 }
 
 // ---- GET /api/admin/templates ----
@@ -99,6 +100,8 @@ async function parseTemplateBody(
   if (rawImages !== undefined && rawImages !== null && typeof rawImages === 'object' && !Array.isArray(rawImages)) {
     imageUpdates = {}
     for (const [slot, val] of Object.entries(rawImages as Record<string, unknown>)) {
+      // A stale admin tab may still send `banner: null` (slot removed in card v3): ignore it.
+      if (slot === 'banner' && val === null) continue
       if (!isSlot(slot)) throw new HttpError('bad_request')
       if (val !== null && typeof val !== 'number') throw new HttpError('bad_request')
       imageUpdates[slot] = val === null ? null : (val as number)

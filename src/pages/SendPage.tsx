@@ -21,6 +21,7 @@ import { formatFrom, departmentLabel, roleLabel } from '../../shared/api.ts'
 import { fillWish } from '../../shared/wish.ts'
 import { ApiError, getPublicWishes, getQr, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
+import { FONTS, INKS } from '../../shared/fonts.ts'
 import { initialState, isTextValid, parsePreselect, sendReducer } from './send/sendReducer.ts'
 import { resolveTeacherById } from './send/resolveTeacher.ts'
 
@@ -162,6 +163,8 @@ export default function SendPage() {
     dispatch({ type: 'GO_BACK' })
   }
 
+  const isCustomInk = !INKS.some((i) => i.value === state.ink)
+
   // Suggestion chips filled with teacher data
   const chips = useMemo(() => {
     if (!teacherInfo) return []
@@ -226,6 +229,8 @@ export default function SendPage() {
         fromName: state.anonymous ? undefined : state.fromName || undefined,
         fromClass: state.fromClass || undefined,
         anonymous: state.anonymous,
+        font: state.font,
+        ink: state.ink,
       })
       dispatch({ type: 'SUBMIT_SUCCESS' })
     } catch (e) {
@@ -256,14 +261,12 @@ export default function SendPage() {
               aria-label={`Chọn mẫu ${tpl.name}`}
             >
               <div className="card-mini">
-                <div className="card-mini-inner">
-                  <CardView
-                    card={PREVIEW_CARD}
-                    layout={tpl.layout}
-                    images={tpl.images}
-                    headingLevel="h2"
-                  />
-                </div>
+                <CardView
+                  card={PREVIEW_CARD}
+                  layout={tpl.layout}
+                  images={tpl.images}
+                  headingLevel="h2"
+                />
               </div>
               <span className="template-tile-name">{tpl.name}</span>
             </button>
@@ -319,7 +322,7 @@ export default function SendPage() {
               <button
                 key={t.id}
                 type="button"
-                className={`card-tile card-tile--${currentTemplate?.layout ?? 'classic'}`}
+                className="card-tile card-tile--classic"
                 onClick={() => handleSelectTeacher(t)}
                 aria-label={`Chọn ${displayName}`}
               >
@@ -419,6 +422,55 @@ export default function SendPage() {
               </span>
             </label>
 
+            {/* Font (student pen) */}
+            <fieldset className="write-choice">
+              <legend className="write-label">Font chữ</legend>
+              <div className="font-options">
+                {FONTS.map((f) => (
+                  <label key={f.id} className={`font-option${state.font === f.id ? ' font-option--selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="font"
+                      value={f.id}
+                      checked={state.font === f.id}
+                      onChange={() => dispatch({ type: 'SET_FONT', font: f.id })}
+                    />
+                    <span className="font-option-sample" style={{ fontFamily: f.stack }}>Kính gửi thầy cô</span>
+                    <span className="font-option-label">{f.label}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            {/* Ink colour: student pen colours, then custom */}
+            <fieldset className="write-choice">
+              <legend className="write-label">Màu mực</legend>
+              <div className="ink-options">
+                {INKS.map((ink) => (
+                  <label key={ink.value} className={`ink-option${state.ink === ink.value ? ' ink-option--selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="ink"
+                      value={ink.value}
+                      checked={state.ink === ink.value}
+                      onChange={() => dispatch({ type: 'SET_INK', ink: ink.value })}
+                    />
+                    <span className="ink-dot" style={{ background: ink.value }} aria-hidden="true" />
+                    {ink.label}
+                  </label>
+                ))}
+                <label className={`ink-option${isCustomInk ? ' ink-option--selected' : ''}`}>
+                  <input
+                    type="color"
+                    value={state.ink}
+                    onChange={(e) => dispatch({ type: 'SET_INK', ink: e.target.value })}
+                    aria-label="Chọn màu mực khác"
+                  />
+                  Màu khác
+                </label>
+              </div>
+            </fieldset>
+
             {/* Optional name + class */}
             <div className="write-identity">
               <label className="write-label">
@@ -480,6 +532,8 @@ export default function SendPage() {
                 layout={currentTemplate.layout}
                 images={currentTemplate.images}
                 from={previewFrom}
+                ink={state.ink}
+                font={state.font}
               />
             </div>
           </div>

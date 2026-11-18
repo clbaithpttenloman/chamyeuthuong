@@ -270,6 +270,8 @@ describe('RESET', () => {
       fromName: 'Minh',
       fromClass: '11A',
       anonymous: false,
+      font: 'lora',
+      ink: '#000000',
       error: 'err',
     }
     const s = sendReducer(filled, { type: 'RESET' })
@@ -320,5 +322,33 @@ describe('CLEAR_PRESELECT', () => {
     const s = sendReducer(sendReducer(initialState(42), { type: 'CLEAR_PRESELECT' }), { type: 'SELECT_TEMPLATE', templateId: 1 })
     expect(s.teacherId).toBeNull()
     expect(s.step).toBe(2)
+  })
+})
+
+// ── Card v3: font and ink ────────────────────────────────────────────────
+
+describe('font and ink', () => {
+  it('start as Bút bi and blue', () => {
+    const s = initialState(null)
+    expect(s.font).toBe('patrick-hand')
+    expect(s.ink).toBe('#1d3fa6')
+  })
+  it('SET_FONT accepts a supported font and ignores anything else', () => {
+    let s = sendReducer(initialState(null), { type: 'SET_FONT', font: 'charm' })
+    expect(s.font).toBe('charm')
+    s = sendReducer(s, { type: 'SET_FONT', font: 'comic-sans' })
+    expect(s.font).toBe('charm')
+  })
+  it('SET_INK accepts #rrggbb (stored lowercase) and ignores anything else', () => {
+    let s = sendReducer(initialState(null), { type: 'SET_INK', ink: '#AB12CD' })
+    expect(s.ink).toBe('#ab12cd')
+    for (const bad of ['red', '#fff', 'red;x:y', '']) s = sendReducer(s, { type: 'SET_INK', ink: bad })
+    expect(s.ink).toBe('#ab12cd')
+  })
+  it('RESET restores the defaults', () => {
+    let s = sendReducer(initialState(null), { type: 'SET_FONT', font: 'lora' })
+    s = sendReducer(s, { type: 'SET_INK', ink: '#000000' })
+    s = sendReducer(s, { type: 'RESET' })
+    expect([s.font, s.ink]).toEqual(['patrick-hand', '#1d3fa6'])
   })
 })

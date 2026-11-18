@@ -10,6 +10,13 @@ import '@fontsource/be-vietnam-pro/700.css'
 import '@fontsource/lora/400.css'
 import '@fontsource/lora/400-italic.css'
 import '@fontsource/lora/700.css'
+// Card v3 student fonts (400 only; every subset ships with unicode-range, so browsers fetch
+// only the files a card actually uses). See shared/fonts.ts for the list.
+import '@fontsource/patrick-hand/400.css'
+import '@fontsource/pangolin/400.css'
+import '@fontsource/itim/400.css'
+import '@fontsource/mali/400.css'
+import '@fontsource/charm/400.css'
 import './styles.css'
 
 createRoot(document.getElementById('root')!).render(

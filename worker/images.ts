@@ -1,5 +1,6 @@
 import { error, json, readBytes, HttpError } from './http.ts'
 import { isToken, newToken } from './token.ts'
+import { SLOTS } from '../shared/layouts.ts'
 import { ensureSchema } from './schema.ts'
 import { parseId } from './admins.ts'
 import type { Env } from './types.ts'
@@ -134,7 +135,7 @@ function hasWebPExifChunk(b: Uint8Array): boolean {
 }
 
 /** Validate image dimensions; returns error string on rejection, null on pass. */
-function checkDimensions(mime: string, bytes: Uint8Array): DimResult {
+export function checkDimensions(mime: string, bytes: Uint8Array): DimResult {
   if (mime === 'image/png') return parsePNG(bytes)
   if (mime === 'image/jpeg') return parseJPEG(bytes)
   if (mime === 'image/webp') return parseWebP(bytes)
@@ -142,7 +143,7 @@ function checkDimensions(mime: string, bytes: Uint8Array): DimResult {
 }
 
 /** Check magic bytes against declared MIME type. */
-function magicOk(mime: string, b: Uint8Array): boolean {
+export function magicOk(mime: string, b: Uint8Array): boolean {
   if (b.length < 4) return false
   if (mime === 'image/jpeg') return b[0] === 0xff && b[1] === 0xd8
   if (mime === 'image/png') {
@@ -212,11 +213,13 @@ function getCache(env: { _caches?: CacheStore }): CacheStore['default'] | undefi
 // ---- Admin image list ----
 
 async function listImages(env: Pick<Env, 'DB'>): Promise<Response> {
+  // used_by counts only current slots: legacy banner/photo links (old DBs) do not make an image "in use".
   const { results } = await env.DB.prepare(
     'SELECT i.id, i.token, i.name, i.mime, i.size, i.created_at, i.created_by, ' +
-    '(SELECT COUNT(*) FROM template_image ti WHERE ti.image_id = i.id) AS used_by ' +
+    '(SELECT COUNT(*) FROM template_image ti WHERE ti.image_id = i.id ' +
+    '  AND ti.slot IN (SELECT value FROM json_each(?))) AS used_by ' +
     'FROM image i ORDER BY i.id',
-  ).all<Record<string, unknown>>()
+  ).bind(JSON.stringify(SLOTS)).all<Record<string, unknown>>()
   return json(results)
 }
 
@@ -291,9 +294,15 @@ async function deleteImage(env: Pick<Env, 'DB'>, id: number): Promise<Response> 
   const existing = await env.DB.prepare('SELECT id FROM image WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
 
-  // Try delete; FK RESTRICT on template_image.image_id will throw if in use by a template
+  // One batch: drop this image's legacy (non-SLOTS) links, then the image. A current
+  // (background) link still blocks the delete via FK RESTRICT, and the whole batch rolls back.
   try {
-    const result = await env.DB.prepare('DELETE FROM image WHERE id = ?').bind(id).run()
+    const [, result] = await env.DB.batch([
+      env.DB.prepare(
+        'DELETE FROM template_image WHERE image_id = ? AND slot NOT IN (SELECT value FROM json_each(?))',
+      ).bind(id, JSON.stringify(SLOTS)),
+      env.DB.prepare('DELETE FROM image WHERE id = ?').bind(id),
+    ])
     if (result.meta.changes === 0) return error('not_found')
     return json({ success: true })
   } catch (e) {

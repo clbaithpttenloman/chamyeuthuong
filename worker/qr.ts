@@ -52,7 +52,7 @@ export async function handleQr(request: Request, env: Env): Promise<Response> {
   // All approved cards, newest first, capped at 200
   const { results: cardRows } = await env.DB
     .prepare(
-      'SELECT sc.public_id, sc.message, sc.from_name, sc.from_class, sc.anonymous, sc.created_at, ' +
+      'SELECT sc.public_id, sc.message, sc.from_name, sc.from_class, sc.anonymous, sc.created_at, sc.font, sc.ink, ' +
       'sc.template_id, tmpl.layout ' +
       'FROM student_card sc ' +
       'JOIN template tmpl ON tmpl.id = sc.template_id ' +

@@ -17,8 +17,10 @@ import type { PublicCard } from '../../../shared/api.ts'
 function makeCard(id: string): PublicCard {
   return {
     publicId: id,
-    layout: 'classic',
+    layout: 'doc-giua',
     images: {},
+    font: 'patrick-hand',
+    ink: '#1d3fa6',
     message: `msg-${id}`,
     from: 'Test',
     createdAt: '2024-01-01T00:00:00.000Z',

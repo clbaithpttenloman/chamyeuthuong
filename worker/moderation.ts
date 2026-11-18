@@ -13,6 +13,8 @@
 import { error, json, readJson, HttpError } from './http.ts'
 import { parseId } from './admins.ts'
 import { MAX_REVIEW_IDS } from '../shared/api.ts'
+import { resolveLayout } from '../shared/layouts.ts'
+import { resolveFont, resolveInk } from '../shared/fonts.ts'
 import type { Env } from './types.ts'
 
 type AdminCardRow = {
@@ -24,6 +26,8 @@ type AdminCardRow = {
   from_name: string
   from_class: string
   anonymous: number
+  font: string
+  ink: string
   status: string
   created_at: string
   reviewed_at: string | null
@@ -45,6 +49,8 @@ function toAdminCard(row: AdminCardRow) {
     fromName: row.from_name,
     fromClass: row.from_class,
     anonymous: row.anonymous === 1,
+    font: resolveFont(row.font).id,
+    ink: resolveInk(row.ink),
     status: row.status,
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at ?? null,
@@ -57,14 +63,14 @@ function toAdminCard(row: AdminCardRow) {
     template: {
       id: row.template_id,
       name: row.template_name,
-      layout: row.template_layout,
+      layout: resolveLayout(row.template_layout).id,
     },
   }
 }
 
 const CARD_SELECT =
   'SELECT sc.id, sc.public_id, sc.teacher_id, sc.template_id, sc.message, sc.from_name, sc.from_class, ' +
-  'sc.anonymous, sc.status, sc.created_at, sc.reviewed_at, sc.reviewed_by, ' +
+  'sc.anonymous, sc.font, sc.ink, sc.status, sc.created_at, sc.reviewed_at, sc.reviewed_by, ' +
   't.id AS teacher_id_ref, t.name AS teacher_name, tt.title AS teacher_title, ' +
   'tmpl.name AS template_name, tmpl.layout AS template_layout ' +
   'FROM student_card sc ' +

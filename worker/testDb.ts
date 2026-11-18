@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DatabaseSync } from 'node:sqlite'
-import { SCHEMA, UPGRADE_SQL } from './schema.ts'
+import { SCHEMA, UPGRADE_SQL, IMAGES_SEEDED_KEY } from './schema.ts'
 
 /** Minimal D1 binding types (no @cloudflare/workers-types). Matches worker/types.ts. */
 export type D1Stmt = {
@@ -18,6 +18,8 @@ export type D1 = {
  * Node's built-in node:sqlite behind the D1 API shape.
  *
  * Schema source: SCHEMA from worker/schema.ts (single source of truth for all DDL).
+ * The one-time image seed is marked done unless { seeded: false } is passed.
+ * Pass { shareWith: sqlite } for a second D1 binding over the same database.
  * Pass { schema: false } to get a fully empty database (useful for testing ensureSchema itself
  * or early-exit paths that must leave the DB untouched).
  *
@@ -28,15 +30,24 @@ export type D1 = {
  * The batch is genuinely transactional: BEGIN before the first run(), COMMIT on success,
  * ROLLBACK on any error.
  */
-export function testDb(opts: { schema?: false } = {}) {
-  const sqlite = new DatabaseSync(':memory:')
-  sqlite.exec('PRAGMA foreign_keys = ON')
+/** One batch at a time per connection (D1 serializes batches per database). */
+const batchLocks = new WeakMap<DatabaseSync, Promise<void>>()
 
-  // Apply schema via sqlite.exec() directly so the initialisation is invisible to state
-  // tracking (state.ddl / state.prepares start at 0 for the caller's assertions).
-  if (opts.schema !== false) {
-    for (const sql of SCHEMA) {
-      sqlite.exec(sql)
+export function testDb(opts: { schema?: false; seeded?: false; shareWith?: DatabaseSync } = {}) {
+  // shareWith: a second D1 binding over the same database (two isolates racing).
+  const sqlite = opts.shareWith ?? new DatabaseSync(':memory:')
+  if (!opts.shareWith) {
+    sqlite.exec('PRAGMA foreign_keys = ON')
+
+    // Apply schema via sqlite.exec() directly so the initialisation is invisible to state
+    // tracking (state.ddl / state.prepares start at 0 for the caller's assertions).
+    if (opts.schema !== false) {
+      for (const sql of SCHEMA) {
+        sqlite.exec(sql)
+      }
+      // Mark the one-time image seed as done so handler tests start from an empty library.
+      // Pass { seeded: false } to exercise the seed itself.
+      if (opts.seeded !== false) sqlite.exec(`INSERT OR IGNORE INTO meta (key, value) VALUES ('${IMAGES_SEEDED_KEY}', 'test')`)
     }
   }
 
@@ -87,6 +98,11 @@ export function testDb(opts: { schema?: false } = {}) {
     },
     batch: async (statements) => {
       if (state.fail) throw new Error('D1_ERROR: simulated failure')
+      // D1 runs one batch at a time per database; serialize batches on a shared connection.
+      const prev = batchLocks.get(sqlite) ?? Promise.resolve()
+      let release!: () => void
+      batchLocks.set(sqlite, new Promise<void>((r) => { release = r }))
+      await prev
       sqlite.exec('BEGIN')
       try {
         const out: { success: boolean; meta: { changes: number; last_row_id: number } }[] = []
@@ -96,6 +112,8 @@ export function testDb(opts: { schema?: false } = {}) {
       } catch (e) {
         sqlite.exec('ROLLBACK')
         throw e
+      } finally {
+        release()
       }
     },
   }

@@ -16,6 +16,7 @@
  * deterministic state transitions.
  */
 import { MAX_FROM_CLASS, MAX_FROM_NAME, MAX_MESSAGE, MAX_NEWLINES } from '../../../shared/api.ts'
+import { DEFAULT_FONT, DEFAULT_INK, isFont, isInkInput, normalizeInk } from '../../../shared/fonts.ts'
 
 export type SendStep = 1 | 2 | 3 | 4
 
@@ -35,6 +36,10 @@ export type SendState = {
   fromClass: string
   /** "Gửi ẩn danh" — ON by default per plan. */
   anonymous: boolean
+  /** Card v3: font id from FONTS (default Bút bi). */
+  font: string
+  /** Card v3: ink #rrggbb, lowercase (default blue). */
+  ink: string
   error: string | null
 }
 
@@ -45,6 +50,8 @@ export type SendAction =
   | { type: 'SET_FROM_NAME'; name: string }
   | { type: 'SET_FROM_CLASS'; cls: string }
   | { type: 'SET_ANONYMOUS'; anonymous: boolean }
+  | { type: 'SET_FONT'; font: string }
+  | { type: 'SET_INK'; ink: string }
   | { type: 'GO_BACK' }
   | { type: 'SUBMIT_SUCCESS' }
   | { type: 'SET_ERROR'; error: string }
@@ -83,6 +90,8 @@ export function initialState(
     fromName: '',
     fromClass: '',
     anonymous: true,  // "Gửi ẩn danh" ON by default
+    font: DEFAULT_FONT,
+    ink: DEFAULT_INK,
     error: null,
   }
 }
@@ -131,6 +140,13 @@ export function sendReducer(state: SendState, action: SendAction): SendState {
 
     case 'SET_ANONYMOUS':
       return { ...state, anonymous: action.anonymous }
+
+    // Invalid values are ignored, so the state always holds something the server accepts.
+    case 'SET_FONT':
+      return isFont(action.font) ? { ...state, font: action.font } : state
+
+    case 'SET_INK':
+      return isInkInput(action.ink) ? { ...state, ink: normalizeInk(action.ink) } : state
 
     case 'GO_BACK': {
       if (state.step === 2) return { ...state, step: 1, error: null }

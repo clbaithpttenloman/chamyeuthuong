@@ -1,343 +1,146 @@
 // @vitest-environment node
 /**
- * Tests for src/components/CardView.tsx
- * Uses react-dom/server renderToString — no jsdom required.
- *
- * Contract:
- *   CardView({ card, layout, images })
- *     card:   { name, subject, message }
- *     layout: string (layout id from LAYOUTS)
- *     images: Partial<Record<Slot, string>>  — slot → 16-char token
- *
- * Invariants:
- *   - Renders a CSS class `.card--<layoutId>` using only known layout ids
- *   - Image URLs are built as `/api/image/<token>` where token matches ^[a-z0-9]{16}$
- *   - Tokens that do not match the pattern are NOT rendered as URLs
- *   - No inline injection patterns or inline scripts
+ * CardView (card v3) — a physical-card face: fixed ratio from the layout, background image at
+ * 100%, writing zone positioned by the layout, text in the student's ink and font.
  */
 import { describe, it, expect } from 'vitest'
 import { renderToString } from 'react-dom/server'
-
-// This import fails until CardView.tsx is created → all tests in this file fail
 import CardView from './CardView.tsx'
-import { LAYOUTS, SLOTS } from '../../shared/layouts.ts'
+import { LAYOUTS } from '../../shared/layouts.ts'
 
-type CardData = { name: string; subject: string; message: string }
+type CardData = Parameters<typeof CardView>[0]['card']
 const baseCard: CardData = { name: 'Nguyễn Văn A', subject: 'Toán', message: 'Chúc mừng!' }
-const validToken = 'imgabc1234567890'
+const TOKEN = 'imgabc1234567890'
+const html = (props: Partial<Parameters<typeof CardView>[0]> = {}) =>
+  renderToString(<CardView card={baseCard} layout="doc-giua" images={{}} {...props} />)
 
-// ===================================================================
-// Layout class name
-// ===================================================================
-
-describe('CardView — layout class name', () => {
-  for (const layout of LAYOUTS) {
-    it(`renders CSS class .card--${layout.id} for layout "${layout.id}"`, () => {
-      const html = renderToString(
-        <CardView card={baseCard} layout={layout.id} images={{}} />,
-      )
-      expect(html).toContain(`card--${layout.id}`)
+describe('CardView — layout: ratio and writing zone', () => {
+  for (const l of LAYOUTS) {
+    it(`${l.id}: ${l.ratio} card, zone at the layout's position`, () => {
+      const out = html({ layout: l.id })
+      expect(out).toContain(`card--${l.ratio}`)
+      expect(out).toContain(`data-layout="${l.id}"`)
+      const z = l.zone
+      expect(out).toContain(`left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%`)
     })
   }
 
-  it('does not render an arbitrary string as a layout class', () => {
-    // CardView must validate the layout against the known list before applying it as a class name
-    const html = renderToString(
-      <CardView card={baseCard} layout="injected-class; malicious" images={{}} />,
-    )
-    expect(html).not.toContain('injected-class')
-    expect(html).not.toContain('malicious')
+  it('legacy layout ids render with their mapped layout', () => {
+    expect(html({ layout: 'night' })).toContain('data-layout="ngang-giua"')
+    expect(html({ layout: 'lotus' })).toContain('data-layout="doc-giua"')
   })
 
-  it('falls back to default layout class when given an unknown layout id', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="unknown-layout" images={{}} />,
-    )
-    // Should use 'classic' (DEFAULT_LAYOUT) as fallback
-    expect(html).toContain('card--classic')
-  })
-})
-
-// ===================================================================
-// Image URLs
-// ===================================================================
-
-describe('CardView — image URL handling', () => {
-  it('renders /api/image/<token> URL for a valid 16-char token', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{ banner: validToken }} />,
-    )
-    expect(html).toContain(`/api/image/${validToken}`)
+  it('an arbitrary layout string is never rendered; the default layout is used', () => {
+    const out = html({ layout: 'evil"><script>alert(1)</script>' })
+    expect(out).not.toContain('evil')
+    expect(out).not.toContain('<script>')
+    expect(out).toContain('data-layout="doc-giua"')
   })
 
-  it('does not render URLs for tokens that fail isToken validation', () => {
-    const badToken = '../../etc/passwd'
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{ banner: badToken }} />,
-    )
-    expect(html).not.toContain(badToken)
-    expect(html).not.toContain('/api/image/')
-  })
-
-  it('does not render URLs for a 17-character token (tokens must be exactly 16 chars)', () => {
-    // TOKEN_RE must be /^[a-z0-9]{16}$/ — exactly 16, not 16+
-    // imgabc12345678901 is 17 lowercase alphanumeric chars
-    const token17 = 'imgabc12345678901'
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{ banner: token17 }} />,
-    )
-    expect(html).not.toContain(`/api/image/${token17}`)
-  })
-
-  it('does not render URLs for tokens with uppercase characters', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{ banner: 'IMGABC1234567890' }} />,
-    )
-    expect(html).not.toContain('/api/image/IMGABC')
-  })
-
-  it('renders no image element when slot is omitted', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} />,
-    )
-    // No img src with /api/image/ when no images provided
-    expect(html).not.toContain('/api/image/')
-  })
-
-  it('renders the background and banner slots, and never a photo token', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{ background: 'img001234567890a', banner: 'img001234567890b', photo: 'img001234567890c' }} />,
-    )
-    expect(html).toContain('/api/image/img001234567890a')
-    expect(html).toContain('/api/image/img001234567890b')
-    expect(html).not.toContain('img001234567890c')
+  it('showZone adds the dashed-zone marker used by the admin editor', () => {
+    expect(html({ showZone: true })).toContain('card--show-zone')
+    expect(html()).not.toContain('card--show-zone')
   })
 })
 
-// ===================================================================
-// Card data rendering
-// ===================================================================
-
-describe('CardView — card data', () => {
-  it('renders teacher name', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Nguyễn Văn A')
+describe('CardView — background image only', () => {
+  it('renders /api/image/<token> as the card background for a valid token', () => {
+    const out = html({ images: { background: TOKEN } })
+    expect(out).toContain(`/api/image/${TOKEN}`)
+    expect(out).toContain('card--has-bg')
   })
 
-  it('renders message', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Chúc mừng!')
-  })
-
-  it('renders subject when present', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Toán')
-  })
-
-  it('handles empty subject gracefully', () => {
-    const card = { ...baseCard, subject: '' }
-    const html = renderToString(
-      <CardView card={card} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Nguyễn Văn A')
-  })
-})
-
-// ===================================================================
-// Slot coverage
-// ===================================================================
-
-describe('CardView — slot coverage', () => {
-  it('every SLOT name is handled without throwing', () => {
-    for (const slot of SLOTS) {
-      expect(() =>
-        renderToString(
-          <CardView card={baseCard} layout="classic" images={{ [slot]: validToken }} />,
-        ),
-      ).not.toThrow()
+  it('ignores tokens that fail validation (length, case, characters)', () => {
+    for (const bad of ['short', 'imgabc12345678901', 'IMGABC1234567890', 'imgabc12345678)a', '../../../x/y/z/w']) {
+      const out = html({ images: { background: bad } })
+      expect(out).not.toContain('/api/image/')
+      expect(out).not.toContain('card--has-bg')
     }
   })
-})
 
-// ===================================================================
-// New for honorific plan: title in heading and photo alt text
-// ===================================================================
-
-type CardDataWithTitle = {
-  name: string
-  subject: string
-  message: string
-  title?: 'Thầy' | 'Cô' | null
-}
-
-describe('CardView — teacher title in heading', () => {
-  it('heading shows "{title} {name}" when title is Thầy', () => {
-    const card: CardDataWithTitle = {
-      name: 'Nguyễn Văn A',
-      subject: 'Toán',
-      message: 'Chúc mừng!',
-      title: 'Thầy',
-    }
-    const html = renderToString(
-       
-      <CardView card={card as any} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Thầy Nguyễn Văn A')
-  })
-
-  it('heading shows "{title} {name}" when title is Cô', () => {
-    const card: CardDataWithTitle = {
-      name: 'Trần Thị B',
-      subject: 'Văn',
-      message: 'Chúc mừng!',
-      title: 'Cô',
-    }
-    const html = renderToString(
-       
-      <CardView card={card as any} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Cô Trần Thị B')
-  })
-
-  it('heading shows name only when title is null', () => {
-    const card: CardDataWithTitle = { name: 'Lê Văn C', subject: '', message: '', title: null }
-    const html = renderToString(
-       
-      <CardView card={card as any} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Lê Văn C')
-    expect(html).not.toMatch(/Thầy Lê Văn C/)
-    expect(html).not.toMatch(/Cô Lê Văn C/)
-  })
-
-  it('heading shows name only when title is undefined (backward compat)', () => {
-    const card: CardDataWithTitle = { name: 'Phạm Văn D', subject: '', message: '' }
-    const html = renderToString(
-       
-      <CardView card={card as any} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Phạm Văn D')
+  it('banner and photo tokens are ignored entirely (no img element, no URL)', () => {
+    const out = html({ images: { banner: TOKEN, photo: 'img0000000000002' } })
+    expect(out).not.toContain('/api/image/')
+    expect(out).not.toContain('<img')
+    expect(out).not.toContain('card-banner')
   })
 })
 
-// ===================================================================
-// from prop — custom signature line
-// ===================================================================
-
-describe('CardView — from prop (custom signature line)', () => {
-  it('shows "Học sinh" in the default signature when from is not provided', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} />,
-    )
-    expect(html).toContain('Học sinh')
+describe('CardView — ink and font (student choices)', () => {
+  it('defaults: blue ink and the Bút bi stack', () => {
+    const out = html()
+    expect(out).toContain('color:#1d3fa6')
+    expect(out).toContain('font-family:&#x27;Patrick Hand&#x27;')
   })
 
-  it('renders the from prop text when provided', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} from="Minh Anh · 11A1" />,
-    )
-    expect(html).toContain('Minh Anh · 11A1')
+  it('valid ink and font are applied', () => {
+    const out = html({ ink: '#6b21a8', font: 'lora' })
+    expect(out).toContain('color:#6b21a8')
+    expect(out).toContain('font-family:&#x27;Lora&#x27;')
   })
 
-  it('from prop replaces default signature (no longer shows the default org text in the from paragraph)', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} from="Người gửi" />,
-    )
-    expect(html).toContain('Người gửi')
-    // The from paragraph is still present
-    expect(html).toContain('class="from"')
-  })
-
-  it('renders the from paragraph when from is an empty string', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} from="" />,
-    )
-    // paragraph element is still rendered
-    expect(html).toContain('class="from"')
-  })
-
-  it('renders "Một bạn học sinh" anonymous signature when from prop carries that string', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{}} from="Một bạn học sinh" />,
-    )
-    expect(html).toContain('Một bạn học sinh')
+  it('invalid ink or font never reaches the style; defaults are used', () => {
+    const out = html({ ink: 'red;background:url(https://evil)', font: "x'; color: red" })
+    expect(out).not.toContain('evil')
+    expect(out).not.toContain('color:red')
+    expect(out).toContain('color:#1d3fa6')
+    expect(out).toContain('font-family:&#x27;Patrick Hand&#x27;')
   })
 })
 
-// ===================================================================
-// white-space: pre-line rendering (message in .msg element, no <br>)
-// ===================================================================
-
-describe('CardView — message pre-line rendering', () => {
-  it('message with newline is in a .msg element without converting \\n to <br>', () => {
-    const card = { name: 'A', subject: '', message: 'line1\nline2' }
-    const html = renderToString(
-      // Provide `from` to avoid the default <br/> in the from paragraph
-      <CardView card={card} layout="classic" images={{}} from="Test" />,
-    )
-    // The .msg element exists
-    expect(html).toContain('class="msg"')
-    // Message content is present (react preserves newlines as text, not <br>)
-    expect(html).toContain('line1')
-    expect(html).toContain('line2')
-    // No <br> elements — newlines rendered via CSS pre-line
-    expect(html).not.toContain('<br')
-  })
-})
-
-// ===================================================================
-// ===================================================================
-
-describe('CardView — no photo slot rendered', () => {
-  it('a photo token is ignored entirely (the slot no longer exists)', () => {
-    const html = renderToString(
-      <CardView card={baseCard} layout="classic" images={{ photo: validToken }} />,
-    )
-    expect(html).not.toContain('card-photo')
-    expect(html).not.toContain(validToken)
+describe('CardView — written content', () => {
+  it('renders "Kính gửi", the name with its title, the message and the stamp', () => {
+    const out = html({ card: { ...baseCard, title: 'Cô' } })
+    expect(out).toContain('Kính gửi')
+    expect(out).toContain('Cô Nguyễn Văn A')
+    expect(out).toContain('Chúc mừng!')
+    expect(out).toContain('AI - Chạm yêu thương')
   })
 
-  it('no photo img even when both background and photo tokens provided', () => {
-    const html = renderToString(
-      <CardView
-        card={baseCard}
-        layout="classic"
-        images={{ background: 'img001234567890a', photo: 'img001234567890b' }}
-      />,
-    )
-    expect(html).not.toContain('card-photo')
-    // Background IS rendered
-    expect(html).toContain('img001234567890a')
+  it('name only when title is null or undefined', () => {
+    expect(html({ card: { ...baseCard, title: null } })).toMatch(/>Nguyễn Văn A</)
+    expect(html()).toMatch(/>Nguyễn Văn A</)
+  })
+
+  it('headingLevel h2 renders the name as h2', () => {
+    expect(html({ headingLevel: 'h2' })).toMatch(/<h2[^>]*>Nguyễn Văn A<\/h2>/)
+  })
+
+  it('message keeps newlines as text (pre-line), no <br>', () => {
+    const out = html({ card: { ...baseCard, message: 'Dòng 1\nDòng 2' } })
+    expect(out).toContain('Dòng 1\nDòng 2')
+    expect(out).not.toContain('<br')
+  })
+
+  it('from prop replaces the default signature; default signature mentions Học sinh', () => {
+    expect(html()).toContain('Học sinh')
+    const out = html({ from: 'Minh Anh · 11A1' })
+    expect(out).toContain('Minh Anh · 11A1')
+    expect(out).not.toContain('Học sinh')
+  })
+
+  it('message text is escaped, never HTML', () => {
+    const out = html({ card: { ...baseCard, message: '<img src=x onerror=alert(1)>' } })
+    expect(out).not.toContain('<img src=x')
+    expect(out).toContain('&lt;img')
   })
 })
 
 describe('CardView — chức vụ / môn line', () => {
   it('no role (old data) → "Giáo viên: <môn>"', () => {
-    const html = renderToString(<CardView card={baseCard} layout="classic" images={{}} />)
-    expect(html).toContain('Giáo viên: Toán')
-    expect(html).not.toContain('GV môn')
+    expect(html()).toContain('Giáo viên: Toán')
   })
-
   it('Giáo viên with empty môn → "Giáo viên"', () => {
-    const html = renderToString(<CardView card={{ ...baseCard, role: 'Giáo viên', subject: '' }} layout="classic" images={{}} />)
-    expect(html).toContain('>Giáo viên<')
+    expect(html({ card: { ...baseCard, role: 'Giáo viên', subject: '' } })).toContain('>Giáo viên<')
   })
-
-  it('Hiệu trưởng → only "Hiệu trưởng", môn not shown', () => {
-    const html = renderToString(<CardView card={{ ...baseCard, role: 'Hiệu trưởng' }} layout="classic" images={{}} />)
-    expect(html).toContain('>Hiệu trưởng<')
-    expect(html).not.toContain('Toán')
+  it('Hiệu trưởng → only the chức vụ', () => {
+    const out = html({ card: { ...baseCard, role: 'Hiệu trưởng' } })
+    expect(out).toContain('>Hiệu trưởng<')
+    expect(out).not.toContain('Toán')
   })
-
-  it('Phó hiệu trưởng → only "Phó hiệu trưởng"', () => {
-    const html = renderToString(<CardView card={{ ...baseCard, role: 'Phó hiệu trưởng' }} layout="classic" images={{}} />)
-    expect(html).toContain('>Phó hiệu trưởng<')
-    expect(html).not.toContain('Giáo viên')
+  it('Phó hiệu trưởng → only the chức vụ', () => {
+    const out = html({ card: { ...baseCard, role: 'Phó hiệu trưởng' } })
+    expect(out).toContain('>Phó hiệu trưởng<')
+    expect(out).not.toContain('Giáo viên')
   })
 })

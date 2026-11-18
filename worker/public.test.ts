@@ -408,3 +408,16 @@ describe('GET /api/wall — role', () => {
     expect(body.teachers.map((t) => t.role)).toEqual(['Giáo viên', 'Hiệu trưởng'])
   })
 })
+
+describe('GET /api/templates — card v3', () => {
+  it('returns the resolved layout id and only the background image', async () => {
+    const { db } = testDb()
+    await db.prepare("INSERT INTO image (id, token, name, mime, size, data, created_at, created_by) VALUES (1, 'img0000000000001', 'bg', 'image/png', 1, 'AA==', 'x', 'a')").run()
+    await db.prepare("INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (1, 'Cũ', 'spring', 1, 'x', 'a'), (2, 'Mới', 'ngang-trai', 1, 'x', 'a')").run()
+    await db.prepare("INSERT INTO template_image (template_id, slot, image_id) VALUES (1, 'background', 1)").run()
+    const r = await handlePublic(new Request('https://x/api/templates', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
+    const list = (await r.json()) as { id: number; layout: string; images: Record<string, string> }[]
+    expect(list.map((t) => [t.id, t.layout])).toEqual([[1, 'doc-giua'], [2, 'ngang-trai']])
+    expect(list[0].images).toEqual({ background: 'img0000000000001' })
+  })
+})

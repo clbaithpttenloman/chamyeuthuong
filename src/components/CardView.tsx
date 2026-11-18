@@ -1,36 +1,48 @@
 /**
- * CardView — reusable card renderer.
+ * CardView — a physical-card face (card v3).
  *
- * Used by SendPage (write preview), QrPage (reader view), and TemplateSection (admin preview).
+ * Used by SendPage (template gallery + write preview), QrPage (reader view),
+ * TemplateSection (admin preview) and ModerationSection (thumbnail).
  *
- * Props:
- *   card:   { name, subject, message, title?, role? }
- *   layout: layout id from LAYOUTS (falls back to DEFAULT_LAYOUT if unknown)
- *   images: slot → 16-char token; invalid tokens are silently dropped
- *
- * Only the background and banner slots exist; any other key in images is ignored.
- *
- * The line under the name comes from roleLabel(): "Giáo viên: <môn>", "Giáo viên", or the
- * chức vụ alone for Hiệu trưởng / Phó hiệu trưởng.
- *
- * Image URLs are only built for tokens matching ^[a-z0-9]{16}$, so no
- * user-supplied string can reach the src/style attributes in another form.
+ * - The layout (resolveLayout: closed list, legacy ids mapped) fixes the ratio (3:4 / 4:3) and
+ *   the writing zone. The background image covers the whole card at 100%; no overlay.
+ * - Text is written in the student's ink and font. Both go through resolveInk / resolveFont and
+ *   React style objects, so only lowercase #rrggbb and a fixed font stack can reach CSS.
+ * - Sizes are in container-query units (cqw), so a 150 px thumbnail looks exactly like the full
+ *   card. After layout, the zone's font size shrinks step by step until the text fits.
+ * - The line under the name comes from roleLabel(): "Giáo viên: <môn>", "Giáo viên", or the
+ *   chức vụ alone for Hiệu trưởng / Phó hiệu trưởng.
+ * - Image URLs are built only for tokens matching ^[a-z0-9]{16}$. Only the background slot is used.
  */
-import { LAYOUTS, DEFAULT_LAYOUT, isLayout } from '../../shared/layouts.ts'
+import { useLayoutEffect, useRef } from 'react'
+import { resolveLayout } from '../../shared/layouts.ts'
+import { resolveFont, resolveInk } from '../../shared/fonts.ts'
 import { roleLabel } from '../../shared/api.ts'
 import site from '../content/site.json'
 
 type CardData = { name: string; subject: string; message: string; title?: 'Thầy' | 'Cô' | null; role?: string | null }
 type ImageMap = Partial<Record<string, string>>
 
-// Accepts exactly 16 lowercase alphanumeric chars — the generated token length.
-// 16 is the only valid length; validation rejects shorter/longer strings, path
-// traversal, and special characters regardless.
 const TOKEN_RE = /^[a-z0-9]{16}$/
 
 function imageUrl(token: string | undefined): string | null {
   if (!token || !TOKEN_RE.test(token)) return null
   return `/api/image/${token}`
+}
+
+/** Starting zone font size in cqw (card-width units) per ratio; shrinks from here to fit. */
+const BASE_SIZE = { portrait: 5.6, landscape: 4.2 } as const
+const SHRINK = 0.92
+const MAX_STEPS = 12 // 0.92^12 ≈ 0.37 of the base; beyond that the text is clipped by the zone
+
+/** Shrink the zone's font size until its content fits (bounded steps; no layout thrash loops). */
+function fitText(zone: HTMLElement, base: number) {
+  let size = base
+  zone.style.fontSize = `${size}cqw`
+  for (let i = 0; i < MAX_STEPS && zone.scrollHeight > zone.clientHeight + 1; i++) {
+    size *= SHRINK
+    zone.style.fontSize = `${size.toFixed(2)}cqw`
+  }
 }
 
 export default function CardView({
@@ -39,59 +51,66 @@ export default function CardView({
   images = {},
   from: fromOverride,
   headingLevel: Heading = 'h1',
+  ink,
+  font,
+  showZone = false,
 }: {
   card: CardData
   layout: string
   images: ImageMap
-  /** Optional signature line. When provided, replaces the default "Học sinh {org} / {date}" text. */
+  /** Optional signature line. When provided, replaces the default "Học sinh {org}" text. */
   from?: string
   /** Heading element for the teacher name. Use 'h2' when CardView appears in a list (default 'h1'). */
   headingLevel?: 'h1' | 'h2'
+  /** Student's ink (#rrggbb); anything else renders in the default blue. */
+  ink?: string
+  /** Student's font id; anything else renders in the default font. */
+  font?: string
+  /** Admin editor: outline the writing zone. */
+  showZone?: boolean
 }) {
-  // Validate layout id against the closed list; never use arbitrary strings as class names.
-  const layoutId = isLayout(layout) ? layout : DEFAULT_LAYOUT
-
+  const l = resolveLayout(layout)
   const bgUrl = imageUrl(images['background'])
-  const bannerUrl = imageUrl(images['banner'])
-
-  const hasBackground = bgUrl !== null
   const subLabel = roleLabel(card.role, card.subject)
+  const zoneRef = useRef<HTMLDivElement>(null)
+  const inkColor = resolveInk(ink)
+  const fontStack = resolveFont(font).stack
+  const from = fromOverride !== undefined ? fromOverride : `Học sinh ${site.organization}`
+
+  useLayoutEffect(() => {
+    const zone = zoneRef.current
+    if (!zone) return
+    const run = () => fitText(zone, BASE_SIZE[l.ratio])
+    run()
+    // Web fonts change text metrics once loaded; refit then (no-op if already loaded).
+    let alive = true
+    document.fonts?.ready.then(() => { if (alive) run() })
+    return () => { alive = false }
+  }, [l.ratio, l.id, card.message, card.name, card.title, subLabel, from, fontStack])
+
+  const z = l.zone
+  const classes = ['card', `card--${l.ratio}`]
+  if (bgUrl) classes.push('card--has-bg')
+  if (showZone) classes.push('card--show-zone')
 
   return (
     <article
-      className={`card card--${layoutId}${hasBackground ? ' card--has-bg' : ''}`}
+      className={classes.join(' ')}
+      data-layout={l.id}
       style={bgUrl ? { backgroundImage: `url(${bgUrl})` } : undefined}
     >
-      {bannerUrl && (
-        <img
-          className="card-banner"
-          src={bannerUrl}
-          alt=""
-          aria-hidden="true"
-        />
-      )}
-      <div className="card-body">
-        <p className="kicker">{site.title}</p>
+      <div
+        ref={zoneRef}
+        className="card-zone"
+        style={{ left: `${z.x}%`, top: `${z.y}%`, width: `${z.w}%`, height: `${z.h}%`, color: inkColor, fontFamily: fontStack }}
+      >
         <p className="to">Kính gửi</p>
-        <Heading>{card.title ? `${card.title} ${card.name}` : card.name}</Heading>
+        <Heading className="name">{card.title ? `${card.title} ${card.name}` : card.name}</Heading>
         {subLabel && <p className="sub">{subLabel}</p>}
-        <hr />
         <p className="msg">{card.message}</p>
-        <p className="from">
-          {fromOverride !== undefined ? (
-            fromOverride
-          ) : (
-            <>
-              Học sinh {site.organization}
-              <br />
-              {site.date}
-            </>
-          )}
-        </p>
+        <p className="from">{from}</p>
       </div>
+      <p className="card-stamp">{site.title} · 20/11</p>
     </article>
   )
 }
-
-// Re-export LAYOUTS so consumers can enumerate them without a second import.
-export { LAYOUTS, DEFAULT_LAYOUT }

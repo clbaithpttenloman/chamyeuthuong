@@ -13,6 +13,7 @@
 import { error, json } from './http.ts'
 import { ensureSchema } from './schema.ts'
 import { cardWhere, teacherWhere, fetchTemplateImages } from './publicSql.ts'
+import { resolveLayout } from '../shared/layouts.ts'
 import type { Env } from './types.ts'
 import type { Role } from '../shared/api.ts'
 
@@ -63,7 +64,7 @@ async function handleTemplateList(db: Env['DB']): Promise<Response> {
     templates.map((t) => ({
       id: t.id,
       name: t.name,
-      layout: t.layout,
+      layout: resolveLayout(t.layout).id,
       images: imgMap.get(t.id) ?? {},
     })),
   )

@@ -355,3 +355,17 @@ describe('DELETE /api/admin/cards/:id', () => {
     expect(r.status).toBe(404)
   })
 })
+
+// ---- Card v3: font, ink, resolved layout in admin cards ----
+
+describe('GET /api/admin/cards — card v3 fields', () => {
+  it('returns font, ink and the resolved template layout', async () => {
+    const id = await seedCard({ status: 'pending', publicId: 'pnd0000000000009' })
+    await db.prepare("UPDATE student_card SET font = 'mali', ink = '#1c1917' WHERE id = ?").bind(id).run()
+    const r = await handleModeration(req('GET', '/api/admin/cards?status=pending'), makeEnv(db), TEST_EMAIL)
+    const list = (await r.json()) as { id: number; font: string; ink: string; template: { layout: string } }[]
+    const card = list.find((c) => c.id === id)!
+    expect(card).toMatchObject({ font: 'mali', ink: '#1c1917' })
+    expect(card.template.layout).toBe('doc-giua') // template seeded with legacy 'classic'
+  })
+})

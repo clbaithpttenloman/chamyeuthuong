@@ -59,8 +59,13 @@ export const ABOUT_NEWLINES_MAX = 10
  */
 export type PublicCard = {
   publicId: string
+  /** Resolved layout id (legacy ids are mapped server-side). */
   layout: string
-  images: Record<string, string>  // slot → imageToken
+  images: Record<string, string>  // slot → imageToken (background only)
+  /** Font id from shared/fonts.ts (validated server-side; re-check with resolveFont). */
+  font: string
+  /** Lowercase #rrggbb (validated server-side; re-check with resolveInk). */
+  ink: string
   message: string
   /** Server-constructed display string; see formatFrom(). */
   from: string
@@ -132,6 +137,10 @@ export type SubmitCardRequest = {
   fromName?: string
   fromClass?: string
   anonymous?: boolean
+  /** Font id from FONTS (shared/fonts.ts); omitted → Bút bi. */
+  font?: string
+  /** #rrggbb; omitted → blue. Stored lowercase. */
+  ink?: string
 }
 
 // ---- AboutContent ----
@@ -203,7 +212,7 @@ export type AdminTemplateInput = {
   name: string
   layout: string
   active?: 0 | 1
-  images?: Record<string, number | null>  // slot → imageId (null removes slot)
+  images?: Record<string, number | null>  // 'background' → imageId (null removes it)
 }
 
 /** Card record in admin moderation API (includes raw student-submitted fields). */
@@ -216,6 +225,8 @@ export type AdminCard = {
   fromName: string
   fromClass: string
   anonymous: boolean
+  font: string
+  ink: string
   status: 'pending' | 'approved' | 'hidden'
   createdAt: string
   reviewedAt: string | null

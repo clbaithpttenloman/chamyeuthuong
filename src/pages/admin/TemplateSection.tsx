@@ -2,13 +2,14 @@
  * TemplateSection — Mẫu thiệp.
  *
  * Grid of active/inactive templates with usage counts.
- * Editor: name ≤60, layout select, background and banner slot pickers from the image library,
- * active switch, live preview with sample text.
+ * Editor: name ≤60, layout picker (ratio + writing zone), background picker from the image
+ * library with a size hint for the layout's ratio, active switch, live preview with the
+ * writing zone outlined so the admin can check the image leaves it clear.
  * Delete with 409 message "Mẫu đang được dùng — hãy tắt mẫu thay vì xóa".
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AdminTemplate, AdminTemplateInput } from '../../../shared/api.ts'
-import { LAYOUTS, SLOTS, type Slot, DEFAULT_LAYOUT } from '../../../shared/layouts.ts'
+import { LAYOUTS, SLOTS, type Slot, DEFAULT_LAYOUT, resolveLayout } from '../../../shared/layouts.ts'
 import {
   ApiError,
   type ImageRow,
@@ -34,8 +35,13 @@ type TemplateForm = {
 
 const SLOT_LABELS: Record<Slot, string> = {
   background: 'Ảnh nền',
-  banner: 'Banner',
 }
+
+/** Recommended upload size per card ratio (the compressor keeps the long side ≤ 1280 px). */
+const SIZE_HINT = {
+  portrait: 'Ảnh dọc 3:4, nên 960×1280. Chừa trống vùng viết (khung nét đứt bên phải).',
+  landscape: 'Ảnh ngang 4:3, nên 1280×960. Chừa trống vùng viết (khung nét đứt bên phải).',
+} as const
 
 const SAMPLE_CARD = {
   name: 'Tên thầy cô',
@@ -56,7 +62,7 @@ function templateToForm(t: AdminTemplate): TemplateForm {
     const img = t.images[slot]
     if (img) images[slot] = img
   }
-  return { name: t.name, layout: t.layout, active: t.active, images }
+  return { name: t.name, layout: resolveLayout(t.layout).id, active: t.active, images }
 }
 
 export default function TemplateSection({
@@ -237,15 +243,14 @@ export default function TemplateSection({
               className={`template-admin-tile${editing === tpl.id ? ' template-admin-tile--editing' : ''}`}
             >
               <div className="card-mini">
-                <div className="card-mini-inner">
-                  <CardView
-                    card={SAMPLE_CARD}
-                    layout={tpl.layout}
-                    images={Object.fromEntries(
-                      SLOTS.map((s) => [s, tpl.images[s]?.token ?? '']).filter(([, v]) => v),
-                    )}
-                  />
-                </div>
+                <CardView
+                  card={SAMPLE_CARD}
+                  layout={tpl.layout}
+                  images={Object.fromEntries(
+                    SLOTS.map((s) => [s, tpl.images[s]?.token ?? '']).filter(([, v]) => v),
+                  )}
+                  headingLevel="h2"
+                />
               </div>
               <div className="template-admin-name">{tpl.name}</div>
               <div className="template-admin-usage">
@@ -286,17 +291,26 @@ export default function TemplateSection({
                 <small>{form.name.length}/60 ký tự</small>
               </label>
 
-              <label>
-                Bố cục
-                <select
-                  value={form.layout}
-                  onChange={(e) => setForm((f) => ({ ...f, layout: e.target.value }))}
-                >
+              <fieldset className="write-choice">
+                <legend>Bố cục (khung thiệp và vùng viết)</legend>
+                <div className="layout-options">
                   {LAYOUTS.map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
+                    <label key={l.id} className={`layout-option${form.layout === l.id ? ' layout-option--selected' : ''}`}>
+                      <input
+                        type="radio"
+                        name="layout"
+                        value={l.id}
+                        checked={form.layout === l.id}
+                        onChange={() => setForm((f) => ({ ...f, layout: l.id }))}
+                      />
+                      <span className={`layout-icon layout-icon--${l.ratio}`} aria-hidden="true">
+                        <i style={{ left: `${l.zone.x}%`, top: `${l.zone.y}%`, width: `${l.zone.w}%`, height: `${l.zone.h}%` }} />
+                      </span>
+                      {l.name}
+                    </label>
                   ))}
-                </select>
-              </label>
+                </div>
+              </fieldset>
 
               <label className="write-anon" style={{ gap: '0.5rem' }}>
                 <input
@@ -315,6 +329,7 @@ export default function TemplateSection({
                 return (
                   <div key={slot} className="slot-picker">
                     <span className="slot-picker-label">{SLOT_LABELS[slot]}</span>
+                    <small>{SIZE_HINT[resolveLayout(form.layout).ratio]}</small>
                     <div className="slot-picker-row">
                       {current ? (
                         <>
@@ -375,6 +390,7 @@ export default function TemplateSection({
                   card={SAMPLE_CARD}
                   layout={form.layout}
                   images={previewImages}
+                  showZone
                 />
               </div>
             </div>

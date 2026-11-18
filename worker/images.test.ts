@@ -1273,3 +1273,64 @@ describe('handlePublicImage — cache.put goes through ctx.waitUntil', () => {
     expect(putCalled).toBe(true)
   })
 })
+
+// ===================================================================
+// Card v3: legacy banner/photo links (old template_image CHECK) never block or count
+// ===================================================================
+
+describe('legacy template_image links (banner/photo)', () => {
+  // Old DBs keep the pre-v3 CHECK, so banner/photo rows can still exist there.
+  const LEGACY_TI = `CREATE TABLE template_image (
+    template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
+    slot        TEXT    NOT NULL CHECK (slot IN ('background','banner','photo')),
+    image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+    PRIMARY KEY (template_id, slot))`
+
+  async function legacySetup() {
+    const t = testDb()
+    t.sqlite.exec('DROP TABLE template_image')
+    t.sqlite.exec(LEGACY_TI)
+    t.sqlite.exec(`INSERT INTO image (id, token, name, mime, size, data, created_at, created_by) VALUES
+      (1, 'img0000000000001', 'bg', 'image/png', 1, 'AA==', 'x', 'a'),
+      (2, 'img0000000000002', 'banner only', 'image/png', 1, 'AA==', 'x', 'a'),
+      (3, 'img0000000000003', 'bg+banner', 'image/png', 1, 'AA==', 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES
+      (1, 'T1', 'classic', 1, 'x', 'a'), (2, 'T2', 'classic', 1, 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template_image (template_id, slot, image_id) VALUES
+      (1, 'background', 1), (1, 'banner', 2), (1, 'photo', 2), (2, 'background', 3), (2, 'banner', 3)`)
+    return t
+  }
+  const links = (t: ReturnType<typeof testDb>, imageId: number) =>
+    (t.sqlite.prepare('SELECT slot FROM template_image WHERE image_id = ? ORDER BY slot').all(imageId) as { slot: string }[]).map((r) => r.slot)
+
+  it('used_by counts only background links', async () => {
+    const t = await legacySetup()
+    const list = await (await handleImages(imageReq('GET', '/api/admin/images'), makeEnv(t.db), TEST_EMAIL)).json() as Array<{ id: number; used_by: number }>
+    expect(Object.fromEntries(list.map((i) => [i.id, i.used_by]))).toEqual({ 1: 1, 2: 0, 3: 1 })
+  })
+
+  it('an image linked only as banner/photo can be deleted; its legacy links go with it', async () => {
+    const t = await legacySetup()
+    const r = await handleImages(imageReq('DELETE', '/api/admin/images/2'), makeEnv(t.db), TEST_EMAIL)
+    expect(r.status).toBe(200)
+    expect(t.sqlite.prepare('SELECT id FROM image WHERE id = 2').get()).toBeUndefined()
+    expect(links(t, 2)).toEqual([])
+    expect(links(t, 1)).toEqual(['background']) // other image's links untouched
+  })
+
+  it('an image with background AND banner links → 409, and the banner link survives (batch rolled back)', async () => {
+    const t = await legacySetup()
+    const r = await handleImages(imageReq('DELETE', '/api/admin/images/3'), makeEnv(t.db), TEST_EMAIL)
+    expect(r.status).toBe(409)
+    expect(links(t, 3)).toEqual(['background', 'banner'])
+  })
+
+  it('fresh CHECK shape: background link → 409 (banner rows cannot exist there)', async () => {
+    const t = testDb()
+    t.sqlite.exec(`INSERT INTO image (id, token, name, mime, size, data, created_at, created_by) VALUES (1, 'img0000000000001', 'bg', 'image/png', 1, 'AA==', 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (1, 'T1', 'doc-giua', 1, 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template_image (template_id, slot, image_id) VALUES (1, 'background', 1)`)
+    expect(() => t.sqlite.exec(`INSERT INTO template_image (template_id, slot, image_id) VALUES (1, 'banner', 1)`)).toThrow(/CHECK/)
+    expect((await handleImages(imageReq('DELETE', '/api/admin/images/1'), makeEnv(t.db), TEST_EMAIL)).status).toBe(409)
+  })
+})

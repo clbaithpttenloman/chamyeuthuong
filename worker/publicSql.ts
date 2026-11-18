@@ -7,7 +7,8 @@
  * stays consistent across endpoints.
  */
 import { formatFrom } from '../shared/api.ts'
-import { isSlot } from '../shared/layouts.ts'
+import { isSlot, resolveLayout } from '../shared/layouts.ts'
+import { resolveFont, resolveInk } from '../shared/fonts.ts'
 import type { Env } from './types.ts'
 
 /**
@@ -30,6 +31,8 @@ export function teacherWhere(alias: string): string {
 export type CardRow = {
   public_id: string
   layout: string
+  font: string
+  ink: string
   message: string
   from_name: string
   from_class: string
@@ -66,8 +69,10 @@ export async function fetchTemplateImages(
 export function toPublicCard(row: CardRow, images: Record<string, string>) {
   return {
     publicId: row.public_id,
-    layout: row.layout,
+    layout: resolveLayout(row.layout).id,
     images,
+    font: resolveFont(row.font).id,
+    ink: resolveInk(row.ink),
     message: row.message,
     from: formatFrom({
       fromName: row.from_name,

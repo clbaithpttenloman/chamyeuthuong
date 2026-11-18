@@ -395,3 +395,31 @@ describe('GET /api/qr/:token — teacher without a teacher_profile row', () => {
     expect(((await r.json()) as { teacher: { role: string } }).teacher.role).toBe('Giáo viên')
   })
 })
+
+// ---- Card v3: font, ink, resolved layout, background only ----
+
+describe('GET /api/qr/:token — card v3 fields', () => {
+  it('each card carries font, ink and the resolved layout; only the background image', async () => {
+    const { db } = testDb()
+    const { tid } = await seedTeacher(db)
+    const tmplId = await seedTemplate(db) // legacy layout 'classic'
+    await db.prepare("INSERT INTO image (id, token, name, mime, size, data, created_at, created_by) VALUES (1, 'img0000000000001', 'bg', 'image/png', 1, 'AA==', 'x', 'a')").run()
+    await db.prepare("INSERT INTO template_image (template_id, slot, image_id) VALUES (?, 'background', 1)").bind(tmplId).run()
+    await db.prepare("INSERT INTO student_card (public_id,teacher_id,template_id,message,status,created_at,font,ink) VALUES ('crd0000000000001',?,?,'a','approved','2026-11-18T01:00:00Z','lora','#6b21a8')").bind(tid, tmplId).run()
+    await db.prepare("INSERT INTO student_card (public_id,teacher_id,template_id,message,status,created_at) VALUES ('crd0000000000002',?,?,'b','approved','2026-11-18T00:00:00Z')").bind(tid, tmplId).run()
+    const r = await handleQr(new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
+    const { cards } = (await r.json()) as { cards: { font: string; ink: string; layout: string; images: Record<string, string> }[] }
+    expect(cards.map((c) => [c.font, c.ink, c.layout])).toEqual([['lora', '#6b21a8', 'doc-giua'], ['patrick-hand', '#1d3fa6', 'doc-giua']])
+    expect(cards[0].images).toEqual({ background: 'img0000000000001' })
+  })
+
+  it('a stored font or ink that is not valid any more is returned as the default', async () => {
+    const { db } = testDb()
+    const { tid } = await seedTeacher(db)
+    const tmplId = await seedTemplate(db)
+    await db.prepare("INSERT INTO student_card (public_id,teacher_id,template_id,message,status,created_at,font) VALUES ('crd0000000000001',?,?,'a','approved','x','retired-font')").bind(tid, tmplId).run()
+    const r = await handleQr(new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }), makeEnv(db))
+    const { cards } = (await r.json()) as { cards: { font: string; ink: string }[] }
+    expect(cards[0]).toMatchObject({ font: 'patrick-hand', ink: '#1d3fa6' })
+  })
+})

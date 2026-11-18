@@ -1,11 +1,19 @@
 // @vitest-environment node
 // Tests for worker/schema.ts
-import { describe, it, expect } from 'vitest'
-import { SCHEMA, UPGRADE_SQL, ensureSchema } from './schema.ts'
+import { describe, it, expect, vi } from 'vitest'
+import { SCHEMA, UPGRADE_SQL, SEED_STATEMENT_COUNT, ensureSchema } from './schema.ts'
+import { SEED_IMAGES } from './seedImages.ts'
+import { checkDimensions, magicOk } from './images.ts'
+import { LAYOUTS } from '../shared/layouts.ts'
 import { ROLES } from '../shared/api.ts'
 import { SEEDS } from './seed.ts'
 import { testDb } from './testDb.ts'
 import type { D1Stmt } from './types.ts'
+
+// Statements a fresh (unseeded) database prepares on its first ensureSchema: the SCHEMA batch,
+// one column probe per upgradable table (teacher_profile, student_card), the seed-flag probe,
+// and the seed batch.
+const FRESH_COLD_START = SCHEMA.length + 3 + SEED_STATEMENT_COUNT
 
 // ---- SCHEMA shape ----
 
@@ -49,7 +57,7 @@ describe('ensureSchema — creation', () => {
   it('counts DDL statements in state.ddl only (not state.prepares)', async () => {
     const { db, state } = testDb({ schema: false })
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length + 1) // + the teacher_profile upgrade probe
+    expect(state.ddl).toBe(FRESH_COLD_START)
     expect(state.prepares).toBe(0)
   })
 })
@@ -63,7 +71,7 @@ describe('ensureSchema — idempotency', () => {
     const p2 = ensureSchema(db)
     expect(p1).toBe(p2) // same promise — cache hit
     await p1
-    expect(state.ddl).toBe(SCHEMA.length + 1) // one batch of DDL + one upgrade probe
+    expect(state.ddl).toBe(FRESH_COLD_START)
   })
 
   it('awaiting twice on the same db issues no extra DDL', async () => {
@@ -124,7 +132,7 @@ describe('ensureSchema — concurrency', () => {
     expect(r1).toBeUndefined()
     expect(r2).toBeUndefined()
     expect(r3).toBeUndefined()
-    expect(state.ddl).toBe(SCHEMA.length + 1) // one batch + one upgrade probe
+    expect(state.ddl).toBe(FRESH_COLD_START)
   })
 })
 
@@ -383,7 +391,7 @@ describe('SCHEMA seeds — 12 example wishes', () => {
   it('seeds are counted as DDL by testDb state.ddl', async () => {
     const { db, state } = testDb({ schema: false })
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length + 1) // + the teacher_profile upgrade probe
+    expect(state.ddl).toBe(FRESH_COLD_START)
     expect(state.prepares).toBe(0)
   })
 })
@@ -646,7 +654,7 @@ describe('template_image table constraints', () => {
     expect(names).toContain('template_image')
   })
 
-  it('slot CHECK accepts background, banner', () => {
+  it('slot CHECK accepts background and rejects banner (card v3)', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
@@ -655,9 +663,9 @@ describe('template_image table constraints', () => {
       const imgTok = `img${slot.slice(0,3)}12345678901`
       sqlite.prepare(`INSERT INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('${imgTok}','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')`).run()
       const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get(imgTok) as { id: number }).id
-      expect(() => {
-        sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, '${slot}', ${imgId})`).run()
-      }).not.toThrow()
+      const insert = () => sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, '${slot}', ${imgId})`).run()
+      if (slot === 'background') expect(insert).not.toThrow()
+      else expect(insert).toThrow(/CHECK/)
     }
   })
 
@@ -825,7 +833,7 @@ describe('template_image slot CHECK — only background/banner', () => {
     }).toThrow()
   })
 
-  it('slot CHECK still accepts background and banner after the new CHECK', () => {
+  it('slot CHECK on a fresh DB: background only (banner removed in card v3)', () => {
     const { sqlite } = testDb()
     sqlite.exec('PRAGMA foreign_keys = ON')
     sqlite.prepare("INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('T','classic',1,'2024-01-01','a@b.com')").run()
@@ -834,9 +842,9 @@ describe('template_image slot CHECK — only background/banner', () => {
       const imgTok = `img${slot.slice(0, 3)}12345678901`
       sqlite.prepare(`INSERT OR IGNORE INTO image (token,name,mime,size,data,created_at,created_by) VALUES ('${imgTok}','x.jpg','image/jpeg',100,'d','2024-01-01','a@b.com')`).run()
       const imgId = (sqlite.prepare('SELECT id FROM image WHERE token=?').get(imgTok) as { id: number }).id
-      expect(() => {
-        sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, '${slot}', ${imgId})`).run()
-      }).not.toThrow()
+      const insert = () => sqlite.prepare(`INSERT INTO template_image (template_id, slot, image_id) VALUES (${tmplId}, '${slot}', ${imgId})`).run()
+      if (slot === 'background') expect(insert).not.toThrow()
+      else expect(insert).toThrow(/CHECK/)
     }
   })
 })
@@ -963,7 +971,7 @@ describe('ensureSchema — upgrades teacher_profile from the 4d3a5df shape', () 
     const before = sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()
     await ensureSchema(db)
     expect(sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()).toEqual(before)
-    expect(state.ddl).toBe(SCHEMA.length + 1) // SCHEMA + probe, no rebuild statements
+    expect(state.ddl).toBe(SCHEMA.length + 3) // SCHEMA + 2 table probes + seed probe, no rebuild
   })
 
   it('running the rebuild twice keeps the same rows', async () => {
@@ -1065,5 +1073,239 @@ describe('ensureSchema — teacher_profile.role', () => {
     t.sqlite.exec(`INSERT INTO teacher_profile (teacher_id, role, public_id) VALUES (1, 'Hiệu trưởng', 'p')`)
     await ensureSchema(t.db)
     expect(t.sqlite.prepare('SELECT role FROM teacher_profile').get()).toEqual({ role: 'Hiệu trưởng' })
+  })
+})
+
+// ===================================================================
+// Card v3: student_card.font / ink, legacy slots, one-time image seed
+// ===================================================================
+
+// student_card exactly as before card v3 (no font, no ink)
+const OLD_STUDENT_CARD = `CREATE TABLE student_card (
+  id          INTEGER PRIMARY KEY,
+  public_id   TEXT    UNIQUE NOT NULL,
+  teacher_id  INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+  template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE RESTRICT,
+  message     TEXT    NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+  from_name   TEXT    NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
+  from_class  TEXT    NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
+  anonymous   INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
+  status      TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
+  created_at  TEXT    NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by TEXT
+)`
+// template_image as before card v3 (banner allowed)
+const OLD_TEMPLATE_IMAGE = `CREATE TABLE template_image (
+  template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
+  slot        TEXT    NOT NULL CHECK (slot IN ('background','banner')),
+  image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+  PRIMARY KEY (template_id, slot)
+)`
+
+type Sqlite = ReturnType<typeof testDb>['sqlite']
+const cardCols = (sqlite: Sqlite) =>
+  (sqlite.prepare("PRAGMA table_info('student_card')").all() as { name: string }[]).map((c) => c.name)
+
+/** Old card table + one teacher, template and existing card. */
+function withOldCards(t: ReturnType<typeof testDb>) {
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_teacher_status')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_status_created')
+  t.sqlite.exec('DROP TABLE student_card')
+  t.sqlite.exec(OLD_STUDENT_CARD)
+  t.sqlite.exec(`INSERT OR IGNORE INTO teacher (id, token, name, created_at) VALUES (1, 'tok1234567890abc', 'Khoa', '2026-11-17')`)
+  t.sqlite.exec(`INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (1, 'Cũ', 'classic', 1, '2026-11-17', 'a@b.c')`)
+  t.sqlite.exec(`INSERT INTO student_card (public_id, teacher_id, template_id, message, created_at) VALUES ('card123456789012', 1, 1, 'Chúc thầy', '2026-11-17')`)
+  return t
+}
+
+describe('ensureSchema — student_card.font / ink', () => {
+  it('fresh DB: both columns with defaults and CHECKs', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    expect(cardCols(sqlite)).toEqual(expect.arrayContaining(['font', 'ink']))
+    const ins = (font: string, ink: string) => sqlite.exec(
+      `INSERT INTO teacher (token, name, created_at) VALUES ('t${Math.random().toString(36).slice(2, 17).padEnd(15, 'x')}', 'A', 'x');` +
+      `INSERT INTO student_card (public_id, teacher_id, template_id, message, created_at, font, ink) VALUES ('p${Math.random().toString(36).slice(2, 17).padEnd(15, 'x')}', last_insert_rowid(), (SELECT MIN(id) FROM template), 'm', 'x', '${font}', '${ink}')`)
+    expect(() => ins('lora', '#6b21a8')).not.toThrow()
+    for (const bad of ['#ZZZZZZ', 'red', '#ABCDEF', '#abc', '#abcdef0']) expect(() => ins('lora', bad)).toThrow(/CHECK/)
+    expect(() => ins('x'.repeat(33), '#000000')).toThrow(/CHECK/)
+  })
+
+  it('pre-v3 DB: ADD COLUMN path; existing card gets Bút bi + blue; ink CHECK enforced (real SQLite)', async () => {
+    const t = withOldCards(testDb())
+    await ensureSchema(t.db)
+    expect(cardCols(t.sqlite)).toEqual(expect.arrayContaining(['font', 'ink']))
+    expect(t.sqlite.prepare('SELECT font, ink FROM student_card').get()).toEqual({ font: 'patrick-hand', ink: '#1d3fa6' })
+    expect(() => t.sqlite.exec("UPDATE student_card SET ink = 'red'")).toThrow(/CHECK/)
+    expect(() => t.sqlite.exec("UPDATE student_card SET ink = '#ZZZZZZ'")).toThrow(/CHECK/)
+  })
+
+  it('DB with font but not ink: only ink is added', async () => {
+    const t = withOldCards(testDb())
+    t.sqlite.exec("ALTER TABLE student_card ADD COLUMN font TEXT NOT NULL DEFAULT 'lora'")
+    await ensureSchema(t.db)
+    expect(t.sqlite.prepare('SELECT font, ink FROM student_card').get()).toEqual({ font: 'lora', ink: '#1d3fa6' })
+  })
+
+  it('current DB: one probe per table, no upgrade statements', async () => {
+    const { db, state } = testDb()
+    await ensureSchema(db)
+    // SCHEMA batch + teacher_profile probe + student_card probe + seed-flag probe
+    expect(state.ddl).toBe(SCHEMA.length + 3)
+    expect(state.prepares).toBe(0)
+  })
+})
+
+describe('ensureSchema — 4d3a5df fixture through every step', () => {
+  function fixture() {
+    const t = oldDb() // teacher_profile with public_id, no role; teacher 1
+    withOldCards(t)
+    t.sqlite.exec('DROP TABLE template_image')
+    t.sqlite.exec(OLD_TEMPLATE_IMAGE)
+    t.sqlite.exec(`INSERT INTO image (id, token, name, mime, size, data, created_at, created_by) VALUES
+      (1, 'img0000000000001', 'bg', 'image/png', 1, 'AA==', 'x', 'a'),
+      (2, 'img0000000000002', 'banner only', 'image/png', 1, 'AA==', 'x', 'a')`)
+    t.sqlite.exec(`INSERT INTO template_image (template_id, slot, image_id) VALUES (1, 'background', 1), (1, 'banner', 2)`)
+    return t
+  }
+
+  it('ends with the current shape and keeps all rows (run twice)', async () => {
+    const t = fixture()
+    await ensureSchema(t.db)
+    await ensureSchema(testDb({ shareWith: t.sqlite }).db) // a later isolate
+    expect(cols(t.sqlite)).toEqual(['teacher_id', 'department', 'show_on_home', 'role'])
+    expect(cardCols(t.sqlite)).toEqual(expect.arrayContaining(['font', 'ink']))
+    expect(t.sqlite.prepare('SELECT font, ink FROM student_card').get()).toEqual({ font: 'patrick-hand', ink: '#1d3fa6' })
+    expect(t.sqlite.prepare("SELECT COUNT(*) AS n FROM template_image WHERE slot = 'banner'").get()).toEqual({ n: 1 }) // legacy link left in place
+  })
+
+  it('two isolates racing: both settle, the end state is the same', async () => {
+    const t = fixture()
+    const b = testDb({ shareWith: t.sqlite })
+    const results = await Promise.allSettled([ensureSchema(t.db), ensureSchema(b.db)])
+    // A loser of the ADD COLUMN race may reject once; its retry must succeed.
+    for (const [i, r] of results.entries()) if (r.status === 'rejected') await ensureSchema(i === 0 ? t.db : b.db)
+    expect(cardCols(t.sqlite)).toEqual(expect.arrayContaining(['font', 'ink']))
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM student_card').get()).toEqual({ n: 1 })
+    expect(t.sqlite.prepare("SELECT COUNT(*) AS n FROM meta WHERE key = 'images_seeded'").get()).toEqual({ n: 1 })
+  })
+})
+
+describe('ensureSchema — one-time image seed', () => {
+  const count = (sqlite: Sqlite, sql: string) => (sqlite.prepare(sql).get() as { n: number }).n
+
+  it('fresh DB: 6 seed images, 6 example templates linked by token, flag set', async () => {
+    const { db, sqlite } = testDb({ seeded: false })
+    await ensureSchema(db)
+    expect(count(sqlite, "SELECT COUNT(*) AS n FROM image WHERE created_by = 'seed'")).toBe(6)
+    expect(count(sqlite, "SELECT COUNT(*) AS n FROM template WHERE created_by = 'seed' AND active = 1")).toBe(6)
+    expect(count(sqlite, "SELECT COUNT(*) AS n FROM template_image ti JOIN template t ON t.id = ti.template_id JOIN image i ON i.id = ti.image_id WHERE t.created_by = 'seed' AND i.created_by = 'seed' AND ti.slot = 'background' AND t.name = i.name")).toBe(6)
+    expect(count(sqlite, "SELECT COUNT(*) AS n FROM meta WHERE key = 'images_seeded'")).toBe(1)
+    for (const s of SEED_IMAGES) {
+      expect(sqlite.prepare('SELECT layout FROM template WHERE name = ?').get(s.name)).toEqual({ layout: s.layout })
+      expect(sqlite.prepare('SELECT size, mime FROM image WHERE token = ?').get(s.token)).toEqual({ size: s.size, mime: 'image/webp' })
+    }
+  })
+
+  it('a second run (new isolate) adds nothing', async () => {
+    const { db, sqlite } = testDb({ seeded: false })
+    await ensureSchema(db)
+    await ensureSchema(testDb({ shareWith: sqlite }).db)
+    expect(count(sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(6)
+    expect(count(sqlite, 'SELECT COUNT(*) AS n FROM template')).toBe(6)
+    expect(count(sqlite, 'SELECT COUNT(*) AS n FROM template_image')).toBe(6)
+  })
+
+  it('existing admin images and templates are untouched; seed rows are added', async () => {
+    const { db, sqlite } = testDb({ seeded: false })
+    sqlite.exec(`INSERT INTO image (token, name, mime, size, data, created_at, created_by) VALUES ('adm0000000000001', 'Ảnh admin', 'image/png', 1, 'AA==', 'x', 'a@b.c')`)
+    sqlite.exec(`INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('Mẫu admin', 'lotus', 0, 'x', 'a@b.c')`)
+    await ensureSchema(db)
+    expect(sqlite.prepare("SELECT name, mime, data FROM image WHERE token = 'adm0000000000001'").get()).toEqual({ name: 'Ảnh admin', mime: 'image/png', data: 'AA==' })
+    expect(sqlite.prepare("SELECT layout, active FROM template WHERE name = 'Mẫu admin'").get()).toEqual({ layout: 'lotus', active: 0 })
+    expect(count(sqlite, "SELECT COUNT(*) AS n FROM template WHERE created_by = 'seed'")).toBe(6)
+  })
+
+  it('an image already holding a seed token is kept unchanged (and still linked by token)', async () => {
+    const { db, sqlite } = testDb({ seeded: false })
+    sqlite.exec(`INSERT INTO image (token, name, mime, size, data, created_at, created_by) VALUES ('${SEED_IMAGES[0].token}', 'giữ nguyên', 'image/png', 1, 'AA==', 'x', 'a@b.c')`)
+    await ensureSchema(db)
+    expect(sqlite.prepare('SELECT name, data FROM image WHERE token = ?').get(SEED_IMAGES[0].token)).toEqual({ name: 'giữ nguyên', data: 'AA==' })
+  })
+
+  it('an admin template that happens to use a seed name is never linked', async () => {
+    const { db, sqlite } = testDb({ seeded: false })
+    sqlite.exec(`INSERT INTO template (name, layout, active, created_at, created_by) VALUES ('${SEED_IMAGES[0].name}', 'lotus', 1, 'x', 'a@b.c')`)
+    await ensureSchema(db)
+    expect(count(sqlite, "SELECT COUNT(*) AS n FROM template_image ti JOIN template t ON t.id = ti.template_id WHERE t.created_by <> 'seed'")).toBe(0)
+  })
+
+  it('flag already set → no seed statement is prepared', async () => {
+    const { db, sqlite, state } = testDb()
+    await ensureSchema(db)
+    expect(state.ddl).toBe(SCHEMA.length + 3)
+    expect(count(sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(0)
+  })
+
+  it('two isolates racing the seed: exactly 6/6/6 and one flag', async () => {
+    const a = testDb({ seeded: false })
+    const b = testDb({ shareWith: a.sqlite })
+    await Promise.all([ensureSchema(a.db), ensureSchema(b.db)])
+    expect(count(a.sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(6)
+    expect(count(a.sqlite, 'SELECT COUNT(*) AS n FROM template')).toBe(6)
+    expect(count(a.sqlite, 'SELECT COUNT(*) AS n FROM template_image')).toBe(6)
+    expect(count(a.sqlite, "SELECT COUNT(*) AS n FROM meta WHERE key = 'images_seeded'")).toBe(1)
+  })
+
+  it('seed batch failure: ensureSchema still resolves, fixed log, nothing written, attempted once per isolate', async () => {
+    const t = testDb({ seeded: false })
+    let seedBatches = 0
+    const db = {
+      prepare: t.db.prepare,
+      batch: (stmts: Parameters<typeof t.db.batch>[0]) => {
+        if (stmts.length === SEED_STATEMENT_COUNT) { seedBatches++; return Promise.reject(new Error('D1_ERROR: seed')) }
+        return t.db.batch(stmts)
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(ensureSchema(db)).resolves.toBeUndefined()
+    await expect(ensureSchema(db)).resolves.toBeUndefined()
+    expect(seedBatches).toBe(1)
+    expect(spy).toHaveBeenCalledWith('schema: seed images failed')
+    expect(spy.mock.calls.flat().join(' ')).not.toMatch(/D1_ERROR/) // fixed string only
+    expect(count(t.sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(0)
+    expect(count(t.sqlite, "SELECT COUNT(*) AS n FROM meta WHERE key = 'images_seeded'")).toBe(0)
+    spy.mockRestore()
+  })
+})
+
+describe('seed images — shipped files are safe', () => {
+  const decode = (b64: string) => Uint8Array.from(Buffer.from(b64, 'base64'))
+  const chunks = (b: Uint8Array) => {
+    const out: string[] = []
+    for (let i = 12; i + 8 <= b.length;) {
+      const n = b[i + 4] | (b[i + 5] << 8) | (b[i + 6] << 16) | (b[i + 7] << 24)
+      out.push(String.fromCharCode(...b.slice(i, i + 4)))
+      i += 8 + n + (n & 1)
+    }
+    return out
+  }
+  it('six images, one per layout, unique seed tokens', () => {
+    expect(SEED_IMAGES.map((s) => s.layout)).toEqual(LAYOUTS.map((l) => l.id))
+    expect(new Set(SEED_IMAGES.map((s) => s.token)).size).toBe(6)
+    for (const s of SEED_IMAGES) expect(s.token).toMatch(/^seedbg\d{10}$/)
+  })
+  it('each is a plain WebP ≤ 300 KB whose size matches, passes the uploader checks, no metadata chunks', () => {
+    for (const s of SEED_IMAGES) {
+      const b = decode(s.data)
+      expect(b.length).toBe(s.size)
+      expect(b.length).toBeLessThanOrEqual(307200)
+      expect(magicOk('image/webp', b)).toBe(true)
+      const dim = checkDimensions('image/webp', b)
+      const portrait = s.layout.startsWith('doc')
+      expect(dim).toEqual(portrait ? { w: 960, h: 1280 } : { w: 1280, h: 960 })
+      expect(chunks(b)).toEqual(['VP8 '])
+    }
   })
 })

@@ -80,7 +80,7 @@ describe('GET /api/admin/templates', () => {
 
   it('response includes { id, name, layout, active, images, created_at, created_by }', async () => {
     await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'Test', layout: 'classic' }),
+      req('POST', '/api/admin/templates', { name: 'Test', layout: 'doc-giua' }),
       makeEnv(db), TEST_EMAIL,
     )
     const r = await handleTemplates(req('GET', '/api/admin/templates'), makeEnv(db), TEST_EMAIL)
@@ -88,7 +88,7 @@ describe('GET /api/admin/templates', () => {
     expect(list).toHaveLength(1)
     expect(list[0]).toHaveProperty('id')
     expect(list[0]).toHaveProperty('name', 'Test')
-    expect(list[0]).toHaveProperty('layout', 'classic')
+    expect(list[0]).toHaveProperty('layout', 'doc-giua')
     expect(list[0]).toHaveProperty('active')
     expect(list[0]).toHaveProperty('images')
     expect(list[0]).toHaveProperty('created_at')
@@ -101,14 +101,14 @@ describe('GET /api/admin/templates', () => {
 describe('POST /api/admin/templates', () => {
   it('creates template with defaults, returns 200 AdminTemplate', async () => {
     const r = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'Holiday', layout: 'lotus' }),
+      req('POST', '/api/admin/templates', { name: 'Holiday', layout: 'doc-duoi' }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(200)
     const body = await r.json() as Record<string, unknown>
     expect(body).toHaveProperty('id')
     expect(body.name).toBe('Holiday')
-    expect(body.layout).toBe('lotus')
+    expect(body.layout).toBe('doc-duoi')
     expect(body).toHaveProperty('active', 1)
     expect(typeof (body.images as object)).toBe('object')
     expect(body.created_by).toBe(TEST_EMAIL)
@@ -116,7 +116,7 @@ describe('POST /api/admin/templates', () => {
 
   it('name > 60 chars → 400', async () => {
     const r = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'x'.repeat(61), layout: 'classic' }),
+      req('POST', '/api/admin/templates', { name: 'x'.repeat(61), layout: 'doc-giua' }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(400)
@@ -130,8 +130,8 @@ describe('POST /api/admin/templates', () => {
     expect(r.status).toBe(400)
   })
 
-  it('valid layouts accepted: classic, lotus, spring, night, minimal', async () => {
-    for (const layout of ['classic', 'lotus', 'spring', 'night', 'minimal']) {
+  it('valid layouts accepted: all six card-v3 layouts', async () => {
+    for (const layout of ['doc-giua', 'doc-duoi', 'doc-tren', 'ngang-giua', 'ngang-phai', 'ngang-trai']) {
       const r = await handleTemplates(
         req('POST', '/api/admin/templates', { name: `T-${layout}`, layout }),
         makeEnv(db), TEST_EMAIL,
@@ -144,7 +144,7 @@ describe('POST /api/admin/templates', () => {
     const imgId = await seedImage(db)
     const r = await handleTemplates(
       req('POST', '/api/admin/templates', {
-        name: 'WithImage', layout: 'classic',
+        name: 'WithImage', layout: 'doc-giua',
         images: { background: imgId },
       }),
       makeEnv(db), TEST_EMAIL,
@@ -157,8 +157,8 @@ describe('POST /api/admin/templates', () => {
   it('unknown image id → 400', async () => {
     const r = await handleTemplates(
       req('POST', '/api/admin/templates', {
-        name: 'T', layout: 'classic',
-        images: { banner: 9999 },
+        name: 'T', layout: 'doc-giua',
+        images: { background: 9999 },
       }),
       makeEnv(db), TEST_EMAIL,
     )
@@ -169,7 +169,7 @@ describe('POST /api/admin/templates', () => {
     const imgId = await seedImage(db)
     const r = await handleTemplates(
       req('POST', '/api/admin/templates', {
-        name: 'T', layout: 'classic',
+        name: 'T', layout: 'doc-giua',
         images: { badslot: imgId },
       }),
       makeEnv(db), TEST_EMAIL,
@@ -183,23 +183,23 @@ describe('POST /api/admin/templates', () => {
 describe('PUT /api/admin/templates/:id', () => {
   it('updates name, layout, active', async () => {
     const created = await (
-      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
 
     const r = await handleTemplates(
-      req('PUT', `/api/admin/templates/${created.id}`, { name: 'Updated', layout: 'lotus', active: 0 }),
+      req('PUT', `/api/admin/templates/${created.id}`, { name: 'Updated', layout: 'doc-duoi', active: 0 }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(200)
     const body = await r.json() as { name: string; layout: string; active: number }
     expect(body.name).toBe('Updated')
-    expect(body.layout).toBe('lotus')
+    expect(body.layout).toBe('doc-duoi')
     expect(body.active).toBe(0)
   })
 
   it('unknown id → 404', async () => {
     const r = await handleTemplates(
-      req('PUT', '/api/admin/templates/9999', { name: 'T', layout: 'classic' }),
+      req('PUT', '/api/admin/templates/9999', { name: 'T', layout: 'doc-giua' }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(404)
@@ -207,7 +207,7 @@ describe('PUT /api/admin/templates/:id', () => {
 
   it('invalid layout → 400', async () => {
     const created = await (
-      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
     const r = await handleTemplates(
       req('PUT', `/api/admin/templates/${created.id}`, { name: 'T', layout: 'nope' }),
@@ -219,37 +219,37 @@ describe('PUT /api/admin/templates/:id', () => {
   it('setting an image slot with valid image id → 200', async () => {
     const imgId = await seedImage(db)
     const created = await (
-      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
     const r = await handleTemplates(
       req('PUT', `/api/admin/templates/${created.id}`, {
-        name: 'T', layout: 'classic',
-        images: { banner: imgId },
+        name: 'T', layout: 'doc-giua',
+        images: { background: imgId },
       }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(200)
     const body = await r.json() as { images: Record<string, { id: number; token: string }> }
-    expect(body.images['banner']?.token).toBe('imgabc1234567890')
+    expect(body.images['background']?.token).toBe('imgabc1234567890')
   })
 
   it('setting an image slot to null removes it', async () => {
     const imgId = await seedImage(db)
     const created = await (
       await handleTemplates(req('POST', '/api/admin/templates', {
-        name: 'T', layout: 'classic', images: { banner: imgId },
+        name: 'T', layout: 'doc-giua', images: { background: imgId },
       }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
 
     const r = await handleTemplates(
       req('PUT', `/api/admin/templates/${created.id}`, {
-        name: 'T', layout: 'classic', images: { banner: null },
+        name: 'T', layout: 'doc-giua', images: { background: null },
       }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(200)
     const body = await r.json() as { images: Record<string, unknown> }
-    expect(body.images).not.toHaveProperty('banner')
+    expect(body.images).not.toHaveProperty('background')
   })
 })
 
@@ -258,7 +258,7 @@ describe('PUT /api/admin/templates/:id', () => {
 describe('DELETE /api/admin/templates/:id', () => {
   it('delete unused template → 200', async () => {
     const created = await (
-      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
     const r = await handleTemplates(
       req('DELETE', `/api/admin/templates/${created.id}`),
@@ -276,7 +276,7 @@ describe('DELETE /api/admin/templates/:id', () => {
       .bind(tid, '', 1).run()
 
     const created = await (
-      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
 
     const now = new Date().toISOString()
@@ -317,7 +317,7 @@ describe('createTemplate atomicity', () => {
     }
 
     const r = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'OrphanCheck', layout: 'classic', images: { background: imgId } }),
+      req('POST', '/api/admin/templates', { name: 'OrphanCheck', layout: 'doc-giua', images: { background: imgId } }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(400)
@@ -328,29 +328,27 @@ describe('createTemplate atomicity', () => {
     expect(row).toBeNull()
   })
 
-  it('create with two image slots (background + banner) attaches every image to the new template', async () => {
+  it('create with a background attaches it to the new template (not an earlier one)', async () => {
     const a = await seedImage(db, 'imgslota00000001')
     const b = await seedImage(db, 'imgslotb00000001')
+    await handleTemplates(req('POST', '/api/admin/templates', { name: 'First', layout: 'doc-giua', images: { background: a } }), makeEnv(db), TEST_EMAIL)
     const r = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'TwoSlots', layout: 'night', images: { background: a, banner: b } }),
+      req('POST', '/api/admin/templates', { name: 'Second', layout: 'ngang-giua', images: { background: b } }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r.status).toBe(200)
     const t = await r.json() as { id: number }
-    const rows = await db.prepare('SELECT template_id, slot, image_id FROM template_image ORDER BY slot').all<{ template_id: number; slot: string; image_id: number }>()
-    expect(rows.results).toEqual([
-      { template_id: t.id, slot: 'background', image_id: a },
-      { template_id: t.id, slot: 'banner', image_id: b },
-    ])
+    const rows = await db.prepare('SELECT template_id, slot, image_id FROM template_image WHERE template_id = ?').bind(t.id).all<{ template_id: number; slot: string; image_id: number }>()
+    expect(rows.results).toEqual([{ template_id: t.id, slot: 'background', image_id: b }])
   })
 
   it('same-name templates created back to back return their own distinct rows', async () => {
     const r1 = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'DupName', layout: 'classic' }),
+      req('POST', '/api/admin/templates', { name: 'DupName', layout: 'doc-giua' }),
       makeEnv(db), TEST_EMAIL,
     )
     const r2 = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'DupName', layout: 'lotus' }),
+      req('POST', '/api/admin/templates', { name: 'DupName', layout: 'doc-duoi' }),
       makeEnv(db), TEST_EMAIL,
     )
     expect(r1.status).toBe(200)
@@ -359,16 +357,16 @@ describe('createTemplate atomicity', () => {
     const t2 = await r2.json() as { id: number; name: string; layout: string }
     expect(t1.id).not.toBe(t2.id)
     expect(t1.name).toBe('DupName')
-    expect(t1.layout).toBe('classic')
+    expect(t1.layout).toBe('doc-giua')
     expect(t2.name).toBe('DupName')
-    expect(t2.layout).toBe('lotus')
+    expect(t2.layout).toBe('doc-duoi')
   })
 })
 
 describe('updateTemplate FK mapping', () => {
   it('batch FK error in updateTemplate → 400 (not unhandled throw)', async () => {
     const created = await (
-      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }), makeEnv(db), TEST_EMAIL)
+      await handleTemplates(req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }), makeEnv(db), TEST_EMAIL)
     ).json() as { id: number }
 
     // Monkey-patch batch to simulate FK error (race: image deleted between validation and batch)
@@ -377,7 +375,7 @@ describe('updateTemplate FK mapping', () => {
     }
 
     const r = await handleTemplates(
-      req('PUT', `/api/admin/templates/${created.id}`, { name: 'Updated', layout: 'lotus' }),
+      req('PUT', `/api/admin/templates/${created.id}`, { name: 'Updated', layout: 'doc-duoi' }),
       makeEnv(db), TEST_EMAIL,
     )
     // Before fix: unhandled error propagates → test throws (not 400).
@@ -396,7 +394,7 @@ describe('template slot: photo slot → 400 (passes after layouts.ts SLOTS chang
     // isSlot("photo") returns false → handleTemplates returns 400.
     const imgId = await seedImage(db)
     const r = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'T', layout: 'classic', images: { photo: imgId } }),
+      req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua', images: { photo: imgId } }),
       makeEnv(db),
       TEST_EMAIL,
     )
@@ -407,16 +405,58 @@ describe('template slot: photo slot → 400 (passes after layouts.ts SLOTS chang
     const imgId = await seedImage(db)
     // Create a valid template first
     const cr = await handleTemplates(
-      req('POST', '/api/admin/templates', { name: 'T', layout: 'classic' }),
+      req('POST', '/api/admin/templates', { name: 'T', layout: 'doc-giua' }),
       makeEnv(db),
       TEST_EMAIL,
     )
     const tmpl = await cr.json() as { id: number }
     const r = await handleTemplates(
-      req('PUT', `/api/admin/templates/${tmpl.id}`, { name: 'T', layout: 'classic', images: { photo: imgId } }),
+      req('PUT', `/api/admin/templates/${tmpl.id}`, { name: 'T', layout: 'doc-giua', images: { photo: imgId } }),
       makeEnv(db),
       TEST_EMAIL,
     )
     expect(r.status).toBe(400)
+  })
+})
+
+// ---- Card v3: layouts are geometry; only the background slot ----
+
+describe('templates — card v3 layouts and slots', () => {
+  const create = (body: Record<string, unknown>) =>
+    handleTemplates(req('POST', '/api/admin/templates', { name: 'T', ...body }), makeEnv(db), TEST_EMAIL)
+
+  it('accepts every new layout id', async () => {
+    for (const layout of ['doc-giua', 'doc-duoi', 'doc-tren', 'ngang-giua', 'ngang-phai', 'ngang-trai']) {
+      expect((await create({ layout })).status).toBe(200)
+    }
+  })
+
+  it('rejects legacy and unknown layout ids on write', async () => {
+    for (const layout of ['classic', 'lotus', 'night', 'x', '__proto__']) expect((await create({ layout })).status).toBe(400)
+  })
+
+  it('images: background accepted; banner: null ignored; banner/photo with an id → 400', async () => {
+    const imgId = await seedImage(db)
+    const ok = await create({ layout: 'doc-duoi', images: { background: imgId, banner: null } })
+    expect(ok.status).toBe(200)
+    expect(((await ok.json()) as { images: Record<string, unknown> }).images).toEqual({ background: { id: imgId, token: 'imgabc1234567890' } })
+    expect((await create({ layout: 'doc-duoi', images: { banner: imgId } })).status).toBe(400)
+    expect((await create({ layout: 'doc-duoi', images: { photo: imgId } })).status).toBe(400)
+  })
+
+  it('a legacy template lists with its resolved layout and without legacy image links', async () => {
+    const imgId = await seedImage(db)
+    await db.prepare("INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (50, 'Cũ', 'night', 1, 'x', 'a')").run()
+    await db.prepare("INSERT INTO template_image (template_id, slot, image_id) VALUES (50, 'background', ?)").bind(imgId).run()
+    const list = (await (await handleTemplates(req('GET', '/api/admin/templates'), makeEnv(db), TEST_EMAIL)).json()) as { id: number; layout: string }[]
+    expect(list.find((t) => t.id === 50)!.layout).toBe('ngang-giua')
+  })
+
+  it('updating a legacy template with a new layout and background succeeds', async () => {
+    const imgId = await seedImage(db)
+    await db.prepare("INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (51, 'Cũ', 'lotus', 1, 'x', 'a')").run()
+    const r = await handleTemplates(req('PUT', '/api/admin/templates/51', { name: 'Mới', layout: 'doc-tren', images: { background: imgId, banner: null } }), makeEnv(db), TEST_EMAIL)
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { layout: string }).layout).toBe('doc-tren')
   })
 })

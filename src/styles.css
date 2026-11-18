@@ -1,7 +1,7 @@
 :root { --font-sans: 'Be Vietnam Pro', system-ui, sans-serif; --font-serif: 'Lora', Georgia, 'Times New Roman', serif; --rose: #be123c; --rose-dark: #881337; --gold: #b45309; --cream: #fff7ed; --ink: #292524; }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: var(--font-sans); color: var(--ink); background: var(--cream); line-height: 1.65; }
-h1, h2, h3, .motto, .card .msg { font-family: var(--font-serif); }
+h1, h2, h3, .motto { font-family: var(--font-serif); }
 h1 { font-size: clamp(1.9rem, 6vw, 3rem); line-height: 1.2; margin: 0.4rem 0 1rem; color: var(--rose-dark); }
 h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--rose-dark); }
 h3 { margin: 0 0 0.3rem; }
@@ -19,12 +19,6 @@ footer { text-align: center; padding: 2rem 1rem; color: #78716c; font-size: 0.9r
 .tile p { margin: 0; }
 .note { text-align: center; margin-top: 2.5rem; padding: 1.25rem; border: 2px dashed #fda4af; border-radius: 0.9rem; background: #fff1f2; }
 .notfound { text-align: center; margin-top: 3rem; }
-.card { margin: 2.5rem auto 0; max-width: 34rem; padding: 2.5rem 2rem; text-align: center; background: #fff; border: 3px double var(--gold); border-radius: 0.5rem; box-shadow: 0 10px 30px rgb(136 19 55 / 0.15); }
-.card .to { margin: 1rem 0 0; color: #78716c; }
-.card .sub { margin: 0; color: var(--gold); font-weight: 600; }
-.card hr { width: 4rem; border: 0; border-top: 2px solid var(--rose); margin: 1.5rem auto; }
-.card .msg { font-size: 1.25rem; line-height: 1.8; white-space: pre-line; }
-.card .from { margin-top: 2rem; font-style: italic; color: #57534e; }
 .stats { display: flex; justify-content: center; gap: 2rem; margin-top: 2rem; flex-wrap: wrap; }
 .stats div { display: flex; flex-direction: column; }
 .stats strong { font-family: var(--font-serif); font-size: 2rem; color: var(--rose); }
@@ -93,119 +87,45 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 /* ── CardView slots ──────────────────────────────────────────────────────── */
 
-/* Base card layout: banner image at top, then body content */
+/* ── Card face (card v3) ─────────────────────────────────────────────────────
+   A physical card: fixed ratio from the layout, background image at 100%, wish written
+   in the writing zone. Sizes are in cqw (card width) so thumbnails match the full card;
+   CardView shrinks the zone's font size until the text fits. */
 .card {
   position: relative;
+  container-type: inline-size;
   overflow: hidden;
-  padding: 0;           /* padding moved to .card-body */
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-.card-banner {
-  display: block;
   width: 100%;
-  height: 7rem;
-  object-fit: cover;
+  margin: 0;
+  border-radius: 10px;
+  background: #fffaf0 center / cover no-repeat;
+  box-shadow: 0 8px 24px rgb(136 19 55 / 0.18);
 }
-
-.card-body {
-  padding: 2rem 2rem 2.5rem;
+.card--portrait { aspect-ratio: 3 / 4; }
+.card--landscape { aspect-ratio: 4 / 3; }
+.card-zone {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  padding: 2.5cqw 3cqw;
   text-align: center;
+  line-height: 1.35;
+  font-weight: 400;
 }
-
-/* Translucent overlay on card-body when background image is present */
-.card--has-bg .card-body {
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(3px);
+.card-zone p, .card-zone .name { margin: 0; font-family: inherit; font-weight: 400; color: inherit; }
+.card-zone .to { opacity: 0.85; }
+.card-zone .name { margin-top: 0.1em; font-size: 1.45em; line-height: 1.15; text-wrap: balance; }
+.card-zone .sub { margin: 0.1em 0 0.5em; font-size: 0.85em; opacity: 0.85; }
+.card-zone .msg { white-space: pre-line; overflow-wrap: anywhere; }
+.card-zone .from { margin-top: 0.6em; text-align: right; font-size: 0.85em; }
+.card--show-zone .card-zone { outline: 2px dashed rgb(0 0 0 / 0.45); outline-offset: -2px; background: rgb(255 255 255 / 0.15); }
+.card-stamp {
+  position: absolute; right: 2.5cqw; bottom: 2cqw; margin: 0;
+  font: 600 2.1cqw var(--font-sans); color: var(--rose-dark);
+  background: rgb(255 255 255 / 0.8); padding: 0.4cqw 1.4cqw; border-radius: 99px;
 }
-
-/* ── Layout: classic (Cổ điển) ───────────────────────────────────────────── */
-.card--classic {
-  background-color: #fff;
-  border: 3px double var(--gold);
-  border-radius: 0.5rem;
-  box-shadow: 0 10px 30px rgb(136 19 55 / 0.15);
-}
-.card--classic .card-body h1 { color: var(--rose-dark); font-family: var(--font-serif); }
-.card--classic .card-body .sub { color: var(--gold); }
-.card--classic .card-body hr { border-top-color: var(--rose); }
-.card--classic .card-banner { border-bottom: 2px solid var(--gold); }
-
-/* ── Layout: lotus (Hoa sen) ─────────────────────────────────────────────── */
-.card--lotus {
-  background-color: #fff0f6;
-  border: 2px solid #f9a8d4;
-  border-radius: 1.25rem;
-  box-shadow: 0 8px 24px rgba(236, 72, 153, 0.12);
-}
-.card--lotus .card-body { font-family: var(--font-serif); }
-.card--lotus .card-body h1 { color: #9d174d; }
-.card--lotus .card-body .kicker { color: #be185d; }
-.card--lotus .card-body .sub { color: #db2777; font-weight: 600; }
-.card--lotus .card-body hr { border-top-color: #f9a8d4; width: 5rem; }
-.card--lotus .card-body .msg { color: #831843; }
-.card--lotus .card-body .from { color: #9d174d; }
-.card--lotus .card-banner { border-radius: 1.25rem 1.25rem 0 0; }
-.card--has-bg.card--lotus .card-body { background: rgba(255, 240, 246, 0.9); }
-
-/* ── Layout: spring (Mùa xuân) ───────────────────────────────────────────── */
-.card--spring {
-  background-color: #f0fdf4;
-  border: 2px solid #86efac;
-  border-radius: 0.75rem;
-  box-shadow: 0 6px 20px rgba(22, 163, 74, 0.1);
-}
-.card--spring .card-body { font-family: var(--font-serif); }
-.card--spring .card-body h1 { color: #14532d; }
-.card--spring .card-body .kicker { color: #15803d; }
-.card--spring .card-body .sub { color: #16a34a; font-weight: 600; }
-.card--spring .card-body hr { border-top-color: #86efac; }
-.card--spring .card-body .msg { color: #166534; }
-.card--spring .card-body .from { color: #15803d; }
-.card--spring .card-body .to { color: #4ade80; }
-.card--spring .card-banner { border-bottom: 2px solid #86efac; }
-.card--has-bg.card--spring .card-body { background: rgba(240, 253, 244, 0.9); }
-
-/* ── Layout: night (Đêm sao) ─────────────────────────────────────────────── */
-.card--night {
-  background-color: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 0.75rem;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  color: #e2e8f0;
-}
-.card--night .card-body h1 { color: #f1f5f9; font-family: var(--font-serif); }
-.card--night .card-body .kicker { color: #94a3b8; }
-.card--night .card-body .to { color: #94a3b8; }
-.card--night .card-body .sub { color: #7dd3fc; font-weight: 600; }
-.card--night .card-body hr { border-top-color: #334155; }
-.card--night .card-body .msg { color: #cbd5e1; }
-.card--night .card-body .from { color: #94a3b8; font-style: italic; }
-/* Night layout: dark overlay when background image present */
-.card--has-bg.card--night .card-body {
-  background: rgba(10, 20, 40, 0.82);
-  backdrop-filter: blur(3px);
-  color: #e2e8f0;
-}
-
-/* ── Layout: minimal (Tối giản) ──────────────────────────────────────────── */
-.card--minimal {
-  background-color: #fafafa;
-  border: 1px solid #e5e7eb;
-  border-radius: 0.4rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-.card--minimal .card-body { font-family: var(--font-sans); }
-.card--minimal .card-body h1 { color: #111827; font-family: var(--font-sans); font-weight: 700; }
-.card--minimal .card-body .kicker { color: #6b7280; }
-.card--minimal .card-body .to { color: #9ca3af; }
-.card--minimal .card-body .sub { color: #374151; font-weight: 500; }
-.card--minimal .card-body hr { border-top-color: #e5e7eb; }
-.card--minimal .card-body .msg { color: #374151; font-size: 1.1rem; }
-.card--minimal .card-body .from { color: #6b7280; }
-.card--has-bg.card--minimal .card-body { background: rgba(250, 250, 250, 0.9); }
 
 /* ── Admin tabs ──────────────────────────────────────────────────────────── */
 
@@ -470,14 +390,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card-tile:hover { transform: translateY(-3px); }
 .card-tile--classic { background: #fff; border: 2.5px double var(--gold); box-shadow: 0 4px 12px rgb(136 19 55 / 0.1); color: var(--rose-dark); }
 .card-tile--classic:hover { box-shadow: 0 8px 20px rgb(136 19 55 / 0.18); }
-.card-tile--lotus { background: #fff0f6; border: 2px solid #f9a8d4; box-shadow: 0 4px 12px rgba(236,72,153,0.1); color: #9d174d; }
-.card-tile--lotus:hover { box-shadow: 0 8px 20px rgba(236,72,153,0.18); }
-.card-tile--spring { background: #f0fdf4; border: 2px solid #86efac; box-shadow: 0 4px 12px rgba(22,163,74,0.08); color: #14532d; }
-.card-tile--spring:hover { box-shadow: 0 8px 20px rgba(22,163,74,0.15); }
-.card-tile--night { background: #1e293b; border: 1px solid #475569; box-shadow: 0 4px 12px rgba(0,0,0,0.3); color: #e2e8f0; }
-.card-tile--night:hover { box-shadow: 0 8px 20px rgba(0,0,0,0.45); }
-.card-tile--minimal { background: #fafafa; border: 1px solid #e5e7eb; box-shadow: 0 2px 6px rgba(0,0,0,0.05); color: #111827; }
-.card-tile--minimal:hover { box-shadow: 0 6px 14px rgba(0,0,0,0.1); }
 .card-tile-icon { font-size: 1.5rem; line-height: 1; }
 .card-tile-title { font-weight: 700; font-size: 0.85rem; line-height: 1.3; font-family: var(--font-serif); }
 .card-tile-subject { font-size: 0.78rem; opacity: 0.75; }
@@ -487,16 +399,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* ── QR page card grid ───────────────────────────────────────────────────── */
 .teacher-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); gap: 1.5rem; }
 .teacher-card-wrap { min-width: 0; }
-.teacher-card-wrap .card-body h1 { font-size: clamp(1.5rem, 2.4vw, 2rem); text-wrap: balance; }
-.teacher-card-wrap .card { margin: 0; max-width: none; }
 
 /* ── QR page strip heading ────────────────────────────────────────────────── */
 .strip-heading { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--rose-dark); }
 
-/* ── Mini card wrapper ────────────────────────────────────────────────────── */
-.card-mini { width: 9rem; height: 9.5rem; overflow: hidden; flex-shrink: 0; position: relative; border-radius: 0.5rem; }
-.card-mini-inner { position: absolute; top: 0; left: 0; width: 34rem; transform: scale(0.265); transform-origin: top left; pointer-events: none; }
-.card-mini-inner .card { margin: 0; }
+/* ── Mini card (template gallery, moderation thumbnail): same card, small width ── */
+.card-mini { width: 9rem; flex-shrink: 0; }
 
 /* ── Write / Send page ────────────────────────────────────────────────────── */
 .write-page { max-width: 46rem; margin: 0 auto; }
@@ -540,10 +448,25 @@ button:disabled { opacity: 0.5; cursor: default; }
 .thanks-box h2 { margin: 0 0 0.5rem; }
 .thanks-box p { color: #57534e; margin: 0 0 1.5rem; }
 .thanks-actions { display: flex; justify-content: center; gap: 0.75rem; flex-wrap: wrap; }
-.write-preview-card { transform: scale(0.75); transform-origin: top center; }
+.write-preview-card { max-width: 26rem; margin: 0 auto; }
+/* Font and ink pickers (send page, step 3) */
+.write-choice { border: 0; margin: 0; padding: 0; min-width: 0; }
+.write-choice legend { margin-bottom: 0.4rem; padding: 0; }
+.font-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: 0.4rem; }
+.font-option, .ink-option { position: relative; display: flex; cursor: pointer; background: #fff; border: 2px solid #e7e5e4; border-radius: 0.5rem; font-size: 0.85rem; }
+.font-option { flex-direction: column; padding: 0.35rem 0.5rem; }
+.ink-option { align-items: center; gap: 0.4rem; padding: 0.3rem 0.75rem 0.3rem 0.4rem; border-radius: 99px; }
+.font-option--selected, .ink-option--selected { border-color: var(--rose-dark); }
+.font-option:focus-within, .ink-option:focus-within { outline: 2px solid var(--rose); outline-offset: 1px; }
+.font-option input[type=radio], .ink-option input[type=radio] { position: absolute; opacity: 0; pointer-events: none; }
+.font-option-sample { font-size: 1.1rem; line-height: 1.25; }
+.font-option-label { font-size: 0.75rem; color: #78716c; }
+.ink-options { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.ink-dot { width: 1.2rem; height: 1.2rem; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #d6d3d1; }
+.ink-option input[type=color] { width: 1.6rem; height: 1.6rem; padding: 0; border: 0; background: none; cursor: pointer; }
 
 /* ── Template gallery ─────────────────────────────────────────────────────── */
-.template-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: 0.75rem; margin-top: 1rem; }
+.template-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: 0.75rem; margin-top: 1rem; align-items: start; }
 .template-tile { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 0.75rem; border: 2px solid #e7e5e4; border-radius: 0.75rem; cursor: pointer; background: #fff; font-family: inherit; transition: border-color 0.15s, box-shadow 0.15s; }
 .template-tile:hover { border-color: var(--rose); box-shadow: 0 4px 12px rgba(136,19,55,0.1); }
 .template-tile--selected { border-color: var(--rose-dark); background: #fff1f2; box-shadow: 0 4px 12px rgba(136,19,55,0.12); }
@@ -590,3 +513,14 @@ button:disabled { opacity: 0.5; cursor: default; }
 .mod-pagination { margin-top: 1rem; display: flex; justify-content: center; }
 .pending-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.3rem; height: 1.3rem; border-radius: 999px; background: var(--rose-dark); color: #fff; font-size: 0.75rem; font-weight: 700; padding: 0 0.3rem; margin-left: 0.3rem; }
 
+
+/* Admin template editor: layout picker */
+.layout-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+.layout-option { position: relative; display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.35rem; text-align: center; font-size: 0.72rem; font-weight: 500; cursor: pointer; background: #fff; border: 2px solid #e7e5e4; border-radius: 0.5rem; }
+.layout-option input { position: absolute; opacity: 0; pointer-events: none; }
+.layout-option--selected { border-color: var(--rose-dark); }
+.layout-option:focus-within { outline: 2px solid var(--rose); outline-offset: 1px; }
+.layout-icon { position: relative; display: block; background: #f5f5f4; border: 1px solid #d6d3d1; }
+.layout-icon--portrait { width: 30px; height: 40px; }
+.layout-icon--landscape { width: 40px; height: 30px; }
+.layout-icon i { position: absolute; background: #93c5fd; }

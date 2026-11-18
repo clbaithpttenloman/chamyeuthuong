@@ -124,6 +124,8 @@ export default function QrPage() {
             layout={currentCard.layout}
             images={currentCard.images}
             from={currentCard.from}
+            ink={currentCard.ink}
+            font={currentCard.font}
           />
         </div>
       )}
@@ -172,6 +174,8 @@ export default function QrPage() {
                   layout={card.layout}
                   images={card.images}
                   from={card.from}
+                  ink={card.ink}
+                  font={card.font}
                   headingLevel="h2"
                 />
               </div>

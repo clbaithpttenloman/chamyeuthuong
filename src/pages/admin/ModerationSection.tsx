@@ -303,11 +303,11 @@ function ModCard({
         />
       </div>
       <div className="mod-item-layout">
-        {/* Thumbnail */}
+        {/* Thumbnail: the student's card at small size. Moderators review the plain-text
+            message beside it (no student font, ink or shrink). */}
         <div className="mod-card-thumb">
           <div className="card-mini">
-            <div className="card-mini-inner">
-              <CardView
+            <CardView
                 card={{
                   name: teacher?.name ?? '?',
                   subject: profile?.subject ?? '',
@@ -315,12 +315,13 @@ function ModCard({
                   message: card.message,
                   title: (teacher?.title as 'Thầy' | 'Cô' | null) ?? null,
                 }}
-                layout={template?.layout ?? 'classic'}
+                layout={template?.layout ?? ''}
                 images={{}}
                 from={fromStr}
                 headingLevel="h2"
+                ink={card.ink}
+                font={card.font}
               />
-            </div>
           </div>
         </div>
 

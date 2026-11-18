@@ -709,3 +709,62 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     expect(body).not.toContain(MARKER)
   })
 })
+
+// ===================================================================
+// Card v3: font and ink chosen by the student
+// ===================================================================
+
+describe('POST /api/cards — font and ink', () => {
+  const stored = async (db: D1) =>
+    db.prepare('SELECT font, ink FROM student_card ORDER BY id DESC LIMIT 1').first<{ font: string; ink: string }>()
+
+  it('omitted → Bút bi (patrick-hand) and blue (#1d3fa6)', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc thầy' }), makeEnv(db))
+    expect(r.status).toBe(201)
+    expect(await stored(db)).toEqual({ font: 'patrick-hand', ink: '#1d3fa6' })
+  })
+
+  it('valid font and ink are stored; ink is lowercased', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc thầy', font: 'charm', ink: '#AB12CD' }), makeEnv(db))
+    expect(r.status).toBe(201)
+    expect(await stored(db)).toEqual({ font: 'charm', ink: '#ab12cd' })
+  })
+
+  it('each supported font is accepted', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    for (const [i, font] of ['patrick-hand', 'pangolin', 'itim', 'mali', 'charm', 'be-vietnam-pro', 'lora'].entries()) {
+      vi.mocked(newToken).mockReturnValue(`fontcard0000000${i}`) // newToken is mocked to a fixed value
+      const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: `Chúc ${font}`, font }), makeEnv(db))
+      expect(r.status).toBe(201)
+    }
+  })
+
+  it('invalid font → 400 (null, other types, unknown names, prototype keys)', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    for (const font of [null, 1, ['lora'], {}, '', 'Lora', 'dancing-script', '__proto__', 'constructor', "lora;color:red"]) {
+      const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc', font }), makeEnv(db))
+      expect(r.status).toBe(400)
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM student_card').first<{ n: number }>()).toEqual({ n: 0 })
+  })
+
+  it('invalid ink → 400 (CSS injection, other formats, trailing newline, non-strings)', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    for (const ink of [null, 0x1d3fa6, ['#000000'], {}, '', 'red', '#fff', '#1234567', '#gggggg', '#aabbcc\n', ' #aabbcc',
+      'red;background:url(https://x)', '#aabbcc;color:red', 'rgb(0,0,0)', 'var(--x)']) {
+      const r = await handleSubmit(submitReq({ teacherId: tid, templateId: tmplId, message: 'Chúc', ink }), makeEnv(db))
+      expect(r.status).toBe(400)
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM student_card').first<{ n: number }>()).toEqual({ n: 0 })
+  })
+
+  it('teacherToken path stores font and ink too', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    const tok = (await db.prepare('SELECT token FROM teacher WHERE id = ?').bind(tid).first<{ token: string }>())!.token
+    const r = await handleSubmit(submitReq({ teacherToken: tok, templateId: tmplId, message: 'Chúc', font: 'itim', ink: '#6b21a8' }), makeEnv(db))
+    expect(r.status).toBe(201)
+    expect(await stored(db)).toEqual({ font: 'itim', ink: '#6b21a8' })
+  })
+})

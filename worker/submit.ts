@@ -17,6 +17,7 @@
 import { error, json } from './http.ts'
 import { isToken, newToken } from './token.ts'
 import { ensureSchema } from './schema.ts'
+import { DEFAULT_FONT, DEFAULT_INK, isFont, isInkInput, normalizeInk } from '../shared/fonts.ts'
 import {
   hasControlCharsSingleLine,
   hasControlCharsMultiline,
@@ -29,7 +30,7 @@ import {
 import type { Env } from './types.ts'
 
 /** Known top-level keys in the submit body. */
-const KNOWN_KEYS = new Set(['teacherId', 'teacherToken', 'templateId', 'message', 'fromName', 'fromClass', 'anonymous'])
+const KNOWN_KEYS = new Set(['teacherId', 'teacherToken', 'templateId', 'message', 'fromName', 'fromClass', 'anonymous', 'font', 'ink'])
 
 /**
  * POST /api/cards — submit a student card.
@@ -107,6 +108,13 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
   // 9. anonymous must be boolean if present
   if ('anonymous' in body2 && typeof body2.anonymous !== 'boolean') return error('bad_request')
 
+  // 9b. Student's font and ink (they end up in an inline style, so only exact values pass).
+  // Absent → default. Present → must be valid (null and non-strings included → 400).
+  if ('font' in body2 && !isFont(body2.font)) return error('bad_request')
+  if ('ink' in body2 && !isInkInput(body2.ink)) return error('bad_request')
+  const font = 'font' in body2 ? (body2.font as string) : DEFAULT_FONT
+  const ink = 'ink' in body2 ? normalizeInk(body2.ink as string) : DEFAULT_INK
+
   // 10. NFC normalisation + trim
   const rawMessage = typeof body2.message === 'string' ? body2.message.normalize('NFC').trim() : ''
   const anonymous = typeof body2.anonymous === 'boolean' ? body2.anonymous : false
@@ -145,8 +153,8 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
         result = await env.DB
           .prepare(
             'INSERT INTO student_card ' +
-            '(public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at) ' +
-            'SELECT ?, t.id, ?, ?, ?, ?, ?, \'pending\', ? ' +
+            '(public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at, font, ink) ' +
+            'SELECT ?, t.id, ?, ?, ?, ?, ?, \'pending\', ?, ?, ? ' +
             'FROM teacher t ' +
             'JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
             'WHERE t.id = ? AND tp.show_on_home = 1 ' +
@@ -154,7 +162,7 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
             '  AND (SELECT COUNT(*) FROM student_card WHERE status = \'pending\') < ? ' +
             '  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = t.id AND sc2.status = \'pending\') < ?',
           )
-          .bind(pid, templateId, rawMessage, rawFromName, rawFromClass, anonInt, now,
+          .bind(pid, templateId, rawMessage, rawFromName, rawFromClass, anonInt, now, font, ink,
             teacherId, templateId, PENDING_CAP, PENDING_CAP_PER_TEACHER)
           .run()
       } else {
@@ -162,15 +170,15 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
         result = await env.DB
           .prepare(
             'INSERT INTO student_card ' +
-            '(public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at) ' +
-            'SELECT ?, t.id, ?, ?, ?, ?, ?, \'pending\', ? ' +
+            '(public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at, font, ink) ' +
+            'SELECT ?, t.id, ?, ?, ?, ?, ?, \'pending\', ?, ?, ? ' +
             'FROM teacher t ' +
             'WHERE t.token = ? ' +
             '  AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1) ' +
             '  AND (SELECT COUNT(*) FROM student_card WHERE status = \'pending\') < ? ' +
             '  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = t.id AND sc2.status = \'pending\') < ?',
           )
-          .bind(pid, templateId, rawMessage, rawFromName, rawFromClass, anonInt, now,
+          .bind(pid, templateId, rawMessage, rawFromName, rawFromClass, anonInt, now, font, ink,
             teacherToken, templateId, PENDING_CAP, PENDING_CAP_PER_TEACHER)
           .run()
       }
