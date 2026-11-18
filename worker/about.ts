@@ -50,12 +50,12 @@ function validateAbout(raw: unknown): AboutContent {
 
   // ---- heading ----
   const heading = typeof obj.heading === 'string' ? obj.heading.normalize('NFC').trim() : null
-  if (!heading || heading.length < 1 || heading.length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
+  if (!heading || [...heading].length < 1 || [...heading].length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
   if (hasControlCharsSingleLine(heading) || hasLoneSurrogate(heading)) throw new HttpError('bad_request')
 
   // ---- intro ----
   const intro = typeof obj.intro === 'string' ? obj.intro.normalize('NFC').trim() : null
-  if (!intro || intro.length < 1 || intro.length > ABOUT_INTRO_MAX) throw new HttpError('bad_request')
+  if (!intro || [...intro].length < 1 || [...intro].length > ABOUT_INTRO_MAX) throw new HttpError('bad_request')
   if (hasControlCharsMultiline(intro) || hasLoneSurrogate(intro)) throw new HttpError('bad_request')
   if (countNewlines(intro) > ABOUT_NEWLINES_MAX) throw new HttpError('bad_request')
 
@@ -66,8 +66,8 @@ function validateAbout(raw: unknown): AboutContent {
     const st = s as Record<string, unknown>
     const value = typeof st.value === 'string' ? st.value.normalize('NFC').trim() : null
     const label = typeof st.label === 'string' ? st.label.normalize('NFC').trim() : null
-    if (!value || value.length < 1 || value.length > ABOUT_STAT_VALUE_MAX) throw new HttpError('bad_request')
-    if (!label || label.length < 1 || label.length > ABOUT_STAT_LABEL_MAX) throw new HttpError('bad_request')
+    if (!value || [...value].length < 1 || [...value].length > ABOUT_STAT_VALUE_MAX) throw new HttpError('bad_request')
+    if (!label || [...label].length < 1 || [...label].length > ABOUT_STAT_LABEL_MAX) throw new HttpError('bad_request')
     if (hasControlCharsSingleLine(value) || hasLoneSurrogate(value)) throw new HttpError('bad_request')
     if (hasControlCharsSingleLine(label) || hasLoneSurrogate(label)) throw new HttpError('bad_request')
     return { value, label }
@@ -75,7 +75,7 @@ function validateAbout(raw: unknown): AboutContent {
 
   // ---- stepsHeading ----
   const stepsHeading = typeof obj.stepsHeading === 'string' ? obj.stepsHeading.normalize('NFC').trim() : null
-  if (!stepsHeading || stepsHeading.length < 1 || stepsHeading.length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
+  if (!stepsHeading || [...stepsHeading].length < 1 || [...stepsHeading].length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
   if (hasControlCharsSingleLine(stepsHeading) || hasLoneSurrogate(stepsHeading)) throw new HttpError('bad_request')
 
   // ---- steps ----
@@ -86,9 +86,9 @@ function validateAbout(raw: unknown): AboutContent {
     const when = typeof st.when === 'string' ? st.when.normalize('NFC').trim() : null
     const title = typeof st.title === 'string' ? st.title.normalize('NFC').trim() : null
     const text = typeof st.text === 'string' ? st.text.normalize('NFC').trim() : ''
-    if (!when || when.length < 1 || when.length > ABOUT_STEP_WHEN_MAX) throw new HttpError('bad_request')
-    if (!title || title.length < 1 || title.length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
-    if (text.length > ABOUT_STEP_TEXT_MAX) throw new HttpError('bad_request')
+    if (!when || [...when].length < 1 || [...when].length > ABOUT_STEP_WHEN_MAX) throw new HttpError('bad_request')
+    if (!title || [...title].length < 1 || [...title].length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
+    if ([...text].length > ABOUT_STEP_TEXT_MAX) throw new HttpError('bad_request')
     if (hasControlCharsSingleLine(when) || hasLoneSurrogate(when)) throw new HttpError('bad_request')
     if (hasControlCharsSingleLine(title) || hasLoneSurrogate(title)) throw new HttpError('bad_request')
     if (text && (hasControlCharsMultiline(text) || hasLoneSurrogate(text))) throw new HttpError('bad_request')
@@ -98,7 +98,7 @@ function validateAbout(raw: unknown): AboutContent {
 
   // ---- membersHeading ----
   const membersHeading = typeof obj.membersHeading === 'string' ? obj.membersHeading.normalize('NFC').trim() : null
-  if (!membersHeading || membersHeading.length < 1 || membersHeading.length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
+  if (!membersHeading || [...membersHeading].length < 1 || [...membersHeading].length > ABOUT_HEADING_MAX) throw new HttpError('bad_request')
   if (hasControlCharsSingleLine(membersHeading) || hasLoneSurrogate(membersHeading)) throw new HttpError('bad_request')
 
   // ---- members ----
@@ -108,8 +108,8 @@ function validateAbout(raw: unknown): AboutContent {
     const mt = m as Record<string, unknown>
     const name = typeof mt.name === 'string' ? mt.name.normalize('NFC').trim() : null
     const role = typeof mt.role === 'string' ? mt.role.normalize('NFC').trim() : null
-    if (!name || name.length < 1 || name.length > ABOUT_MEMBER_NAME_MAX) throw new HttpError('bad_request')
-    if (!role || role.length < 1 || role.length > ABOUT_MEMBER_ROLE_MAX) throw new HttpError('bad_request')
+    if (!name || [...name].length < 1 || [...name].length > ABOUT_MEMBER_NAME_MAX) throw new HttpError('bad_request')
+    if (!role || [...role].length < 1 || [...role].length > ABOUT_MEMBER_ROLE_MAX) throw new HttpError('bad_request')
     if (hasControlCharsSingleLine(name) || hasLoneSurrogate(name)) throw new HttpError('bad_request')
     if (hasControlCharsSingleLine(role) || hasLoneSurrogate(role)) throw new HttpError('bad_request')
     return { name, role }
@@ -173,7 +173,7 @@ export async function handleAdminAbout(request: Request, env: Env, email: string
   }
 
   const bodyText = await request.text().catch(() => '')
-  if (bodyText.length > ABOUT_BODY_MAX) return error('bad_request')
+  if (new TextEncoder().encode(bodyText).length > ABOUT_BODY_MAX) return error('bad_request')
 
   let parsed: unknown
   try { parsed = JSON.parse(bodyText) } catch { return error('bad_request') }

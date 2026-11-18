@@ -54,12 +54,14 @@ export function initialState(
   preselectedById: number | null,
   preselectedByToken: string | null = null,
 ): SendState {
+  // ?t= wins when both params are provided — clear the id so the display and submit are consistent
+  const effectiveById = preselectedByToken !== null ? null : preselectedById
   return {
     step: 1,
     templateId: null,
-    teacherId: preselectedById,
+    teacherId: effectiveById,
     teacherToken: preselectedByToken,
-    preselectedById,
+    preselectedById: effectiveById,
     preselectedByToken,
     text: '',
     fromName: '',

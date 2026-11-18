@@ -62,24 +62,21 @@ describe('worker index — catch boundary (real index.ts)', () => {
 
 // ---- /api/card/* route is REMOVED — failing until Group 2 ----
 
-describe('worker.fetch — /api/card/* → 404 (route removed, failing until Group 2)', () => {
+describe('worker.fetch — /api/card/* → 404 (route removed)', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('GET /api/card/<valid-token> with known teacher+card → 404 (fails currently: routes to old handler)', async () => {
-    // After Group 2 removes the /api/card/ route, any request to /api/card/* returns 404.
-    // Currently: index.ts routes to handleCard → returns 200 for published card.
+  it('GET /api/card/<valid-token> → 404 (route removed)', async () => {
     const { db } = testDb()
     const now = new Date().toISOString()
     await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
       .bind(VALID_TOKEN, 'Teacher', 'Math', now).run()
     const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind(VALID_TOKEN).first<{ id: number }>())!.id
-    void tid // a known teacher token must not resurrect the removed /api/card route
+    void tid
 
     const r = await worker.fetch(
       new Request(`https://x/api/card/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       { ...makeEnv(), DB: db as never },
     )
-    // After Group 2: 404. Currently 200. Test FAILS until Group 2.
     expect(r.status).toBe(404)
   })
 })
@@ -91,25 +88,11 @@ describe('worker.fetch — new public routes (failing until Group 2 adds them to
 
   it('GET /api/wall → handled (not 404)', async () => {
     // After Group 2: routes to handlePublic → 200 or 429.
-    // Currently: falls to /api/* → 404 catch-all.
     const r = await worker.fetch(
       new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
     )
-    // After Group 2: 200. Currently 404.
     expect(r.status).toBe(200)
-  })
-
-  it('GET /api/teachers/<publicId> → handled (not 404)', async () => {
-    const r = await worker.fetch(
-      new Request(`https://x/api/teachers/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
-      makeEnv() as never,
-    )
-    // After Group 2: 404 (unknown publicId), not falling through to catch-all 404 with wrong shape.
-    // Before Group 2: catch-all 404 from /api/* handler.
-    // Both are 404 — but we can check the route was matched by checking it's NOT the catch-all shape.
-    // We'll just check it doesn't crash (status < 600).
-    expect(r.status).toBeLessThan(600)
   })
 
   it('POST /api/cards → handled (not 404)', async () => {
@@ -117,21 +100,20 @@ describe('worker.fetch — new public routes (failing until Group 2 adds them to
       new Request('https://x/api/cards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '1.2.3.4' },
-        body: JSON.stringify({ teacherPublicId: 'x', templateId: 1, message: 'y' }),
+        body: JSON.stringify({ teacherId: 0, templateId: 1, message: 'y' }),
       }),
       makeEnv() as never,
     )
-    // After Group 2: 400 or 429 (rate limited or bad request). Currently 404.
+    // non-positive teacherId → 400
     expect(r.status).not.toBe(404)
   })
 
-  it('GET /api/qr/<token> → handled (not 404)', async () => {
+  it('GET /api/qr/<token> → handled (not 404 from catch-all)', async () => {
     const r = await worker.fetch(
       new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
     )
-    // After Group 2: 404 (unknown token). Currently: catch-all 404.
-    // Both 404 but different — after Group 2 the response body will be from qr handler.
+    // unknown token → 404 from qr handler (not from catch-all)
     expect(r.status).toBeLessThan(600)
   })
 
@@ -212,12 +194,10 @@ describe('worker.fetch — DDL failure returns 503', () => {
 // New for privacy-about plan — FAILING until Group 2 updates index.ts
 // ===================================================================
 
-describe('worker.fetch — /api/teachers/* removed (failing until Group 2)', () => {
+describe('worker.fetch — /api/teachers/* removed', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('GET /api/teachers/known-teacher → 404 from route removal — FAILS until Group 2', async () => {
-    // After Group 2: /api/teachers/* route is removed → catch-all 404.
-    // Before Group 2: routes to handlePublic → handleTeacherPage → 200 for known teacher.
+  it('GET /api/teachers/<any-id> → 404 (route removed)', async () => {
     const { db } = testDb()
     const now = new Date().toISOString()
     const pubId = 'pub1234567890xyz'
@@ -229,28 +209,23 @@ describe('worker.fetch — /api/teachers/* removed (failing until Group 2)', () 
       new Request(`https://x/api/teachers/${pubId}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       { ...makeEnv(), DB: db as never },
     )
-    // After Group 2: 404 (route removed). Before Group 2: 200 → FAIL.
     expect(r.status).toBe(404)
   })
 })
 
-describe('worker.fetch — /api/about routes (failing until Group 2 adds them)', () => {
+describe('worker.fetch — /api/about routes', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('GET /api/about → 200 — FAILS until Group 2 adds the route', async () => {
+  it('GET /api/about → 200', async () => {
     const r = await worker.fetch(
       new Request('https://x/api/about', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
       makeEnv() as never,
     )
-    // After Group 2: 200. Currently: catch-all 404 → FAIL.
     expect(r.status).toBe(200)
   })
 
-  it('GET /api/admin/about with admin auth → not 404 — FAILS until Group 2 adds the route', async () => {
-    const { db } = testDb()
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)').bind('admin@test.com', now, 'seed').run()
-
+  it('GET /api/admin/about → 503 from mock (route is registered, not catch-all 404)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = await worker.fetch(
       new Request('https://x/api/admin/about', {
         headers: {
@@ -259,32 +234,10 @@ describe('worker.fetch — /api/about routes (failing until Group 2 adds them)',
           'X-Requested-With': 'fetch',
         },
       }),
-      { ...makeEnv(), DB: db as never },
+      makeEnv() as never,
     )
-    // After Group 2: 200. Currently: 404 from admin not-found (or 404 from catch-all) → FAIL.
-    // We just check it's NOT 404 from the absence of the route.
-    expect(r.status).not.toBe(404)
-  })
-
-  it('PUT /api/admin/about with admin auth → not 404 — FAILS until Group 2 adds the route', async () => {
-    const { db } = testDb()
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)').bind('admin@test.com', now, 'seed').run()
-
-    const r = await worker.fetch(
-      new Request('https://x/api/admin/about', {
-        method: 'PUT',
-        headers: {
-          'CF-Connecting-IP': '1.2.3.4',
-          'X-Admin-Email': 'admin@test.com',
-          'X-Requested-With': 'fetch',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ heading: 'Test', intro: 'Test intro', stats: [], stepsHeading: 'Steps', steps: [], membersHeading: 'Members', members: [] }),
-      }),
-      { ...makeEnv(), DB: db as never },
-    )
-    // After Group 2: 200. Currently: 404 or 405 from admin → FAIL.
-    expect(r.status).not.toBe(404)
+    // handleAdmin is mocked to throw → 503. If it were 404, the route is not registered.
+    expect(r.status).toBe(503)
+    spy.mockRestore()
   })
 })

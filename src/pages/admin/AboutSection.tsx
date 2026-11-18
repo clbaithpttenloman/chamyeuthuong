@@ -88,7 +88,8 @@ export default function AboutSection({
     setSuccess(false)
     try {
       const body = serializeAboutForm(form)
-      await putAdminAbout(body)
+      const saved = await putAdminAbout(body)
+      setForm(formFromContent(saved))
       setSuccess(true)
     } catch (err) {
       if (!onAccessError(err)) setError(messageFor(err))

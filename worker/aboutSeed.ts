@@ -65,9 +65,10 @@ export const ABOUT_SEED: AboutContent = {
 /**
  * Returns an INSERT OR IGNORE SQL statement that seeds the about content row.
  * Any single quotes in the JSON are doubled (SQL standard escaping).
- * This function uses a fixed constant — never user input.
+ * Accepts an optional content parameter (defaults to ABOUT_SEED) for testing
+ * custom content including apostrophes.
  */
-export function aboutSeedSql(): string {
-  const json = JSON.stringify(ABOUT_SEED).replace(/'/g, "''")
+export function aboutSeedSql(content: AboutContent = ABOUT_SEED): string {
+  const json = JSON.stringify(content).replace(/'/g, "''")
   return `INSERT OR IGNORE INTO site_content (key, value, updated_at, updated_by) VALUES ('about', '${json}', '2026-11-20T00:00:00.000Z', 'seed')`
 }

@@ -61,6 +61,7 @@ async function listTemplates(env: Env): Promise<Response> {
 
   const imgMap = new Map<number, Record<string, { id: number; token: string }>>()
   for (const r of imgRows) {
+    if (!isSlot(r.slot)) continue // filter unknown / legacy slot names
     if (!imgMap.has(r.template_id)) imgMap.set(r.template_id, {})
     imgMap.get(r.template_id)![r.slot] = { id: r.id, token: r.token }
   }

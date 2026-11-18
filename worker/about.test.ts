@@ -26,6 +26,7 @@ import {
   ABOUT_HEADING_MAX, ABOUT_INTRO_MAX, ABOUT_STATS_MAX, ABOUT_STAT_VALUE_MAX,
   ABOUT_STAT_LABEL_MAX, ABOUT_STEPS_MAX, ABOUT_STEP_WHEN_MAX, ABOUT_STEP_TEXT_MAX,
   ABOUT_MEMBERS_MAX, ABOUT_MEMBER_NAME_MAX, ABOUT_MEMBER_ROLE_MAX, ABOUT_NEWLINES_MAX,
+  ABOUT_BODY_MAX,
 } from '../shared/api.ts'
 
 const TEST_EMAIL = 'admin@test.com'
@@ -150,6 +151,26 @@ describe('aboutSeed — aboutSeedSql()', () => {
     const parsed = JSON.parse(row.value) as AboutContent
     expect(parsed).toMatchObject({ heading: expect.any(String), intro: expect.any(String) })
   })
+
+  it('aboutSeedSql accepts custom content with apostrophe and stores heading correctly', () => {
+    // Verify the builder accepts content with a single-quote (apostrophe) and round-trips it.
+    // This fails until aboutSeedSql takes a content parameter.
+    const customContent: AboutContent = { ...ABOUT_SEED, heading: "it's a test" }
+    const sql = aboutSeedSql(customContent)
+    // Use schema:false so the about seed from schema.ts doesn't block INSERT OR IGNORE
+    const { sqlite } = testDb({ schema: false })
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS site_content (
+      key TEXT PRIMARY KEY CHECK (key IN ('about')),
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT NOT NULL
+    )`)
+    sqlite.exec(sql)
+    const row = sqlite.prepare("SELECT value FROM site_content WHERE key = 'about'").get() as { value: string } | undefined
+    expect(row).toBeDefined()
+    const parsed = JSON.parse(row!.value) as AboutContent
+    expect(parsed.heading).toBe("it's a test")
+  })
 })
 
 // ---- GET /api/about — public endpoint ----
@@ -271,16 +292,12 @@ describe('PUT /api/admin/about — validation (failing until Group 2)', () => {
     expect(body.intro).toBe(VALID_ABOUT.intro)
   })
 
-  it('updated_by is set to the caller email', async () => {
-    // The about handler must record who updated the content.
-    // We verify by checking the response or via a subsequent GET that includes updated_by.
-    // The public GET doesn't expose updated_by, so we check the admin GET.
+  it('updated_by is set to the caller email (asserted from site_content row)', async () => {
     await handleAdminAbout(req('PUT', '/api/admin/about', VALID_ABOUT), makePublicEnv(db), TEST_EMAIL)
-    // No direct access to updated_by from API — the test verifies the PUT succeeds at minimum.
-    // A stricter test would query the DB directly.
-    // We can't easily share the in-memory DB between testDb() calls; skip direct DB check here.
-    // The important contract: PUT returns 200 and the content is stored.
-    expect(true).toBe(true) // placeholder — real check is above
+    const row = await db
+      .prepare("SELECT updated_by FROM site_content WHERE key = 'about'")
+      .first<{ updated_by: string }>()
+    expect(row?.updated_by).toBe(TEST_EMAIL)
   })
 
   it('heading too long → 400', async () => {
@@ -525,6 +542,87 @@ describe('PUT /api/admin/about — validation (failing until Group 2)', () => {
     expect(r.status).toBe(400)
   })
 
+  it('PUT body with Content-Length > 16KB → 400', async () => {
+    const r = await handleAdminAbout(
+      new Request('https://x/api/admin/about', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(ABOUT_BODY_MAX + 1),
+          'CF-Connecting-IP': '1.2.3.4',
+        },
+        body: '{}',
+      }),
+      makePublicEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PUT body > 16KB (UTF-8 bytes) but ≤ 16KB (UTF-16 code units) without Content-Length → 400', async () => {
+    // 'ề' is U+1EC1: 1 UTF-16 code unit, 3 UTF-8 bytes.
+    // Build a valid About body where UTF-8 bytes > ABOUT_BODY_MAX but code units ≤ ABOUT_BODY_MAX.
+    // 20 steps × 400 'ề' each = 8000 code units but 24000 UTF-8 bytes for text alone.
+    const bigAbout = {
+      ...VALID_ABOUT,
+      intro: 'ề'.repeat(ABOUT_INTRO_MAX),
+      steps: Array.from({ length: ABOUT_STEPS_MAX }, (_, i) => ({
+        when: `${i + 1}/11`,
+        title: 'Khởi tạo',
+        text: 'ề'.repeat(ABOUT_STEP_TEXT_MAX),
+      })),
+    }
+    const bodyStr = JSON.stringify(bigAbout)
+    expect(new TextEncoder().encode(bodyStr).length).toBeGreaterThan(ABOUT_BODY_MAX)
+    expect(bodyStr.length).toBeLessThanOrEqual(ABOUT_BODY_MAX)
+    const r = await handleAdminAbout(
+      new Request('https://x/api/admin/about', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '1.2.3.4' },
+        body: bodyStr,
+      }),
+      makePublicEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('empty stat value → 400', async () => {
+    const r = await handleAdminAbout(
+      req('PUT', '/api/admin/about', { ...VALID_ABOUT, stats: [{ value: '', label: 'label' }] }),
+      makePublicEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('empty step title → 400', async () => {
+    const r = await handleAdminAbout(
+      req('PUT', '/api/admin/about', { ...VALID_ABOUT, steps: [{ when: '1/1', title: '', text: '' }] }),
+      makePublicEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('empty member name → 400', async () => {
+    const r = await handleAdminAbout(
+      req('PUT', '/api/admin/about', { ...VALID_ABOUT, members: [{ name: '', role: 'role' }] }),
+      makePublicEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('empty member role → 400', async () => {
+    const r = await handleAdminAbout(
+      req('PUT', '/api/admin/about', { ...VALID_ABOUT, members: [{ name: 'name', role: '' }] }),
+      makePublicEnv(db),
+      TEST_EMAIL,
+    )
+    expect(r.status).toBe(400)
+  })
+
   it('GET /api/admin/about → 200 (method guard: not 405)', async () => {
     const r = await handleAdminAbout(req('GET', '/api/admin/about'), makePublicEnv(db), TEST_EMAIL)
     expect(r.status).toBe(200)
@@ -546,5 +644,41 @@ describe('ABOUT_SEED content', () => {
   it('every timeline step has a description', async () => {
     const { ABOUT_SEED } = await import('./aboutSeed.ts')
     for (const s of ABOUT_SEED.steps) expect(s.text.trim().length).toBeGreaterThan(0)
+  })
+})
+
+// ---- Marker scan: approved card data must NOT appear in /api/about ----
+
+describe('GET /api/about — marker scan (card data must never leak)', () => {
+  it('approved card message/from_name/from_class markers do NOT appear in /api/about response', async () => {
+    const MSG_MARKER = 'UNIQUE_ABOUT_MSG_MARKER_49'
+    const FROM_MARKER = 'UNIQUE_ABOUT_FROM_MARKER_50'
+    const CLASS_MARKER = 'CLSABT9999'  // ≤ 10 chars (from_class column CHECK constraint)
+    // Seed a teacher, template, and approved card with markers
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+      .bind('tok1234567890abc', 'Teacher', 'Math', now).run()
+    const tid = (await db.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
+    await db.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
+    await db.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 1).run()
+    await db.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
+      .bind('T', 'classic', 1, now, 'admin@test.com').run()
+    const tmplId = (await db.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
+    await db.prepare(
+      'INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind('crdmrkrabt123456', tid, tmplId, MSG_MARKER, FROM_MARKER, CLASS_MARKER, 0, 'approved', now).run()
+
+    // PUT a valid about content first so the endpoint returns real content
+    await handleAdminAbout(req('PUT', '/api/admin/about', VALID_ABOUT), makePublicEnv(db), TEST_EMAIL)
+
+    const r = await handleAbout(
+      req('GET', '/api/about'),
+      makePublicEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.text()
+    expect(body).not.toContain(MSG_MARKER)
+    expect(body).not.toContain(FROM_MARKER)
+    expect(body).not.toContain(CLASS_MARKER)
   })
 })

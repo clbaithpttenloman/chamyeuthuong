@@ -484,28 +484,14 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card-tile-dept { font-size: 0.72rem; opacity: 0.6; }
 .card-tile-count { font-size: 0.75rem; margin-top: 0.3rem; font-weight: 600; opacity: 0.85; }
 
-/* ── Teacher page ─────────────────────────────────────────────────────────── */
-.teacher-page-header { margin: 2rem 0 1.5rem; }
-.teacher-page-header h1 { margin: 0 0 0.25rem; }
-.teacher-page-meta { margin: 0; color: var(--gold); font-weight: 600; font-size: 0.95rem; }
-.teacher-cards-section { margin-top: 1rem; }
+/* ── QR page card grid ───────────────────────────────────────────────────── */
 .teacher-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); gap: 1.5rem; }
 .teacher-card-wrap { min-width: 0; }
 .teacher-card-wrap .card-body h1 { font-size: clamp(1.5rem, 2.4vw, 2rem); text-wrap: balance; }
 .teacher-card-wrap .card { margin: 0; max-width: none; }
-.teacher-empty { text-align: center; padding: 2rem 1rem; color: #57534e; }
-.teacher-empty p { margin-bottom: 1rem; }
-.write-cta { display: block; width: fit-content; margin: 1.5rem auto 0; padding: 0.65rem 1.5rem; background: var(--rose-dark); color: #fff; border-radius: 0.5rem; font-weight: 600; text-decoration: none; font-size: 0.95rem; text-align: center; }
-.write-cta:hover { background: var(--rose); color: #fff; }
 
-/* ── Newest cards strip ───────────────────────────────────────────────────── */
-.newest-strip-wrap { margin-bottom: 1.5rem; }
+/* ── QR page strip heading ────────────────────────────────────────────────── */
 .strip-heading { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--rose-dark); }
-.newest-strip { display: flex; gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; scrollbar-width: thin; scrollbar-color: #fda4af transparent; scroll-snap-type: x mandatory; }
-.newest-strip::-webkit-scrollbar { height: 4px; }
-.newest-strip::-webkit-scrollbar-thumb { background: #fda4af; border-radius: 2px; }
-.strip-card-link { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; text-decoration: none; flex-shrink: 0; scroll-snap-align: start; }
-.strip-card-label { font-size: 0.75rem; color: var(--rose-dark); font-weight: 600; text-align: center; white-space: nowrap; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Mini card wrapper ────────────────────────────────────────────────────── */
 .card-mini { width: 9rem; height: 9.5rem; overflow: hidden; flex-shrink: 0; position: relative; border-radius: 0.5rem; }

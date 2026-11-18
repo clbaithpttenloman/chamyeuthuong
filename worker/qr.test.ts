@@ -310,3 +310,67 @@ describe('GET /api/qr/:token — security headers', () => {
     expect(r.headers.get('X-Robots-Tag')).toBe('noindex')
   })
 })
+
+// ---- Token never in response body ----
+
+describe('GET /api/qr/:token — token never in response body', () => {
+  it('response body never contains the teacher QR token value', async () => {
+    const { tid } = await seedTeacher(db, { token: VALID_TOKEN })
+    const tmplId = await seedTemplate(db)
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .bind('crd1234567890abc', tid, tmplId, 'Chúc mừng!', '', '', 0, 'approved', now).run()
+
+    const r = await handleQr(
+      new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const bodyStr = await r.text()
+    expect(bodyStr).not.toContain(VALID_TOKEN)
+  })
+})
+
+// ---- Hidden teacher can access via token ----
+
+describe('GET /api/qr/:token — hidden teacher', () => {
+  it('hidden teacher (show_on_home=0) can still access their cards via token', async () => {
+    const { db: freshDb } = testDb()
+    const now = new Date().toISOString()
+    await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)')
+      .bind(VALID_TOKEN, 'Hidden Teacher', 'Art', now).run()
+    const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind(VALID_TOKEN).first<{ id: number }>())!.id
+    await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
+    // show_on_home = 0 (hidden from wall, but reachable via token)
+    await freshDb.prepare('INSERT INTO teacher_profile (teacher_id, department, show_on_home) VALUES (?, ?, ?)').bind(tid, '', 0).run()
+
+    const r = await handleQr(
+      new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(freshDb),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { teacher: { name: string }; total: number }
+    expect(body.teacher.name).toBe('Hidden Teacher')
+    expect(body.total).toBe(0)
+  })
+})
+
+// ---- No public_id (snake_case) in response ----
+
+describe('GET /api/qr/:token — card shape uses camelCase publicId', () => {
+  it('cards use publicId (camelCase), not public_id (snake_case DB column)', async () => {
+    const { tid } = await seedTeacher(db)
+    const tmplId = await seedTemplate(db)
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+      .bind('crd1234567890abc', tid, tmplId, 'Chúc mừng!', '', '', 0, 'approved', now).run()
+
+    const r = await handleQr(
+      new Request(`https://x/api/qr/${VALID_TOKEN}`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.json() as { cards: Array<Record<string, unknown>> }
+    expect(body.cards).toHaveLength(1)
+    expect(body.cards[0]).toHaveProperty('publicId')
+    expect(body.cards[0]).not.toHaveProperty('public_id')
+  })
+})

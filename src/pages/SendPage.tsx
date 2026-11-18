@@ -88,6 +88,8 @@ export default function SendPage() {
 
   // Teacher info once a teacher is selected / resolved
   const [teacherInfo, setTeacherInfo] = useState<TeacherProfile | null>(null)
+  // Set to true when a preselected teacher id could not be resolved from the wall
+  const [teacherNotFound, setTeacherNotFound] = useState(false)
 
   // Search/filter for teacher picker (step 2)
   const [teacherSearch, setTeacherSearch] = useState('')
@@ -128,6 +130,7 @@ export default function SendPage() {
       if (preselectedById !== null) {
         const profile = resolveTeacherById(preselectedById, wallTeachersLoaded)
         if (profile) setTeacherInfo(profile)
+        else setTeacherNotFound(true)
       } else if (preselectedByToken !== null && qrRes && qrRes.status === 'fulfilled') {
         const t = qrRes.value.teacher
         setTeacherInfo({
@@ -239,6 +242,9 @@ export default function SendPage() {
         <h2>Chọn mẫu thiệp</h2>
         {loadingData && <p className="admin-loading">Đang tải mẫu thiệp...</p>}
         {loadErrors && <p className="admin-error" role="alert">{loadErrors}</p>}
+        {!loadingData && teacherNotFound && (
+          <p className="admin-error" role="alert">Không tìm thấy thầy cô. Vui lòng chọn thầy cô ở bước 2.</p>
+        )}
         <div className="template-gallery">
           {templates.map((tpl) => (
             <button

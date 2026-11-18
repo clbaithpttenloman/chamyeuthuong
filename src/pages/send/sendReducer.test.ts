@@ -234,6 +234,27 @@ describe('SET_ERROR', () => {
   })
 })
 
+// ── initialState — ?t= wins over ?thay= (item 1) ─────────────────────────
+
+describe('initialState — ?t= wins over ?thay=', () => {
+  it('when both preselectedByToken and preselectedById are provided, token wins: preselectedById cleared', () => {
+    const s = initialState(42, 'tok1234567890ab')
+    expect(s.preselectedById).toBeNull()
+    expect(s.teacherId).toBeNull()
+    expect(s.preselectedByToken).toBe('tok1234567890ab')
+    expect(s.teacherToken).toBe('tok1234567890ab')
+  })
+  it('SELECT_TEMPLATE with token and id both present → goes to step 3 (token is preselected)', () => {
+    const s = sendReducer(initialState(42, 'tok1234567890ab'), { type: 'SELECT_TEMPLATE', templateId: 1 })
+    expect(s.step).toBe(3)
+  })
+  it('submit state has teacherToken and null teacherId when both were given in URL', () => {
+    const s = initialState(42, 'tok1234567890ab')
+    expect(s.teacherToken).toBe('tok1234567890ab')
+    expect(s.teacherId).toBeNull()
+  })
+})
+
 // ── RESET ─────────────────────────────────────────────────────────────────
 
 describe('RESET', () => {

@@ -89,8 +89,8 @@ export default function QrPage() {
         </div>
         <div className="qr-empty">
           <p>
-            Chưa có lời chúc nào được duyệt. CLB AI — {displayName} gửi lời cảm ơn chân
-            thành đến toàn thể học sinh nhân ngày Nhà giáo Việt Nam 20/11/2026.
+            Chưa có lời chúc nào được duyệt. CLB AI mời các bạn học sinh gửi lời chúc đầu tiên
+            cho {displayName} nhân ngày Nhà giáo Việt Nam 20/11!
           </p>
           <Link to={sendLink} className="btn-primary-link">
             ✍ Gửi lời chúc đầu tiên
@@ -142,7 +142,11 @@ export default function QrPage() {
           className="btn-ghost"
           onClick={() => setShowAll((v) => !v)}
         >
-          {showAll ? 'Ẩn bớt' : `Xem tất cả ${total} thiệp`}
+          {showAll ? 'Ẩn bớt' : (
+            total > cards.length
+              ? `Xem tất cả thiệp (${cards.length}/${total})`
+              : `Xem tất cả ${total} thiệp`
+          )}
         </button>
         <Link to={sendLink} className="btn-link-ghost">
           ✍ Gửi thiệp

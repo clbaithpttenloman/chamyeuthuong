@@ -174,6 +174,60 @@ describe('GET /api/wall', () => {
     )
     expect(await r.text()).not.toContain(MARKER)
   })
+
+  it('marker scan: from_name and from_class of approved card do NOT appear in wall response', async () => {
+    const FROM_MARKER = 'UNIQUE_FROM_MARKER_XYZ_43'
+    const CLASS_MARKER = 'CLS44X4321'  // ≤ 10 chars (from_class column CHECK constraint)
+    const { tid } = await seedTeacher(db, { token: 'tok1234567890abc', showOnHome: 1, title: 'Thầy' })
+    const tmplId = await seedTemplate(db)
+    await db.prepare(
+      'INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind('crdmarker7654321', tid, tmplId, 'msg', FROM_MARKER, CLASS_MARKER, 0, 'approved', new Date().toISOString()).run()
+
+    const r = await handlePublic(
+      new Request('https://x/api/wall', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.text()
+    expect(body).not.toContain(FROM_MARKER)
+    expect(body).not.toContain(CLASS_MARKER)
+  })
+
+  it('marker scan: approved card markers do NOT appear in /api/templates response', async () => {
+    const MSG_MARKER = 'UNIQUE_MSG_MARKER_TPLS_45'
+    const FROM_MARKER = 'UNIQUE_FROM_MARKER_TPLS_46'
+    const { tid } = await seedTeacher(db, { token: 'tok1234567890abc', showOnHome: 1, title: 'Thầy' })
+    const tmplId = await seedTemplate(db)
+    await db.prepare(
+      'INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind('crdmrkrtpl123456', tid, tmplId, MSG_MARKER, FROM_MARKER, '12A1', 0, 'approved', new Date().toISOString()).run()
+
+    const r = await handlePublic(
+      new Request('https://x/api/templates', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.text()
+    expect(body).not.toContain(MSG_MARKER)
+    expect(body).not.toContain(FROM_MARKER)
+  })
+
+  it('marker scan: approved card markers do NOT appear in /api/wishes response', async () => {
+    const MSG_MARKER = 'UNIQUE_MSG_MARKER_WISH_47'
+    const FROM_MARKER = 'UNIQUE_FROM_MARKER_WISH_48'
+    const { tid } = await seedTeacher(db, { token: 'tok1234567890abc', showOnHome: 1, title: 'Thầy' })
+    const tmplId = await seedTemplate(db)
+    await db.prepare(
+      'INSERT INTO student_card (public_id,teacher_id,template_id,message,from_name,from_class,anonymous,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind('crdmrkrwsh123456', tid, tmplId, MSG_MARKER, FROM_MARKER, '12A1', 0, 'approved', new Date().toISOString()).run()
+
+    const r = await handlePublic(
+      new Request('https://x/api/wishes', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      makeEnv(db),
+    )
+    const body = await r.text()
+    expect(body).not.toContain(MSG_MARKER)
+    expect(body).not.toContain(FROM_MARKER)
+  })
 })
 
 // ---- GET /api/teachers/* → 404 (route removed) ----

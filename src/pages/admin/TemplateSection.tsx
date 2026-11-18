@@ -2,7 +2,7 @@
  * TemplateSection — Mẫu thiệp.
  *
  * Grid of active/inactive templates with usage counts.
- * Editor: name ≤60, layout select, three slot pickers from image library,
+ * Editor: name ≤60, layout select, background and banner slot pickers from the image library,
  * active switch, live preview with sample text.
  * Delete with 409 message "Mẫu đang được dùng — hãy tắt mẫu thay vì xóa".
  */
@@ -372,7 +372,7 @@ export default function TemplateSection({
               <p className="kicker" style={{ marginBottom: '0.5rem' }}>Xem trước</p>
               <div className="preview-wrap">
                 <CardView
-                  card={{ ...SAMPLE_CARD, name: SAMPLE_CARD.name }}
+                  card={SAMPLE_CARD}
                   layout={form.layout}
                   images={previewImages}
                 />

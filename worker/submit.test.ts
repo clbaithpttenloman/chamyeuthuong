@@ -531,8 +531,8 @@ describe('POST /api/cards — more invisible and malformed characters (security 
 // New for privacy-about plan — FAILING until Group 2 updates submit.ts
 // ===================================================================
 
-describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)', () => {
-  it('teacherId (show_on_home=1) → 201 — FAILS until Group 2 implements teacherId', async () => {
+describe('POST /api/cards — teacherId / teacherToken', () => {
+  it('teacherId (show_on_home=1) → 201', async () => {
     // After Group 2: teacherId accepted for show_on_home=1 teachers.
     // Before Group 2: submit.ts requires teacherPublicId → returns 400 for teacherId.
     const { db: freshDb } = testDb()
@@ -553,7 +553,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     expect(r.status).toBe(201)
   })
 
-  it('teacherToken (any teacher, including hidden) → 201 — FAILS until Group 2', async () => {
+  it('teacherToken (any teacher, including hidden) → 201', async () => {
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
     const TOKEN = 'tok1234567890abc'
@@ -573,7 +573,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     expect(r.status).toBe(201)
   })
 
-  it('teacherId for show_on_home=0 teacher → 404 — FAILS until Group 2', async () => {
+  it('teacherId for show_on_home=0 teacher → 404', async () => {
     // After Group 2: teacherId only valid for show_on_home=1. Hidden teacher via id → 404.
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
@@ -610,7 +610,7 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     expect(r.status).toBe(400)
   })
 
-  it('unknown teacherId → 404 — FAILS until Group 2 (currently → 400 because teacherId not understood)', async () => {
+  it('unknown teacherId → 404', async () => {
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
@@ -640,6 +640,49 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     expect(r.status).toBe(400)
   })
 
+  it('unknown teacherToken (valid format, not in DB) → 404', async () => {
+    const { tmplId } = await seedTeacherAndTemplate(db)
+    const r = await handleSubmit(
+      submitReq({ teacherToken: 'unknowntoken1234', templateId: tmplId, message: 'Chúc mừng!' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(404)
+  })
+
+  it('malformed teacherToken (not 16 alphanumeric chars) → 400', async () => {
+    const r = await handleSubmit(
+      submitReq({ teacherToken: 'bad!token', templateId: 1, message: 'msg' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('201 via teacherId: DB row stores correct teacher_id', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    vi.mocked(newToken).mockReturnValue('teachidcard0001a')
+    const r = await handleSubmit(
+      submitReq({ teacherId: tid, templateId: tmplId, message: 'ok' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(201)
+    const row = await db.prepare('SELECT teacher_id FROM student_card LIMIT 1')
+      .first<{ teacher_id: number }>()
+    expect(row?.teacher_id).toBe(tid)
+  })
+
+  it('201 via teacherToken: DB row stores correct teacher_id', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    vi.mocked(newToken).mockReturnValue('tokcard000000001')
+    const r = await handleSubmit(
+      submitReq({ teacherToken: VALID_TOKEN, templateId: tmplId, message: 'ok' }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(201)
+    const row = await db.prepare('SELECT teacher_id FROM student_card LIMIT 1')
+      .first<{ teacher_id: number }>()
+    expect(row?.teacher_id).toBe(tid)
+  })
+
   it('marker scan: submit response body never echoes submitted message text', async () => {
     const MARKER = 'UNIQUE_SUBMIT_MARKER_XYZ'
     const { tid, tmplId } = await seedTeacherAndTemplate(db)
@@ -658,9 +701,10 @@ describe('POST /api/cards — teacherId / teacherToken (failing until Group 2)',
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
     const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
     const r = await handleSubmit(
-      submitReq({ teacherPublicId: 'unknownpublicid1', templateId: tmplId, message: MARKER }),
+      submitReq({ teacherId: 99999, templateId: tmplId, message: MARKER }),
       makeEnv(freshDb),
     )
+    expect(r.status).toBe(404)
     const body = await r.text()
     expect(body).not.toContain(MARKER)
   })
