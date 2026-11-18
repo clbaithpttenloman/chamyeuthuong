@@ -43,7 +43,7 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 2. **Claim admin** — go to `/admin`, type the bootstrap email (or set `ALLOW_FIRST_CLAIM=1`)
 3. **Add teachers** — bulk paste list `Thầy|Cô Tên | Môn | Tổ` (1–100) or add one at a time
 4. **Upload images** — JPG/PNG/WebP, max 1280 px, ≤ 300 KB (browser compresses, strips EXIF)
-5. **Create templates** — pick layout, assign images to slots (`background`, `banner`), set active
+5. **Create templates** — pick layout, upload a background image, set active
 6. **Print QR codes** — from the Thầy cô section; each QR is a private link to that teacher's card page. `Rotate` gives a new token (old QR becomes invalid)
 7. **Distribute QR privately** — email, print, or hand to each teacher. Students access the public home page (`/`), or use the private QR to see that teacher's cards
 8. **Share the site link** (`/`) — students send cards
@@ -74,22 +74,29 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 
 ### **Mẫu thiệp** (Templates)
 
-- **Create**: name (≤ 60 chars), pick layout (5 presets), assign images to slots (`background`, `banner`), active flag
+- **Create**: name (≤ 60 chars), pick layout, upload or assign one background image (the card face), active flag
 - **List**: grid of active templates only; click to edit
-- **Edit**: update name, layout, images, toggle active
+- **Edit**: update name, layout, background image, toggle active
 - **Delete**: 409 if any card uses it; deactivate instead to hide from students while keeping existing cards rendering
 - **Active/inactive**: students pick active only; inactive cards stay rendered in approved cards
 
-**Layouts** (from `shared/layouts.ts`):
-- `lotus` — Hoa sen (Lotus)
-- `spring` — Mùa xuân (Spring)
-- `night` — Đêm sao (Starry night)
-- `classic` — Cổ điển (Classic)
-- `minimal` — Tối giản (Minimal)
+**Card v3 Model:** a template = name + layout + one background image. The layout determines the card ratio (portrait 3:4 or landscape 4:3) and the writing zone position and size (as % of the card). The background image is shown at 100% as the card face; text is written directly on it. Students do not choose images; admins pick one background per template. The card is rendered at actual card dimensions (960×1280 or 1280×960 px), so layout and text sizing are identical on QR pages, moderation thumbnails, and printed cards.
 
-**Image Slots**:
-- `background` — full-card cover; text sits on translucent panel
-- `banner` — wide image at the top
+**Layouts** (from `shared/layouts.ts`) — card v3 (physical-card model):
+
+| ID | Name | Ratio | Writing Zone |
+|---|---|---|---|
+| `doc-giua` | Dọc – giữa | 3:4 (portrait) | center 72% × 68% |
+| `doc-duoi` | Dọc – nửa dưới | 3:4 (portrait) | lower 82% × 50% |
+| `doc-tren` | Dọc – nửa trên | 3:4 (portrait) | upper 82% × 50% |
+| `ngang-giua` | Ngang – giữa | 4:3 (landscape) | center 64% × 72% |
+| `ngang-phai` | Ngang – nửa phải | 4:3 (landscape) | right 47% × 82% |
+| `ngang-trai` | Ngang – nửa trái | 4:3 (landscape) | left 47% × 82% |
+
+**Layouts (legacy mapping):** old templates created with ids `classic`, `lotus`, `spring`, `minimal` are read as `doc-giua` (center portrait); `night` is read as `ngang-giua` (center landscape). Mapping is read-time only; new templates accept only the six ids above.
+
+**Image Slot**:
+- `background` — the entire card face (960×1280 for portrait, 1280×960 for landscape). Background is shown at 100% as the card face. Text is written directly on it in the layout's writing zone. Admins should upload images that leave the zone clear.
 
 ### **Thầy cô** (Teachers)
 
@@ -193,12 +200,15 @@ Private teacher QR token → approved cards + teacher profile
   },
   "cards": [
     {
+    "cards": [
+    {
       "publicId": "gzz8y7pvsmkrc6mc",
-      "layout": "lotus",
+      "layout": "doc-giua",
       "images": {
-        "background": "uuy01p4h10is8946",
-        "banner": "aaz02p5i11jt9j57"
+        "background": "uuy01p4h10is8946"
       },
+      "font": "charm",
+      "ink": "#6b21a8",
       "message": "Em cảm ơn thầy...",
       "from": "Minh Anh · 11A1",
       "createdAt": "2026-11-17T15:15:25Z"
@@ -211,6 +221,9 @@ Private teacher QR token → approved cards + teacher profile
 - Only `status = 'approved'` cards, newest first, max 200
 - `total`: count of all approved cards (may exceed 200)
 - `role` is one of: `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
+- `layout` is one of the six new layout ids (old ids are resolved at read time)
+- `font` and `ink` are the student's choices; if missing from old cards, defaults are applied
+- `images` contains only `background`
 - Unknown/malformed token → 404
 - Private token never appears in any response
 - Response header `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`
@@ -224,18 +237,17 @@ Returns: array of active templates
 [
   {
     "id": 1,
-    "name": "Hoa sen hồng",
-    "layout": "lotus",
+    "name": "Hoa hồng · Dọc – giữa",
+    "layout": "doc-giua",
     "images": {
-      "background": "uuy01p4h10is8946",
-      "banner": "aaz02p5i11jt9j57"
+      "background": "uuy01p4h10is8946"
     }
   }
 ]
 ```
 
 - Only `active = 1` templates
-- Images: slot → 16-char token
+- Images: only `background` slot (16-char token)
 
 ### GET /api/wishes
 Rate limit: **120/60 s per IP**
@@ -316,7 +328,9 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
   "message": "Em cảm ơn thầy dạy em.",
   "fromName": "Minh Anh",
   "fromClass": "11A1",
-  "anonymous": false
+  "anonymous": false,
+  "font": "charm",
+  "ink": "#6b21a8"
 }
 ```
 
@@ -328,7 +342,9 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
   "message": "...",
   "fromName": "...",
   "fromClass": "...",
-  "anonymous": false
+  "anonymous": false,
+  "font": "charm",
+  "ink": "#6b21a8"
 }
 ```
 
@@ -350,6 +366,8 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
 - `fromName`: ≤ 40 code points, optional; if `anonymous = true` stored as empty
 - `fromClass`: ≤ 10 code points, optional
 - `anonymous`: boolean, optional, defaults false
+- `font`: optional, exact member of FONTS list (patrick-hand, pangolin, itim, mali, charm, be-vietnam-pro, lora); absent defaults to patrick-hand; invalid or null → **400**
+- `ink`: optional, lowercase hex `#rrggbb`; absent defaults to #1d3fa6 (blue); invalid or null → **400**
 - Strings: NFC-normalized, trimmed
 - Rejected: control characters (except `\n` in message), zero-width characters, format characters, lone surrogates
 - Inactive/unknown template → **400**
@@ -477,15 +495,14 @@ List all templates.
 [
   {
     "id": 1,
-    "name": "Hoa sen hồng",
-    "layout": "lotus",
+    "name": "Hoa hồng · Dọc – giữa",
+    "layout": "doc-giua",
     "active": 1,
     "images": {
-      "background": { "id": 1, "token": "uuy01p4h10is8946" },
-      "banner": { "id": 2, "token": "aaz02p5i11jt9j57" }
+      "background": { "id": 1, "token": "seedbg0000000001" }
     },
     "created_at": "2026-11-17T15:15:25Z",
-    "created_by": "clbaithpttenloman@gmail.com"
+    "created_by": "seed"
   }
 ]
 ```
@@ -496,20 +513,19 @@ Create template.
 **Request:**
 ```json
 {
-  "name": "Hoa sen hồng",
-  "layout": "lotus",
+  "name": "Hoa hồng · Dọc – giữa",
+  "layout": "doc-giua",
   "active": 1,
   "images": {
-    "background": 1,
-    "banner": 2
+    "background": 1
   }
 }
 ```
 
 - `name`: ≤ 60 chars, required
-- `layout`: one of lotus, spring, night, classic, minimal; required
+- `layout`: one of the six layout ids (doc-giua, doc-duoi, doc-tren, ngang-giua, ngang-phai, ngang-trai); required
 - `active`: 0 or 1, defaults to 1
-- `images`: object mapping slot → image ID (1–200) or null (empty slot). Valid slots: `background`, `banner`
+- `images`: `{ "background": <image id> | null }` (`null` removes it). `banner: null` from an old admin tab is ignored; any other key, or `banner`/`photo` with an id → **400**
 - Returns created template with full image metadata
 
 #### PUT /api/admin/templates/:id
@@ -550,8 +566,8 @@ List cards with raw student fields.
     },
     "template": {
       "id": 1,
-      "name": "Hoa sen hồng",
-      "layout": "lotus"
+      "name": "Hoa hồng · Dọc – giữa",
+      "layout": "doc-giua"
     }
   }
 ]
@@ -604,18 +620,18 @@ List image metadata (not bytes).
 [
   {
     "id": 1,
-    "token": "uuy01p4h10is8946",
-    "name": "banner.png",
-    "mime": "image/png",
-    "size": 136,
+    "token": "seedbg0000000001",
+    "name": "Hoa hồng · Dọc – giữa",
+    "mime": "image/webp",
+    "size": 18024,
     "created_at": "2026-11-17T15:14:38Z",
-    "created_by": "clbaithpttenloman@gmail.com",
-    "used_by": 3
+    "created_by": "seed",
+    "used_by": 1
   }
 ]
 ```
 
-- `used_by`: count of template_image rows (not cards)
+- `used_by`: count of template_image rows with slot='background' (not cards)
 
 #### POST /api/admin/images?name=<name>
 Upload image.
@@ -626,12 +642,12 @@ Upload image.
 ```json
 {
   "id": 1,
-  "token": "uuy01p4h10is8946",
-  "name": "banner.png",
-  "mime": "image/png",
-  "size": 136,
+  "token": "seedbg0000000001",
+  "name": "Hoa hồng · Dọc – giữa",
+  "mime": "image/webp",
+  "size": 18024,
   "created_at": "2026-11-17T15:14:38Z",
-  "created_by": "clbaithpttenloman@gmail.com"
+  "created_by": "seed"
 }
 ```
 
@@ -835,13 +851,14 @@ All errors: `{ error: "<code>" }`
 
 ## Data Model
 
-### New Tables (Student Cards Model)
+### New Tables (Card v3 Student Cards Model)
 
 ```sql
 teacher_profile(
   teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
   department   TEXT NOT NULL DEFAULT '',
-  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
+  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
+  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))
 )
 
 template(
@@ -855,7 +872,7 @@ template(
 
 template_image(
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
-  slot        TEXT NOT NULL CHECK (slot IN ('background','banner')),
+  slot        TEXT NOT NULL CHECK (slot IN ('background')),
   image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
   PRIMARY KEY (template_id, slot)
 )
@@ -872,9 +889,10 @@ student_card(
   status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
   created_at  TEXT NOT NULL,
   reviewed_at TEXT,
-  reviewed_by TEXT
+  reviewed_by TEXT,
+  font        TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32),
+  ink         TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
 )
--- Indexes on (teacher_id, status) and (status, created_at)
 
 site_content(
   key        TEXT PRIMARY KEY CHECK (key IN ('about')),
@@ -1015,7 +1033,7 @@ The school can remove this later by editing `_headers`.
 
 See `package.json` for exact pinned versions (no ranges).
 
-- **Runtime:** react, react-dom, react-router-dom, qrcode, @fontsource/be-vietnam-pro and @fontsource/lora (self-hosted fonts with Vietnamese coverage, SIL OFL; see docs/tech.md)
+- **Runtime:** react, react-dom, react-router-dom, qrcode, seven @fontsource fonts (patrick-hand, pangolin, itim, mali, charm, be-vietnam-pro, lora) for student font choices, all with Vietnamese coverage, all SIL OFL. See docs/tech.md and docs/runbooks/admin.md for details.
 - **Dev:** TypeScript, Vite, Vitest, ESLint (with react-hooks plugin, typescript-eslint), Wrangler
 
 All versions pinned exactly; upgrades follow the 7-day quarantine.

@@ -80,7 +80,7 @@ template(
 
 template_image(
   template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
-  slot        TEXT NOT NULL CHECK (slot IN ('background','banner')),
+  slot        TEXT NOT NULL CHECK (slot IN ('background')),
   image_id    INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
   PRIMARY KEY (template_id, slot)
 )
@@ -97,7 +97,9 @@ student_card(
   status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
   created_at  TEXT NOT NULL,
   reviewed_at TEXT,
-  reviewed_by TEXT
+  reviewed_by TEXT,
+  font        TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32),
+  ink         TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
 )
 
 site_content(
@@ -122,23 +124,46 @@ site_content(
 - **Removed:** `teacher_profile.public_id` (teachers identified only by numeric `id` internally, `token` for private QR)
 - **Removed:** `/api/teachers/:publicId` endpoint (404)
 - **Removed:** `/thay-co/:publicId` React route (no public teacher pages)
-- **Removed:** `template_image.slot='photo'` (slots: `background`, `banner` only)
+- **Removed:** `template_image.slot='banner'` and `'photo'` from new templates (slots: `background` only); old DBs keep old CHECK but code rejects banner/photo writes and ignores them on reads
 - **Removed:** `latest` array from `/api/wall` (privacy model)
 - **Removed:** old label "GV môn: {môn}" (replaced with "Giáo viên: {môn}" or role name for leaders)
+- **Removed:** old layout ids as write-targets (classic, lotus, spring, minimal, night) — mapped read-time only
+- **Removed:** translucent overlay background rendering (card v3: solid background image)
+- **Removed:** banner CSS and `card-mini` scale hacks
+- **Added:** `student_card.font` TEXT DEFAULT 'patrick-hand' (Card v3: student font choice)
+- **Added:** `student_card.ink` TEXT DEFAULT '#1d3fa6' (Card v3: student ink colour)
+- **Added:** seven supported fonts via @fontsource (patrick-hand, pangolin, itim, mali, charm, be-vietnam-pro, lora)
 - **Added:** `/api/qr/:token` endpoint (private teacher card page)
 - **Added:** `/api/about` (public) and `/api/admin/about` (admin editor)
 - **Added:** `POST /api/cards` accepts exactly one of `teacherId` or `teacherToken`
 - **Added:** `site_content` table for About page (seeded once via INSERT OR IGNORE)
 - **Added:** `teacher_profile.role` column (chức vụ: Giáo viên, Hiệu trưởng, Phó hiệu trưởng)
+- **Added:** six layout ids (doc-giua, doc-duoi, doc-tren, ngang-giua, ngang-phai, ngang-trai)
+- **Added:** one-time seed: 6 flower backgrounds + 6 example templates (guarded by meta `images_seeded`)
 
 ### Schema Upgrades (Idempotent, Applied Automatically)
 
-`ensureSchema` runs the `UPGRADES` list in `worker/schema.ts` after the CREATE batch. It probes `PRAGMA table_info('teacher_profile')` once, and again after any step that ran. Each step is its own `db.batch` (one D1 transaction).
+`ensureSchema` runs the `UPGRADES` list in `worker/schema.ts` after the CREATE batch. It probes `PRAGMA table_info('teacher_profile')` and `PRAGMA table_info('student_card')` per table, re-probing only after a step ran on that table. Each step is its own `db.batch` (one D1 transaction).
 
-1. **Drop `public_id`** (if `public_id` present and `role` absent): CREATE `teacher_profile_new` from the current DDL, copy `teacher_id, department, show_on_home`, DROP, RENAME. Rows get `role = 'Giáo viên'` from the DDL default.
-2. **Add `role`** (if absent): `ALTER TABLE teacher_profile ADD COLUMN role TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))`. Skipped after step 1.
+1. **Drop `public_id`** (if `public_id` present on teacher_profile and `role` absent): CREATE `teacher_profile_new` from the current DDL, copy `teacher_id, department, show_on_home`, DROP, RENAME. Rows get `role = 'Giáo viên'` from the DDL default.
+2. **Add `role`** (if absent on teacher_profile): `ALTER TABLE teacher_profile ADD COLUMN role TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))`. Skipped after step 1.
+3. **Add `font`** (if absent on student_card, Card v3): `ALTER TABLE student_card ADD COLUMN font TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32)`. Existing cards get Bút bi.
+4. **Add `ink`** (if absent on student_card, Card v3): `ALTER TABLE student_card ADD COLUMN ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')`. Existing cards get blue.
+5. **Seed images & templates** (Card v3, best-effort, guarded by meta `images_seeded`): Six WebP backgrounds from `worker/seedImages.ts` (tokens seedbg0000000001–6, created_by 'seed') + six example templates (created_by 'seed') + links. Runs once per DB; failure logs `schema: seed images failed` (does not 503). Each statement repeats the flag-absent guard, so racing isolates produce exactly 6/6/6 rows and one flag.
 
-A failed step logs `schema: upgrade failed`, rejects (request → 503), and is retried on the next request. Two isolates racing step 2: the loser gets "duplicate column name" once, then the retry skips. Production at 4d3a5df runs step 1 only. Operator steps: `docs/runbooks/admin.md` → "Schema upgrades".
+A failed step logs `schema: upgrade failed`, rejects (request → 503), and is retried on the next request. Two isolates racing: the loser gets "duplicate column name" once, then the retry skips. Production at 4d3a5df runs steps 1 only; step 2 if `role` is missing; steps 3–4 and 5 run on the next deploy after this plan is merged. Operator reference: `docs/runbooks/admin.md` → "Schema upgrades".
+
+### Seed Images & Example Templates (Card v3)
+
+**Source:** Six 960×1280 / 1280×960 WebP images rendered from the approved mockup (`docs/design/card-v3-mockup.html`), one per layout. Flowers avoid the writing zone per layout. Size: ~18–20 KB each, ≤ 300 KB per image CHECK. Encoded as base64 in `worker/seedImages.ts` and loaded with dynamic `import()` only when the seed has not run (so normal cold starts do not parse the 122 KB module).
+
+**Example templates:** Six active templates named after colour + layout (e.g., "Hoa hồng · Dọc – giữa"), one per seed image, with created_by='seed'. Admins can deactivate or delete them (deletion is allowed because the image's used_by count ignores legacy banner links; see image deletion below).
+
+**Idempotency:** Guarded by meta flag `images_seeded`. Every INSERT statement repeats `WHERE NOT EXISTS (SELECT 1 FROM meta WHERE key='images_seeded')`, so a racing isolate inserts nothing. Flag is written last in the same batch.
+
+**Bypassable caps:** Seed images bypass the 200-image / 40 MB upload caps (~6 images, well under limits).
+
+**Best-effort:** Failure logs `schema: seed images failed` (fixed string, no stack) and never rejects `ensureSchema`. Runs at most once per isolate (success or failure cached), so a failing seed is not re-sent per request.
 
 ### Atomic Operations
 
@@ -174,6 +199,8 @@ WHERE t.token = ?
 - **Per-teacher cap:** 200 pending cards per teacher
 - **Global cap:** 2000 pending cards (must delete to free space)
 - **Request validation:** both or neither → 400 before DB
+- **Font validation** (Card v3): exact string match against FONTS ids (Map-based `isFont`, so `__proto__` and `constructor` fail); absent defaults to 'patrick-hand'; invalid → 400
+- **Ink validation** (Card v3): regex `^#[0-9a-fA-F]{6}$` on raw input (strict, no `m` flag, no newlines), then `.toLowerCase()` for storage; absent defaults to '#1d3fa6'; invalid or null → 400; stored value passes GLOB CHECK
 
 #### Bulk Review (Plan § Amendment: D1 100-Parameter Limit)
 
@@ -212,7 +239,6 @@ INSERT INTO template_image (...) VALUES (...); -- last_insert_rowid() points at 
 ```sql
 INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?);
 INSERT INTO template_image VALUES ((SELECT MAX(id) FROM template), 'background', ?);
-INSERT INTO template_image VALUES ((SELECT MAX(id) FROM template), 'banner', ?);
 ```
 
 - `SELECT MAX(id) FROM template)` inside the batch sees the just-inserted template row

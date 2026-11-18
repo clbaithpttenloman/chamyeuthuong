@@ -170,16 +170,18 @@ In **Mẫu thiệp**:
 
 1. Click **+ Tạo mẫu**
 2. Enter **name** (≤ 60 chars)
-3. Pick **layout**: lotus, spring, night, classic, minimal
-4. Assign images:
-   - **background** — full-card cover (optional)
-   - **banner** — top image (optional)
+3. Pick **layout**: doc-giua, doc-duoi, doc-tren, ngang-giua, ngang-phai, ngang-trai
+4. Upload or assign **background image** (required for preview, but can be null):
+   - Portrait: 960×1280 px; leave the dashed writing zone clear
+   - Landscape: 1280×960 px; leave the dashed writing zone clear
 5. Set **active** flag (on by default; off hides from students)
 6. Click **Tạo**
 
-Live preview shows the layout with sample text and images in real-time.
+Live preview shows the layout with sample text and the background image in real-time. The writing zone is highlighted with a dashed border so you can verify the image leaves it clear.
 
 **Later:** click **Chỉnh sửa** to edit, click **Xóa** to remove (fails with 409 if any card uses it — deactivate instead).
+
+**Layout mapping (legacy):** old templates in the database with ids `classic`, `lotus`, `spring`, `minimal` are read as `doc-giua` (center portrait); `night` is read as `ngang-giua` (center landscape). Only the six new ids above are accepted for new templates.
 
 ### 5. Print QR Codes & Distribute Privately
 
@@ -283,6 +285,43 @@ Students' first instinct is to send many cards. Use bulk actions:
 - **Hide**: card stays in D1 but removed from public queries, **does not free quota** (count stays high)
 
 Use **delete** for spam. Use **hide** for genuinely inappropriate cards the teacher might want to see later.
+
+---
+
+## Student Choices: Fonts and Ink (Card v3)
+
+### Fonts
+
+Students choose from seven fonts when writing a card. Each font is self-hosted (no CDN):
+
+| Font ID | Label | Preview |
+|---|---|---|
+| patrick-hand | Bút bi (default) | Casual handwriting |
+| pangolin | Bút dạ | Soft marker |
+| itim | Chữ tròn | Round letters |
+| mali | Nét mảnh | Delicate strokes |
+| charm | Thư pháp | Calligraphy |
+| be-vietnam-pro | Chữ in | Clean sans-serif |
+| lora | Có chân | Serif with elegance |
+
+All fonts have full Vietnamese support (unicode-range subset, 400 weight). Fonts are loaded via @fontsource, so browsers only download the glyphs they use. **Why not Dancing Script?** It renders Vietnamese combining marks (like "ẫ" in "trưởng") incorrectly — the grave accent renders as a hook.
+
+### Ink Colours
+
+Students choose one of four ink colours:
+
+| Hex | Label | Usage |
+|---|---|---|
+| #1d3fa6 | Xanh (default) | Blue |
+| #1c1917 | Đen | Black |
+| #6b21a8 | Tím | Purple |
+| Custom | Màu khác | Any #rrggbb via colour picker |
+
+Existing cards (before card v3) default to Bút bi + Xanh if font/ink columns are missing.
+
+### Moderation Thumbnail
+
+The moderation thumbnail shows the student's message on a **plain white background** (not the template background), in the chosen font and ink. This ensures review is text-focused and doesn't depend on tiny thumbnail image quality.
 
 ---
 
@@ -590,10 +629,14 @@ Steps, in order (each is its own batch; the Worker re-checks the table after a s
 
 1. **Drop `public_id`.** A database created by commit 4d3a5df (the first production deploy) has `teacher_profile.public_id TEXT UNIQUE NOT NULL`; newer code no longer writes it, so adding teachers failed with 503. Runs only if `public_id` exists and `role` does not. The Worker copies `teacher_id`, `department` and `show_on_home` into a new `teacher_profile` built from the current DDL, so every row also gets `role = 'Giáo viên'`.
 2. **Add `role` (chức vụ).** Runs only if `role` is missing (databases without `public_id` from before this feature): `ALTER TABLE teacher_profile ADD COLUMN role ... DEFAULT 'Giáo viên'`. On production at 4d3a5df this step is skipped, because step 1 already created the column.
+3. **Add `font` to student_card.** Card v3 feature (2026-11-18): `ALTER TABLE student_card ADD COLUMN font TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32)`. Existing cards get Bút bi (patrick-hand).
+4. **Add `ink` to student_card.** Card v3 feature (2026-11-18): `ALTER TABLE student_card ADD COLUMN ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')`. Existing cards get blue (#1d3fa6).
 
-If two Worker instances start at the same moment, one can fail step 2 with "duplicate column name". That request returns 503 and logs `schema: upgrade failed` once; the next request sees the column and continues. One such log line right after a deploy is not a stuck deploy; repeated lines are.
+**One-time seed (after schema steps):** Six flower backgrounds (one per layout, ~18–23 KB WebP, tokens `seedbg0000000001`–`6`) + six active example templates ("Hoa hồng · Dọc – giữa" …). Guarded by meta flag `images_seeded`; INSERT-only, never overwrites. Added even if admin templates exist; admins can turn the templates off or delete them (an image still used by a template cannot be deleted). The six images count toward the 200-image / 40 MB library caps. Failure logs `schema: seed images failed` and the site keeps working; that line (repeated on new instances) is the signal to investigate. To regenerate the images, see the header of `worker/seedImages.ts` (source: `docs/design/card-v3-mockup.html`).
 
-Not changed: `template_image` keeps its old CHECK that also allows `photo` (the code ignores and rejects that slot), and old tables `card`, `card_style`, `card_image` are left alone if they exist.
+If two Worker instances start at the same moment, one can fail a step with "duplicate column name". That request returns 503 and logs `schema: upgrade failed` once; the next request sees the column and continues. One such log line right after a deploy is not a stuck deploy; repeated lines are.
+
+**Template_image CHECK:** On fresh DBs, CHECK limits slots to `background` only. Old DBs keep their old CHECK. Old banner/photo links stay in the table but are ignored on reads, not counted in an image's "used by", and deleted together with their image; writes accept only `background`.
 
 **Before deploying a release that contains an upgrade step:**
 
@@ -605,9 +648,14 @@ npx wrangler d1 time-travel info cham-yeu-thuong
 npx wrangler d1 execute cham-yeu-thuong --remote --command "SELECT count(*) AS n FROM teacher_profile WHERE teacher_id NOT IN (SELECT id FROM teacher)"
 ```
 
-After deploy, open `/admin`, add a teacher, set one teacher's Chức vụ to Hiệu trưởng, and check that the home tile shows only "Hiệu trưởng".
+After deploy:
+1. The Cloudflare build succeeded.
+2. `/gui-thiep` shows the six example templates; old templates show as "Dọc – giữa" (or "Ngang – giữa" for Đêm sao).
+3. Write a card with Thư pháp + Tím: the preview shows that font and colour; after approval the teacher's QR page shows the same.
+4. `/admin` → Mẫu thiệp: the editor preview shows the dashed writing zone.
+5. Adding a teacher still works.
 
-**Rollback:** roll forward with a fix. Redeploying 4d3a5df after the upgrade breaks, because that code still reads `public_id`. If you must go back, restore the database together with the old code (destructive, overwrites all data written since):
+**Rollback:** roll forward with a fix. Redeploying 4d3a5df after the upgrade breaks, because that code still reads `public_id` and expects no font/ink columns. If you must go back, restore the database together with the old code (destructive, overwrites all data written since):
 
 ```bash
 npx wrangler d1 time-travel restore cham-yeu-thuong --bookmark=<bookmark from step 1>
@@ -637,10 +685,10 @@ curl -H "X-Admin-Email: you@example.com" \
 Tables are created automatically on the first request via `ensureSchema` in `worker/schema.ts` (idempotent `CREATE TABLE IF NOT EXISTS`). No migration step needed.
 
 **New tables:**
-- `teacher_profile` — `department`, `show_on_home` flag
+- `teacher_profile` — `department`, `show_on_home` flag, `role` (chức vụ)
 - `template` — layout + active flag
-- `template_image` — slot → image mapping (slots: `background`, `banner`)
-- `student_card` — pending/approved/hidden status, student fields, review metadata
+- `template_image` — slot → image mapping (slot: `background` only; legacy banner/photo kept in old DBs but ignored on reads)
+- `student_card` — pending/approved/hidden status, student fields (font, ink), review metadata
 - `site_content` — About page content
 
 **Unchanged tables:**
