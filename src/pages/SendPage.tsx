@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useReducer, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { TeacherProfile, TemplatePublic, WallTeacher, WishPublic } from '../../shared/api.ts'
-import { formatFrom, subjectLabel } from '../../shared/api.ts'
+import { formatFrom, departmentLabel, subjectLabel } from '../../shared/api.ts'
 import { fillWish } from '../../shared/wish.ts'
 import { ApiError, getPublicWishes, getQr, getTemplates, getWall, submitCard } from '../api'
 import CardView from '../components/CardView.tsx'
@@ -312,6 +312,7 @@ export default function SendPage() {
           {filteredTeachers.map((t) => {
             const displayName = t.title ? `${t.title} ${t.name}` : t.name
             const sub = subjectLabel(t.subject)
+            const dept = departmentLabel(t.subject, t.department)
             return (
               <button
                 key={t.id}
@@ -323,7 +324,7 @@ export default function SendPage() {
                 <div className="card-tile-icon">🎓</div>
                 <div className="card-tile-title">{displayName}</div>
                 {sub && <div className="card-tile-subject">{sub}</div>}
-                {t.department && <div className="card-tile-dept">{t.department}</div>}
+                {dept && <div className="card-tile-dept">{dept}</div>}
                 <div className="card-tile-count">
                   {t.cardCount === 0 ? 'Chưa có thiệp' : `${t.cardCount} thiệp`}
                 </div>

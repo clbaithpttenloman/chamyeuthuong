@@ -268,3 +268,16 @@ export function subjectLabel(subject: string): string {
   const s = subject.trim()
   return s ? `GV môn: ${s}` : ''
 }
+
+/** Lowercase, NFC, collapse spaces, drop a leading "tổ " — for comparing môn and tổ. */
+const norm = (v: string) => v.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim().replace(/^tổ /, '')
+
+/**
+ * Department line for a teacher tile. Returns "" when it only repeats the
+ * subject (e.g. môn "Toán", tổ "Toán" or "Tổ Toán"), so the tile shows one line.
+ */
+export function departmentLabel(subject: string, department: string): string {
+  const d = department.trim()
+  if (!d) return ''
+  return subject.trim() && norm(subject) === norm(d) ? '' : d
+}

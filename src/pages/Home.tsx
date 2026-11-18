@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { WallResponse, WallTeacher } from '../../shared/api.ts'
-import { subjectLabel } from '../../shared/api.ts'
+import { departmentLabel, subjectLabel } from '../../shared/api.ts'
 import { getWall } from '../api'
 import site from '../content/site.json'
 
@@ -146,6 +146,7 @@ export default function Home() {
 function TeacherTile({ teacher }: { teacher: WallTeacher }) {
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
   const sub = subjectLabel(teacher.subject)
+  const dept = departmentLabel(teacher.subject, teacher.department)
   return (
     <Link
       to={`/gui-thiep?thay=${teacher.id}`}
@@ -155,7 +156,7 @@ function TeacherTile({ teacher }: { teacher: WallTeacher }) {
       <div className="card-tile-icon">🎓</div>
       <div className="card-tile-title">{displayName}</div>
       {sub && <div className="card-tile-subject">{sub}</div>}
-      {teacher.department && <div className="card-tile-dept">{teacher.department}</div>}
+      {dept && <div className="card-tile-dept">{dept}</div>}
       <div className="card-tile-count">
         {teacher.cardCount === 0 ? 'Chưa có thiệp' : `${teacher.cardCount} thiệp`}
       </div>

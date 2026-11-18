@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   formatFrom,
   subjectLabel,
+  departmentLabel,
   MAX_MESSAGE, MAX_FROM_NAME, MAX_FROM_CLASS, MAX_NEWLINES,
   PENDING_CAP, PENDING_CAP_PER_TEACHER, PAGE_SIZE, MAX_REVIEW_IDS,
   ABOUT_HEADING_MAX, ABOUT_INTRO_MAX, ABOUT_STATS_MAX, ABOUT_STAT_VALUE_MAX,
@@ -126,4 +127,18 @@ describe('AboutContent constants', () => {
   it('ABOUT_MEMBER_ROLE_MAX = 60', () => expect(ABOUT_MEMBER_ROLE_MAX).toBe(60))
   it('ABOUT_BODY_MAX = 16384 (16 KB)', () => expect(ABOUT_BODY_MAX).toBe(16384))
   it('ABOUT_NEWLINES_MAX = 10', () => expect(ABOUT_NEWLINES_MAX).toBe(10))
+})
+
+// ---- departmentLabel (hide tổ when it repeats the môn) ----
+
+describe('departmentLabel', () => {
+  it('different tổ → shown', () => expect(departmentLabel('Toán', 'Tổ Toán - Tin')).toBe('Tổ Toán - Tin'))
+  it('same as môn → hidden', () => expect(departmentLabel('Toán', 'Toán')).toBe(''))
+  it('"Tổ <môn>" → hidden', () => expect(departmentLabel('Ngữ văn', 'Tổ Ngữ văn')).toBe(''))
+  it('ignores case, spaces and Unicode form', () => {
+    expect(departmentLabel('toán', '  TỔ   TOÁN ')).toBe('')
+    expect(departmentLabel('To\u0061\u0301n', 'Toán')).toBe('')  // NFD vs NFC
+  })
+  it('no môn → tổ shown', () => expect(departmentLabel('', 'Tổ Toán')).toBe('Tổ Toán'))
+  it('no tổ → ""', () => expect(departmentLabel('Toán', '  ')).toBe(''))
 })
