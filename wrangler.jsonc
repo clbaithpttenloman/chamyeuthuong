@@ -34,7 +34,7 @@
     "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com"
   },
   // Per-IP rate limits (approximate, per Cloudflare location).
-  // PUBLIC_IP_LIMIT (120/60 s): guards /api/wall, /api/teachers/*, /api/templates, /api/wishes.
+  // PUBLIC_IP_LIMIT (120/60 s): guards /api/wall, /api/templates, /api/wishes, /api/about.
   //   120/min is generous; school NAT shares one IP, so set high enough to avoid false positives.
   // SUBMIT_IP_LIMIT (20/60 s): guards POST /api/cards (student card submissions).
   //   20/min is tight for a school NAT on 20/11 — raise in .dev.vars for the event if needed.
