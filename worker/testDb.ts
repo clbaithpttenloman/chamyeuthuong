@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DatabaseSync } from 'node:sqlite'
-import { SCHEMA } from './schema.ts'
+import { SCHEMA, UPGRADE_SQL } from './schema.ts'
 
 /** Minimal D1 binding types (no @cloudflare/workers-types). Matches worker/types.ts. */
 export type D1Stmt = {
@@ -76,9 +76,9 @@ export function testDb(opts: { schema?: false } = {}) {
 
   const db: D1 = {
     prepare: (sql) => {
-      // DDL statements (members of SCHEMA) are counted separately so atomicity tests that
+      // DDL statements (members of SCHEMA or UPGRADE_SQL) are counted separately so atomicity tests that
       // count non-DDL prepare() calls remain stable across ensureSchema integration.
-      if (SCHEMA.includes(sql)) {
+      if (SCHEMA.includes(sql) || UPGRADE_SQL.includes(sql)) {
         state.ddl++
       } else {
         state.prepares++

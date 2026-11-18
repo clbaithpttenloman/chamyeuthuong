@@ -48,7 +48,7 @@ describe('ensureSchema — creation', () => {
   it('counts DDL statements in state.ddl only (not state.prepares)', async () => {
     const { db, state } = testDb({ schema: false })
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length)
+    expect(state.ddl).toBe(SCHEMA.length + 1) // + the teacher_profile upgrade probe
     expect(state.prepares).toBe(0)
   })
 })
@@ -62,7 +62,7 @@ describe('ensureSchema — idempotency', () => {
     const p2 = ensureSchema(db)
     expect(p1).toBe(p2) // same promise — cache hit
     await p1
-    expect(state.ddl).toBe(SCHEMA.length) // only one batch worth of DDL
+    expect(state.ddl).toBe(SCHEMA.length + 1) // one batch of DDL + one upgrade probe
   })
 
   it('awaiting twice on the same db issues no extra DDL', async () => {
@@ -123,7 +123,7 @@ describe('ensureSchema — concurrency', () => {
     expect(r1).toBeUndefined()
     expect(r2).toBeUndefined()
     expect(r3).toBeUndefined()
-    expect(state.ddl).toBe(SCHEMA.length)
+    expect(state.ddl).toBe(SCHEMA.length + 1) // one batch + one upgrade probe
   })
 })
 
@@ -382,7 +382,7 @@ describe('SCHEMA seeds — 12 example wishes', () => {
   it('seeds are counted as DDL by testDb state.ddl', async () => {
     const { db, state } = testDb({ schema: false })
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length)
+    expect(state.ddl).toBe(SCHEMA.length + 1) // + the teacher_profile upgrade probe
     expect(state.prepares).toBe(0)
   })
 })
@@ -906,5 +906,62 @@ describe('site_content table', () => {
     expect(() => {
       for (const sql of SCHEMA) sqlite.exec(sql)
     }).not.toThrow()
+  })
+})
+
+// ---- Upgrade: databases created before plan 2026-11-18 (deployed at 4d3a5df) ----
+
+// teacher_profile exactly as deployed at 4d3a5df (public_id UNIQUE NOT NULL)
+const OLD_TEACHER_PROFILE = `CREATE TABLE teacher_profile (
+  teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  public_id    TEXT    UNIQUE NOT NULL,
+  department   TEXT    NOT NULL DEFAULT '',
+  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
+)`
+
+function oldDb() {
+  const t = testDb()
+  t.sqlite.exec('DROP TABLE teacher_profile')
+  t.sqlite.exec(OLD_TEACHER_PROFILE)
+  t.sqlite.exec(`INSERT INTO teacher (id, token, name, subject, created_at) VALUES (1, 'tok1234567890abc', 'Khoa', 'Toán', '2026-11-17')`)
+  t.sqlite.exec(`INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (1, 'pub1234567890abc', 'Tổ Toán', 0)`)
+  return t
+}
+
+const cols = (sqlite: ReturnType<typeof testDb>['sqlite']) =>
+  (sqlite.prepare("PRAGMA table_info('teacher_profile')").all() as { name: string }[]).map((c) => c.name)
+
+describe('ensureSchema — upgrades teacher_profile from the 4d3a5df shape', () => {
+  it('drops public_id so new teachers can be inserted', async () => {
+    const { db, sqlite } = oldDb()
+    await ensureSchema(db)
+    expect(cols(sqlite)).toEqual(['teacher_id', 'department', 'show_on_home'])
+    sqlite.exec(`INSERT INTO teacher (id, token, name, created_at) VALUES (2, 'tok2234567890abc', 'Lan', '2026-11-18')`)
+    expect(() => sqlite.exec(`INSERT INTO teacher_profile (teacher_id, department) VALUES (2, '')`)).not.toThrow()
+  })
+
+  it('keeps existing department and show_on_home values', async () => {
+    const { db, sqlite } = oldDb()
+    await ensureSchema(db)
+    expect(sqlite.prepare('SELECT teacher_id, department, show_on_home FROM teacher_profile').all())
+      .toEqual([{ teacher_id: 1, department: 'Tổ Toán', show_on_home: 0 }])
+  })
+
+  it('keeps the CASCADE from teacher and the show_on_home CHECK', async () => {
+    const { db, sqlite } = oldDb()
+    await ensureSchema(db)
+    expect(() => sqlite.exec('UPDATE teacher_profile SET show_on_home = 2')).toThrow()
+    sqlite.exec('DELETE FROM teacher WHERE id = 1')
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM teacher_profile').get()).toEqual({ n: 0 })
+  })
+
+  it('leaves an already-current database untouched (no rebuild)', async () => {
+    const { db, sqlite, state } = testDb()
+    sqlite.exec(`INSERT INTO teacher (id, token, name, created_at) VALUES (1, 'tok1234567890abc', 'Khoa', '2026-11-17')`)
+    sqlite.exec(`INSERT INTO teacher_profile (teacher_id, department) VALUES (1, 'x')`)
+    const before = sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()
+    await ensureSchema(db)
+    expect(sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()).toEqual(before)
+    expect(state.ddl).toBe(SCHEMA.length + 1) // SCHEMA + probe, no rebuild statements
   })
 })

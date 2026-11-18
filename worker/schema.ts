@@ -3,8 +3,10 @@ import { SEEDS } from './seed.ts'
 import { aboutSeedSql } from './aboutSeed.ts'
 
 // DDL for all tables, converted to CREATE TABLE IF NOT EXISTS so each run is idempotent.
-// SHORTCUT: idempotent CREATE only — IF NOT EXISTS cannot alter or drop existing columns;
-//   for the first column change, add a schema_version table or move to wrangler d1 migrations.
+// IF NOT EXISTS never alters an existing table: any column change also needs an upgrade
+// step in UPGRADES below, or databases created by an older deploy keep the old shape.
+// SHORTCUT: probe-and-rebuild upgrades — move to a schema_version table or
+//   wrangler d1 migrations once there are more than a few of them.
 export const SCHEMA: string[] = [
   // ---- Core tables ----
   `CREATE TABLE IF NOT EXISTS teacher (
@@ -93,12 +95,50 @@ export const SCHEMA: string[] = [
   aboutSeedSql(),
 ]
 
+const TEACHER_PROFILE_DDL = SCHEMA.find((q) => q.includes('IF NOT EXISTS teacher_profile ('))!
+
+/**
+ * In-place upgrades for databases created by older deploys. Each entry probes the live
+ * shape and, only if it is old, rebuilds the table in one batch (one D1 transaction, so a
+ * failure rolls back and the next request retries).
+ */
+const PROFILE_COLUMNS_SQL = "PRAGMA table_info('teacher_profile')"
+
+const UPGRADES: { needed(db: D1): Promise<boolean>; sql: string[] }[] = [
+  {
+    // 4d3a5df had teacher_profile.public_id TEXT UNIQUE NOT NULL; the column was removed in
+    // plan 2026-11-18-privacy-about. SQLite cannot DROP a UNIQUE column, so copy the table.
+    // Nothing references teacher_profile, so dropping it violates no foreign key.
+    async needed(db) {
+      const { results } = await db.prepare(PROFILE_COLUMNS_SQL).all<{ name: string }>()
+      return results.some((c) => c.name === 'public_id')
+    },
+    sql: [
+      TEACHER_PROFILE_DDL.replace('IF NOT EXISTS teacher_profile (', 'teacher_profile_new ('),
+      'INSERT INTO teacher_profile_new (teacher_id, department, show_on_home) ' +
+        'SELECT teacher_id, department, show_on_home FROM teacher_profile',
+      'DROP TABLE teacher_profile',
+      'ALTER TABLE teacher_profile_new RENAME TO teacher_profile',
+    ],
+  },
+]
+
+/** Every SQL string the upgrade step can prepare (probes included); testDb counts these as DDL. */
+export const UPGRADE_SQL: string[] = [PROFILE_COLUMNS_SQL, ...UPGRADES.flatMap((u) => u.sql)]
+
+async function runUpgrades(db: D1): Promise<void> {
+  for (const u of UPGRADES) {
+    if (await u.needed(db)) await db.batch(u.sql.map((q) => db.prepare(q)))
+  }
+}
+
 // Per-isolate cache: one Promise<void> per D1 binding object.
 // WeakMap keys are the D1 binding instances so they are garbage-collected with the binding.
 const _ready = new WeakMap<D1, Promise<void>>()
 
 /**
- * Ensures SCHEMA tables exist by running a single D1 batch, once per D1 binding per isolate.
+ * Ensures SCHEMA tables exist by running a single D1 batch, then applies any needed
+ * UPGRADES, once per D1 binding per isolate.
  * Concurrent callers share the same promise. On rejection the cache entry is evicted
  * (only if the map still holds that exact promise) so the next request retries.
  * Never logs.
@@ -109,7 +149,7 @@ export function ensureSchema(db: D1): Promise<void> {
 
   const p: Promise<void> = db
     .batch(SCHEMA.map((sql) => db.prepare(sql)))
-    .then(() => undefined)
+    .then(() => runUpgrades(db))
 
   // Attach .catch to p itself (not to the returned promise) so callers still receive
   // the rejection while the side-effect evicts the cache entry.
