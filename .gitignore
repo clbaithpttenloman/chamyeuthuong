@@ -3,7 +3,7 @@ node_modules/
 .wrangler/
 dist/
 .kiro/
-qr/
+/qr/
 # Local dev secrets — never commit
 .dev.vars
 .env
