@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Tests for worker/schema.ts
 import { describe, it, expect } from 'vitest'
-import { SCHEMA, ensureSchema } from './schema.ts'
+import { SCHEMA, UPGRADE_SQL, ensureSchema } from './schema.ts'
 import { SEEDS } from './seed.ts'
 import { testDb } from './testDb.ts'
 import type { D1Stmt } from './types.ts'
@@ -963,5 +963,34 @@ describe('ensureSchema — upgrades teacher_profile from the 4d3a5df shape', () 
     await ensureSchema(db)
     expect(sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()).toEqual(before)
     expect(state.ddl).toBe(SCHEMA.length + 1) // SCHEMA + probe, no rebuild statements
+  })
+
+  it('running the rebuild twice keeps the same rows', async () => {
+    const { db, sqlite } = oldDb()
+    await ensureSchema(db)
+    for (const q of UPGRADE_SQL.slice(1)) sqlite.exec(q) // second isolate racing the first
+    expect(cols(sqlite)).toEqual(['teacher_id', 'department', 'show_on_home'])
+    expect(sqlite.prepare('SELECT teacher_id, department, show_on_home FROM teacher_profile').all())
+      .toEqual([{ teacher_id: 1, department: 'Tổ Toán', show_on_home: 0 }])
+  })
+
+  it('a failed rebuild rolls back (old table and rows intact) and the next call retries', async () => {
+    const { db, sqlite } = oldDb()
+    sqlite.exec('CREATE TABLE teacher_profile_new (x INTEGER)') // makes the rebuild batch fail
+    await expect(ensureSchema(db)).rejects.toThrow()
+    expect(cols(sqlite)).toContain('public_id')
+    expect(sqlite.prepare('SELECT public_id FROM teacher_profile').all()).toEqual([{ public_id: 'pub1234567890abc' }])
+    sqlite.exec('DROP TABLE teacher_profile_new')
+    await ensureSchema(db) // cache entry was evicted → retried
+    expect(cols(sqlite)).toEqual(['teacher_id', 'department', 'show_on_home'])
+  })
+
+  it('new rows get the show_on_home DEFAULT 1 after the rebuild', async () => {
+    const { db, sqlite } = oldDb()
+    await ensureSchema(db)
+    sqlite.exec(`INSERT INTO teacher (id, token, name, created_at) VALUES (2, 'tok2234567890abc', 'Lan', '2026-11-18')`)
+    sqlite.exec(`INSERT INTO teacher_profile (teacher_id) VALUES (2)`)
+    expect(sqlite.prepare('SELECT department, show_on_home FROM teacher_profile WHERE teacher_id = 2').get())
+      .toEqual({ department: '', show_on_home: 1 })
   })
 })

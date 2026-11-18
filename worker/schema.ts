@@ -97,13 +97,13 @@ export const SCHEMA: string[] = [
 
 const TEACHER_PROFILE_DDL = SCHEMA.find((q) => q.includes('IF NOT EXISTS teacher_profile ('))!
 
+const PROFILE_COLUMNS_SQL = "PRAGMA table_info('teacher_profile')"
+
 /**
  * In-place upgrades for databases created by older deploys. Each entry probes the live
  * shape and, only if it is old, rebuilds the table in one batch (one D1 transaction, so a
  * failure rolls back and the next request retries).
  */
-const PROFILE_COLUMNS_SQL = "PRAGMA table_info('teacher_profile')"
-
 const UPGRADES: { needed(db: D1): Promise<boolean>; sql: string[] }[] = [
   {
     // 4d3a5df had teacher_profile.public_id TEXT UNIQUE NOT NULL; the column was removed in
