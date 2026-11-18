@@ -151,7 +151,7 @@ site_content(
 4. **Add `ink`** (if absent on student_card, Card v3): `ALTER TABLE student_card ADD COLUMN ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')`. Existing cards get blue.
 5. **Seed images & templates** (Card v3, best-effort, guarded by meta `images_seeded`): Six WebP backgrounds from `worker/seedImages.ts` (tokens seedbg0000000001–6, created_by 'seed') + six example templates (created_by 'seed') + links. Runs once per DB; failure logs `schema: seed images failed` (does not 503). Each statement repeats the flag-absent guard, so racing isolates produce exactly 6/6/6 rows and one flag.
 
-A failed step logs `schema: upgrade failed`, rejects (request → 503), and is retried on the next request. Two isolates racing: the loser gets "duplicate column name" once, then the retry skips. Production at 4d3a5df runs steps 1 only; step 2 if `role` is missing; steps 3–4 and 5 run on the next deploy after this plan is merged. Operator reference: `docs/runbooks/admin.md` → "Schema upgrades".
+A failed step logs `schema: upgrade failed`, rejects (request → 503), and is retried on the next request. Two isolates racing: the loser gets "duplicate column name" once, then the retry skips. A 4d3a5df database runs step 1 (which also creates `role`), then 3–5. Production at fdb5da3 (no `public_id`, no `role`) runs steps 2–5 on the next deploy; verified on a local copy created by fdb5da3. Operator reference: `docs/runbooks/admin.md` → "Schema upgrades".
 
 ### Seed Images & Example Templates (Card v3)
 

@@ -632,6 +632,8 @@ Steps, in order (each is its own batch; the Worker re-checks the table after a s
 3. **Add `font` to student_card.** Card v3 feature (2026-11-18): `ALTER TABLE student_card ADD COLUMN font TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32)`. Existing cards get Bút bi (patrick-hand).
 4. **Add `ink` to student_card.** Card v3 feature (2026-11-18): `ALTER TABLE student_card ADD COLUMN ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')`. Existing cards get blue (#1d3fa6).
 
+**Production (fdb5da3 at the time of writing):** `public_id` is already gone, so the next deploy runs steps 2, 3 and 4, then the seed. Verified on a local copy created by fdb5da3.
+
 **One-time seed (after schema steps):** Six flower backgrounds (one per layout, ~18–23 KB WebP, tokens `seedbg0000000001`–`6`) + six active example templates ("Hoa hồng · Dọc – giữa" …). Guarded by meta flag `images_seeded`; INSERT-only, never overwrites. Added even if admin templates exist; admins can turn the templates off or delete them (an image still used by a template cannot be deleted). The six images count toward the 200-image / 40 MB library caps. Failure logs `schema: seed images failed` and the site keeps working; that line (repeated on new instances) is the signal to investigate. To regenerate the images, see the header of `worker/seedImages.ts` (source: `docs/design/card-v3-mockup.html`).
 
 If two Worker instances start at the same moment, one can fail a step with "duplicate column name". That request returns 503 and logs `schema: upgrade failed` once; the next request sees the column and continues. One such log line right after a deploy is not a stuck deploy; repeated lines are.
