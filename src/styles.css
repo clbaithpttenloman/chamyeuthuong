@@ -457,6 +457,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .qr-header h1 { margin: 0.25rem 0; }
 .qr-sub { margin: 0.25rem 0 0; color: var(--gold); font-weight: 600; font-size: 0.95rem; }
 .qr-card-wrap { width: 100%; max-width: 34rem; }
+/* Keep the whole card and the buttons below it on screen: a portrait card is as wide as
+   3/4 of the space left under the header (min 16rem). */
+.qr-card-wrap:has(.card--portrait) { max-width: min(34rem, max(16rem, calc((100svh - 18rem) * 0.75))); }
 .qr-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center; }
 .qr-empty { max-width: 28rem; padding: 2rem; background: #fff; border: 1px solid #fed7aa; border-radius: 1rem; text-align: center; }
 .qr-empty-sub { margin: 0.25rem 0 1rem; color: var(--gold); font-weight: 600; }

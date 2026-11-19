@@ -213,7 +213,7 @@ Each QR encodes the teacher's private 16-char token (e.g., `/t/abc1234567890xyz`
 
 1. **Home** (`/`): intro, counters and the "Gửi thiệp" button (no teacher list, no card content)
 2. **Send flow** (`/gui-thiep`): pick a template, then find the teacher in step 2 (search by name or môn, filter by tổ), or arrive with `?thay=<id>` / `?t=<token>`
-3. **QR page** (`/t/:token`): random approved card from that teacher, "View all", empty state if no cards
+3. **QR page** (`/t/:token`): random approved card from that teacher, "Thiệp khác", "Xem tất cả", empty state if no cards. No send button: the page is for the teacher to read
 4. Write message (1–300 chars, max 5 newlines) + optional name/class; `Anonymous` on by default
 
 ### What Students Cannot See (Until Approved)

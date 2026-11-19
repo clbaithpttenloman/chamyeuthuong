@@ -5,12 +5,12 @@
  *   - One random card shown first (pickRandom from qrState).
  *   - "Thiệp khác" picks another card locally (excludes current, no refetch).
  *   - "Xem tất cả N thiệp" toggles a full grid on the same page.
- *   - "Gửi thiệp" links to /gui-thiep?t=<token> (preserves the teacher's token).
- *   - Empty state shows the CLB message.
+ *   - No send link: this page is for the teacher to read cards. Students send from /gui-thiep.
+ *   - Empty state tells the teacher cards will appear here once approved.
  * Data is fetched once; all navigation is local state.
  */
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import type { PublicCard, QrResponse } from '../../shared/api.ts'
 import { roleLabel } from '../../shared/api.ts'
 import { ApiError, getQr } from '../api'
@@ -75,8 +75,6 @@ export default function QrPage() {
   const { teacher, cards, total } = state.data
   const displayName = teacher.title ? `${teacher.title} ${teacher.name}` : teacher.name
   const sub = roleLabel(teacher.role, teacher.subject)
-  // Send link uses ?t=<token> so hidden teachers can also receive cards
-  const sendLink = `/gui-thiep?t=${encodeURIComponent(token!)}`
 
   /* ── Empty state ────────────────────────────────────────────────────── */
   if (total === 0) {
@@ -89,12 +87,8 @@ export default function QrPage() {
         </div>
         <div className="qr-empty">
           <p>
-            Chưa có lời chúc nào được duyệt. CLB AI mời các bạn học sinh gửi lời chúc đầu tiên
-            cho {displayName} nhân ngày Nhà giáo Việt Nam 20/11!
+            {`Chưa có lời chúc nào được duyệt. Lời chúc của các bạn học sinh dành cho ${displayName} sẽ hiện ở đây sau khi CLB AI duyệt.`}
           </p>
-          <Link to={sendLink} className="btn-primary-link">
-            ✍ Gửi lời chúc đầu tiên
-          </Link>
         </div>
       </div>
     )
@@ -151,9 +145,6 @@ export default function QrPage() {
               : `Xem tất cả ${total} thiệp`
           )}
         </button>
-        <Link to={sendLink} className="btn-link-ghost">
-          ✍ Gửi thiệp
-        </Link>
       </div>
 
       {/* Full card grid (toggled) */}
