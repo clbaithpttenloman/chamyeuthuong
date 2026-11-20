@@ -89,6 +89,10 @@ export async function requireAdmin(
   }
 
   // ── Email header path ────────────────────────────────────────────────────
+  // Only the old 20/11 admin routes opt in (opts.legacy). Google-only routes never accept the
+  // typed email, whatever BOOTSTRAP_EMAIL / ALLOW_FIRST_CLAIM say (smoke F1).
+  if (!opts?.legacy) return error('unauthorized')
+
   // 2a. Normalise X-Admin-Email (trim, lower-case, ASCII pattern, ≤ 254 chars).
   const rawEmail = request.headers.get('X-Admin-Email')
   const email = normalizeEmail(rawEmail)
@@ -113,26 +117,11 @@ export async function requireAdmin(
   if ((check?.is_caller ?? 0) > 0) {
     // Email is in the admin table. Decide which gate allows it.
 
-    // (a) Legacy path: explicit opt-in AND flag on.
-    if (opts?.legacy && env.ADMIN_LEGACY_LOGIN === '1') {
+    // Legacy login: flag on. BOOTSTRAP_EMAIL / ALLOW_FIRST_CLAIM are inert once the row exists.
+    if (env.ADMIN_LEGACY_LOGIN === '1') {
       console.error('admin: legacy login used')
       return { email }
     }
-
-    // (b) Bootstrap / open-claim mode: ALLOW_FIRST_CLAIM lets any email through (temporary).
-    if (env.ALLOW_FIRST_CLAIM === '1') return { email }
-
-    // (c) BOOTSTRAP_EMAIL set and matches the caller (inert once the row exists).
-    const rawBootstrapEmail = env.BOOTSTRAP_EMAIL
-    if (rawBootstrapEmail !== undefined) {
-      const bootstrapEmail = rawBootstrapEmail.trim().toLowerCase()
-      if (bootstrapEmail && bootstrapEmail === email) return { email }
-    }
-
-    // opts.legacy set but flag off → 401.
-    if (opts?.legacy) return error('unauthorized')
-
-    // No gate matches — email header alone is not enough in Phase 1.
     return error('unauthorized')
   }
 

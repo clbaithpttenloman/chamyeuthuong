@@ -955,13 +955,27 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
   })
 
   it('POST /api/admin/admins without X-Requested-With → 403 (CSRF guard)', async () => {
+    // Google-only route: authenticate with a session, omit X-Requested-With.
+    const { db: freshDb, sqlite: freshSqlite } = testDb2()
+    createNewTables(freshSqlite)
+    await seedAdminEmail(freshDb, GOOGLE_ADMIN_EMAIL)
+    const googleUserId = await seedUser(freshDb, { email: GOOGLE_ADMIN_EMAIL, sub: GOOGLE_ADMIN_SUB })
+    const googleToken = makeRawToken()
+    await seedSession(freshDb, googleUserId, googleToken)
+    const req = sessionReq(googleToken, 'POST', '/api/admin/admins', { email: 'x@test.com' })
+    req.headers.delete('X-Requested-With')
+    const r = await handleAdmin(req, makeEnvWithFlag(freshDb, true))
+    expect(r.status).toBe(403)
+  })
+
+  it('POST /api/admin/admins with only the typed-email header → 401 (Google-only route)', async () => {
     const req = new Request('https://x/api/admin/admins', {
       method: 'POST',
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'X-Requested-With': 'fetch', 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'x@test.com' }),
     })
     const r = await handleAdmin(req, makeEnv(db))
-    expect(r.status).toBe(403)
+    expect(r.status).toBe(401)
   })
 
   it('POST /api/admin/admins (authenticated via Google session) → 200 with created_by = admin email', async () => {

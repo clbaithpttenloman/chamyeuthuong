@@ -5,6 +5,11 @@ import { adminEnv, makeReq, seedAdmin, TEST_EMAIL } from './testAuth.ts'
 import { testDb } from './testDb.ts'
 import type { D1 } from './testDb.ts'
 
+// The typed-email header path exists only on the old 20/11 admin routes, which opt in with
+// { legacy: true }. Tests of that path go through this wrapper.
+const requireAdminHeader = (req: Request, env: Parameters<typeof requireAdmin>[1], opts?: { legacy?: boolean }) =>
+  requireAdmin(req, env, { legacy: true, ...opts })
+
 // ============================================================
 // Header handling — X-Admin-Email: missing or invalid
 // ============================================================
@@ -12,26 +17,26 @@ import type { D1 } from './testDb.ts'
 describe('requireAdmin — header: missing or invalid', () => {
   it('no X-Admin-Email header → 401 with zero DB prepares', async () => {
     const { db, state } = testDb()
-    const r = await requireAdmin(makeReq(null), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(null), adminEnv({ db }))
     expect((r as Response).status).toBe(401)
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
   })
 
   it('empty string X-Admin-Email → 401', async () => {
-    const r = await requireAdmin(makeReq(''), adminEnv())
+    const r = await requireAdminHeader(makeReq(''), adminEnv())
     expect((r as Response).status).toBe(401)
   })
 
   it('whitespace-only X-Admin-Email → 401', async () => {
-    const r = await requireAdmin(makeReq('   '), adminEnv())
+    const r = await requireAdminHeader(makeReq('   '), adminEnv())
     expect((r as Response).status).toBe(401)
   })
 
   it('X-Admin-Email > 254 chars → 401 with zero DB prepares', async () => {
     const longEmail = 'a'.repeat(246) + '@example.com'  // 258 chars
     const { db, state } = testDb()
-    const r = await requireAdmin(makeReq(longEmail), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(longEmail), adminEnv({ db }))
     expect((r as Response).status).toBe(401)
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
@@ -39,24 +44,24 @@ describe('requireAdmin — header: missing or invalid', () => {
 
   it('non-ASCII email (ñ) → 401 with zero DB prepares', async () => {
     const { db, state } = testDb()
-    const r = await requireAdmin(makeReq('admiñ@example.com'), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq('admiñ@example.com'), adminEnv({ db }))
     expect((r as Response).status).toBe(401)
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
   })
 
   it('malformed address (no @) → 401', async () => {
-    const r = await requireAdmin(makeReq('notanemail'), adminEnv())
+    const r = await requireAdminHeader(makeReq('notanemail'), adminEnv())
     expect((r as Response).status).toBe(401)
   })
 
   it('malformed address (no dot in domain: admin@localhost) → 401', async () => {
-    const r = await requireAdmin(makeReq('admin@localhost'), adminEnv())
+    const r = await requireAdminHeader(makeReq('admin@localhost'), adminEnv())
     expect((r as Response).status).toBe(401)
   })
 
   it('malformed address (multiple @) → 401', async () => {
-    const r = await requireAdmin(makeReq('a@b@example.com'), adminEnv())
+    const r = await requireAdminHeader(makeReq('a@b@example.com'), adminEnv())
     expect((r as Response).status).toBe(401)
   })
 
@@ -68,7 +73,7 @@ describe('requireAdmin — header: missing or invalid', () => {
       ['X-Admin-Email', TEST_EMAIL],
       ['CF-Connecting-IP', '1.2.3.4'],
     ])
-    const r = await requireAdmin(new Request('https://x/api/admin/teachers', { headers }), adminEnv())
+    const r = await requireAdminHeader(new Request('https://x/api/admin/teachers', { headers }), adminEnv())
     expect((r as Response).status).toBe(401)
   })
 })
@@ -86,22 +91,22 @@ describe('requireAdmin — header: normalization and lookup', () => {
   })
 
   it('email normalized (uppercase) matches stored row → returns { email }', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL.toUpperCase()), adminEnv({ db }), { legacy: true })
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL.toUpperCase()), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('email normalized (leading/trailing whitespace) matches stored row → returns { email }', async () => {
-    const r = await requireAdmin(makeReq('  ' + TEST_EMAIL + '  '), adminEnv({ db }), { legacy: true })
+    const r = await requireAdminHeader(makeReq('  ' + TEST_EMAIL + '  '), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('known email → returns { email }', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }), { legacy: true })
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('unknown email on populated table → 401, no insert', async () => {
-    const r = await requireAdmin(makeReq('stranger@example.com'), adminEnv({ db }), { legacy: true })
+    const r = await requireAdminHeader(makeReq('stranger@example.com'), adminEnv({ db }), { legacy: true })
     expect((r as Response).status).toBe(401)
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(1)
@@ -114,18 +119,18 @@ describe('requireAdmin — header: normalization and lookup', () => {
 
 describe('requireAdmin — rate limiting', () => {
   it('exhausted ADMIN_FAIL_LIMIT → 429', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ failLimit: false }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ failLimit: false }))
     expect((r as Response).status).toBe(429)
   })
 
   it('no X-Admin-Email + rate limit exhausted → 429 (rate limit checked before email)', async () => {
-    const r = await requireAdmin(makeReq(null), adminEnv({ failLimit: false }))
+    const r = await requireAdminHeader(makeReq(null), adminEnv({ failLimit: false }))
     expect((r as Response).status).toBe(429)
   })
 
   it('rate limit exhausted → zero DB prepares (DB never touched)', async () => {
     const { db, state } = testDb()
-    await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ failLimit: false, db }))
+    await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ failLimit: false, db }))
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
   })
@@ -144,42 +149,42 @@ describe('requireAdmin — CSRF checks', () => {
   })
 
   it('POST with valid admin email but no X-Requested-With → 403 forbidden', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'POST', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'POST', noXrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(403)
   })
 
   it('PUT with valid admin email but no X-Requested-With → 403 forbidden', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'PUT', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'PUT', noXrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(403)
   })
 
   it('DELETE with valid admin email but no X-Requested-With → 403 forbidden', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'DELETE', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'DELETE', noXrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(403)
   })
 
   it('HEAD with valid admin email but no X-Requested-With → 403 forbidden', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'HEAD', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'HEAD', noXrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(403)
   })
 
   it('POST with valid admin email AND X-Requested-With: fetch → returns { email }', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'POST' }), adminEnv({ db }), { legacy: true })
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'POST' }), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('GET with valid admin email and no X-Requested-With → returns { email } (GET exempt from CSRF)', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }), { legacy: true })
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('GET with Sec-Fetch-Site: cross-site → 403 forbidden', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { secFetchSite: 'cross-site' }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { secFetchSite: 'cross-site' }), adminEnv({ db }))
     expect((r as Response).status).toBe(403)
   })
 
   it('POST with Sec-Fetch-Site: cross-site and X-Requested-With → 403 (Sec-Fetch-Site wins)', async () => {
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { method: 'POST', secFetchSite: 'cross-site' }),
       adminEnv({ db }),
     )
@@ -191,7 +196,7 @@ describe('requireAdmin — CSRF checks', () => {
     const { db: freshDb, state } = testDb()
     await seedAdmin(freshDb, TEST_EMAIL)
     state.prepares = 0  // seeding used prepare(); count only what requireAdmin does
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { secFetchSite: 'cross-site' }),
       adminEnv({ db: freshDb }),
     )
@@ -204,7 +209,7 @@ describe('requireAdmin — CSRF checks', () => {
     const { db: freshDb, state } = testDb()
     await seedAdmin(freshDb, TEST_EMAIL)
     state.prepares = 0
-    await requireAdmin(makeReq(TEST_EMAIL, { method: 'POST', noXrw: true }), adminEnv({ db: freshDb }))
+    await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'POST', noXrw: true }), adminEnv({ db: freshDb }))
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
   })
@@ -213,7 +218,7 @@ describe('requireAdmin — CSRF checks', () => {
     const { db: freshDb, state } = testDb()
     await seedAdmin(freshDb, TEST_EMAIL)
     state.prepares = 0
-    await requireAdmin(
+    await requireAdminHeader(
       makeReq(TEST_EMAIL, { method: 'POST', secFetchSite: 'cross-site' }),
       adminEnv({ db: freshDb }),
     )
@@ -223,7 +228,7 @@ describe('requireAdmin — CSRF checks', () => {
 
   // Email check comes BEFORE CSRF: OPTIONS without header gets 401, not 403
   it('OPTIONS without X-Admin-Email → 401 and no Access-Control-* headers', async () => {
-    const r = await requireAdmin(makeReq(null, { method: 'OPTIONS', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(null, { method: 'OPTIONS', noXrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(401)
     // OPTIONS must never return CORS headers on /api/admin/*
     expect((r as Response).headers.get('Access-Control-Allow-Origin')).toBeNull()
@@ -232,7 +237,7 @@ describe('requireAdmin — CSRF checks', () => {
   })
 
   it('OPTIONS with valid admin email but no X-Requested-With → 403 (no CORS headers emitted)', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'OPTIONS', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'OPTIONS', noXrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(403)
     expect((r as Response).headers.get('Access-Control-Allow-Origin')).toBeNull()
     expect((r as Response).headers.get('Access-Control-Allow-Methods')).toBeNull()
@@ -246,14 +251,14 @@ describe('requireAdmin — CSRF checks', () => {
 
 describe('requireAdmin — error response shape', () => {
   it('error responses carry Cache-Control, X-Content-Type-Options, X-Robots-Tag', async () => {
-    const r = await requireAdmin(makeReq(null), adminEnv())
+    const r = await requireAdminHeader(makeReq(null), adminEnv())
     expect((r as Response).headers.get('Cache-Control')).toBe('no-store')
     expect((r as Response).headers.get('X-Content-Type-Options')).toBe('nosniff')
     expect((r as Response).headers.get('X-Robots-Tag')).toBe('noindex')
   })
 
   it('error response body is JSON with { error } field', async () => {
-    const r = await requireAdmin(makeReq(null), adminEnv())
+    const r = await requireAdminHeader(makeReq(null), adminEnv())
     const body = await (r as Response).json() as { error?: string }
     expect(typeof body?.error).toBe('string')
   })
@@ -261,7 +266,7 @@ describe('requireAdmin — error response shape', () => {
   it('403 response body has error: forbidden', async () => {
     const { db } = testDb()
     await seedAdmin(db, TEST_EMAIL)
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'POST', noXrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { method: 'POST', noXrw: true }), adminEnv({ db }))
     const body = await (r as Response).json() as { error?: string }
     expect(body?.error).toBe('forbidden')
   })
@@ -281,11 +286,11 @@ describe('requireAdmin — logging discipline', () => {
     vi.spyOn(console, 'warn').mockImplementation((...args) => { warnCalls.push(args) })
 
     // Trigger several code paths
-    await requireAdmin(makeReq('garbage@@@'), adminEnv())                           // invalid format
+    await requireAdminHeader(makeReq('garbage@@@'), adminEnv())                           // invalid format
     const { db } = testDb()
     await seedAdmin(db, 'other@example.com')
-    await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }))                       // unknown email
-    await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ allowFirstClaim: '1' })) // bootstrap
+    await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db }))                       // unknown email
+    await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ allowFirstClaim: '1' })) // bootstrap
 
     for (const call of [...errorCalls, ...warnCalls]) {
       const msg = call.map(String).join(' ')
@@ -297,7 +302,7 @@ describe('requireAdmin — logging discipline', () => {
     // Unknown email on a populated table
     const { db } = testDb()
     await seedAdmin(db, 'other@example.com')
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db }))
     const body = await (r as Response).text()
     expect(body).not.toContain(TEST_EMAIL)
   })
@@ -313,7 +318,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('ALLOW_FIRST_CLAIM=1, empty table, GET + X-Requested-With → returns { email }, row has created_by=bootstrap', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     expect(r).toEqual({ email: TEST_EMAIL })
     // Row inserted with created_by = 'bootstrap'
     const row = await db.prepare('SELECT created_by FROM admin WHERE email = ?').bind(TEST_EMAIL).first<{ created_by: string }>()
@@ -326,7 +331,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('admin: bootstrap log never contains the email', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
-    await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     for (const call of spy.mock.calls) {
       expect(call.map(String).join(' ')).not.toContain(TEST_EMAIL)
     }
@@ -335,9 +340,9 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('second different user after bootstrap → 401, no extra row', async () => {
     const { db } = testDb()
     // First user claims bootstrap
-    await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     // Second user (different email) → 401
-    const r2 = await requireAdmin(makeReq('stranger@example.com', { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    const r2 = await requireAdminHeader(makeReq('stranger@example.com', { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     expect((r2 as Response).status).toBe(401)
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(1)
@@ -345,8 +350,8 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
 
   it('same user twice → both succeed, exactly one admin row', async () => {
     const { db } = testDb()
-    const r1 = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
-    const r2 = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    const r1 = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    const r2 = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     expect(r1).toEqual({ email: TEST_EMAIL })
     expect(r2).toEqual({ email: TEST_EMAIL })
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
@@ -357,8 +362,8 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     const { db } = testDb()
     const env = adminEnv({ db, allowFirstClaim: '1' })
     const [r1, r2] = await Promise.all([
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), env),
-      requireAdmin(makeReq('other@example.com', { xrw: true }), env),
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), env),
+      requireAdminHeader(makeReq('other@example.com', { xrw: true }), env),
     ])
     const statuses = [r1, r2]
       .map((r) => (r instanceof Response ? r.status : 200))
@@ -372,8 +377,8 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     const { db } = testDb()
     const env = adminEnv({ db, allowFirstClaim: '1' })
     const [r1, r2] = await Promise.all([
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), env),
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), env),
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), env),
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), env),
     ])
     expect(r1).toEqual({ email: TEST_EMAIL })
     expect(r2).toEqual({ email: TEST_EMAIL })
@@ -382,7 +387,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('neither BOOTSTRAP_EMAIL nor ALLOW_FIRST_CLAIM → 401 and logs admin: misconfigured', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db }))
     expect((r as Response).status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
   })
@@ -391,7 +396,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
     await seedAdmin(db, 'other@example.com')
-    await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db }))
+    await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db }))
     const misconfiguredCalls = spy.mock.calls.filter((c) => c[0] === 'admin: misconfigured')
     expect(misconfiguredCalls).toHaveLength(0)
   })
@@ -399,7 +404,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('leftover ALLOW_FIRST_CLAIM is inert for existing admin (no extra row)', async () => {
     const { db } = testDb()
     await seedAdmin(db, TEST_EMAIL)
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db, allowFirstClaim: '1' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db, allowFirstClaim: '1' }))
     expect(r).toEqual({ email: TEST_EMAIL })
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(1)
@@ -408,7 +413,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('leftover ALLOW_FIRST_CLAIM is inert when table non-empty (non-admin → 401, no insert)', async () => {
     const { db } = testDb()
     await seedAdmin(db, 'other@example.com')
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     expect((r as Response).status).toBe(401)
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(1)
@@ -417,13 +422,13 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
   it('bootstrap GET without X-Requested-With → 403 (required for bootstrap write)', async () => {
     const { db } = testDb()
     // GET is exempt from CSRF, but bootstrap write has its own X-Requested-With check.
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db, allowFirstClaim: '1' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db, allowFirstClaim: '1' }))
     expect((r as Response).status).toBe(403)
   })
 
   it('exactly two prepare() calls for the bootstrap write (1 SELECT + 1 INSERT)', async () => {
     const { db, state } = testDb()
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     expect(r).toEqual({ email: TEST_EMAIL })
     // 1 SELECT (email/count check) + 1 INSERT (bootstrap write) = 2 prepare() calls
     expect(state.prepares).toBe(2)
@@ -433,7 +438,7 @@ describe('requireAdmin — bootstrap: ALLOW_FIRST_CLAIM', () => {
     const { db, state } = testDb()
     state.fail = true
     await expect(
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     ).rejects.toThrow()
     state.fail = false
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
@@ -450,7 +455,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
 
   it('BOOTSTRAP_EMAIL matches caller → allowed, row inserted with created_by=bootstrap', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: TEST_EMAIL }),
     )
@@ -461,7 +466,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
 
   it('BOOTSTRAP_EMAIL mismatch → 401, no row inserted', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: 'different@example.com' }),
     )
@@ -472,7 +477,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
 
   it('BOOTSTRAP_EMAIL set but empty string → 401 (empty value is treated as mismatch)', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: '' }),
     )
@@ -481,7 +486,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
 
   it('BOOTSTRAP_EMAIL present, ALLOW_FIRST_CLAIM=1, non-matching caller → 401 (BOOTSTRAP_EMAIL takes precedence)', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: 'specific@example.com', allowFirstClaim: '1' }),
     )
@@ -490,7 +495,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
 
   it('BOOTSTRAP_EMAIL matches case-insensitively (stored trimmed lower)', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: TEST_EMAIL.toUpperCase() }),
     )
@@ -500,7 +505,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
   it('leftover BOOTSTRAP_EMAIL inert for existing admin (no second row)', async () => {
     const { db } = testDb()
     await seedAdmin(db, TEST_EMAIL)
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL),
       adminEnv({ db, bootstrapEmail: TEST_EMAIL }),
     )
@@ -511,7 +516,7 @@ describe('requireAdmin — bootstrap: BOOTSTRAP_EMAIL', () => {
 
   it('zero DB prepares when email is bad (DB never reached)', async () => {
     const { db, state } = testDb()
-    await requireAdmin(makeReq('garbage@@@'), adminEnv({ db, bootstrapEmail: TEST_EMAIL }))
+    await requireAdminHeader(makeReq('garbage@@@'), adminEnv({ db, bootstrapEmail: TEST_EMAIL }))
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBe(0)
   })
@@ -527,7 +532,7 @@ describe('requireAdmin — ALLOW_FIRST_CLAIM non-"1" values → 401 + misconfigu
   it('ALLOW_FIRST_CLAIM="0" → 401, admin: misconfigured, no row inserted', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '0' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '0' }))
     expect((r as Response).status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
@@ -537,7 +542,7 @@ describe('requireAdmin — ALLOW_FIRST_CLAIM non-"1" values → 401 + misconfigu
   it('ALLOW_FIRST_CLAIM="true" → 401, admin: misconfigured, no row inserted', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: 'true' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: 'true' }))
     expect((r as Response).status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
@@ -547,7 +552,7 @@ describe('requireAdmin — ALLOW_FIRST_CLAIM non-"1" values → 401 + misconfigu
   it('ALLOW_FIRST_CLAIM="" → 401, admin: misconfigured, no row inserted', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { db } = testDb()
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '' }))
+    const r = await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '' }))
     expect((r as Response).status).toBe(401)
     expect(spy).toHaveBeenCalledWith('admin: misconfigured')
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
@@ -562,7 +567,7 @@ describe('requireAdmin — ALLOW_FIRST_CLAIM non-"1" values → 401 + misconfigu
 describe('requireAdmin — BOOTSTRAP_EMAIL padding', () => {
   it('BOOTSTRAP_EMAIL padded with spaces is trimmed and matches caller email', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: `  ${TEST_EMAIL}  ` }),
     )
@@ -573,7 +578,7 @@ describe('requireAdmin — BOOTSTRAP_EMAIL padding', () => {
 
   it('BOOTSTRAP_EMAIL padded uppercase + spaces matches caller (trim + lowercase)', async () => {
     const { db } = testDb()
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, bootstrapEmail: `  ${TEST_EMAIL.toUpperCase()}  ` }),
     )
@@ -588,7 +593,7 @@ describe('requireAdmin — BOOTSTRAP_EMAIL padding', () => {
 describe('requireAdmin — empty DB: admin bootstrap (ensureSchema integration)', () => {
   it('ALLOW_FIRST_CLAIM=1 on a table-less DB bootstraps successfully (ensureSchema creates tables first)', async () => {
     const { db, state } = testDb({ schema: false })
-    const r = await requireAdmin(
+    const r = await requireAdminHeader(
       makeReq(TEST_EMAIL, { xrw: true }),
       adminEnv({ db, allowFirstClaim: '1' }),
     )
@@ -598,9 +603,9 @@ describe('requireAdmin — empty DB: admin bootstrap (ensureSchema integration)'
 
   it('second admin request on the same DB issues no DDL (WeakMap cache hit)', async () => {
     const { db, state } = testDb({ schema: false })
-    await requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+    await requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     const ddlAfterFirst = state.ddl
-    await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }))
+    await requireAdminHeader(makeReq(TEST_EMAIL), adminEnv({ db }))
     expect(state.ddl).toBe(ddlAfterFirst)
   })
 
@@ -608,8 +613,8 @@ describe('requireAdmin — empty DB: admin bootstrap (ensureSchema integration)'
     const { db } = testDb({ schema: false })
     const env = adminEnv({ db, allowFirstClaim: '1' })
     const [r1, r2] = await Promise.all([
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), env),
-      requireAdmin(makeReq('other@example.com', { xrw: true }), env),
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), env),
+      requireAdminHeader(makeReq('other@example.com', { xrw: true }), env),
     ])
     const statuses = [r1, r2]
       .map((r) => (r instanceof Response ? r.status : 200))
@@ -625,7 +630,7 @@ describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
     const { db, state, sqlite } = testDb({ schema: false })
     state.fail = true
     await expect(
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     ).rejects.toThrow()
     state.fail = false
     const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
@@ -636,7 +641,7 @@ describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
     const { db, state } = testDb({ schema: false })
     state.fail = true
     await expect(
-      requireAdmin(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
+      requireAdminHeader(makeReq(TEST_EMAIL, { xrw: true }), adminEnv({ db, allowFirstClaim: '1' }))
     ).rejects.toThrow()
     expect(state.prepares).toBe(0)
     expect(state.ddl).toBeGreaterThan(0)
@@ -878,5 +883,39 @@ describe('requireAdmin — ADMIN_LEGACY_LOGIN flag and legacy path', () => {
     const req = makeReq(TEST_EMAIL)
     const r = await (requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>)(req, env, { legacy: true })
     expect((r as Response).status).toBe(401)
+  })
+})
+
+// Regression (smoke F1): leftover BOOTSTRAP_EMAIL / ALLOW_FIRST_CLAIM must not let the typed-email
+// header into Google-only routes once the admin row exists.
+describe('requireAdmin — Google-only routes never accept the email header', () => {
+  const call = requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>
+
+  it('existing admin matching BOOTSTRAP_EMAIL, no opts.legacy → 401', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    const env = { ...adminEnv({ db }), BOOTSTRAP_EMAIL: TEST_EMAIL } as never
+    expect(((await call(makeReq(TEST_EMAIL), env)) as Response).status).toBe(401)
+  })
+
+  it('existing admin with ALLOW_FIRST_CLAIM=1, no opts.legacy → 401', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    const env = { ...adminEnv({ db }), ALLOW_FIRST_CLAIM: '1' } as never
+    expect(((await call(makeReq(TEST_EMAIL), env)) as Response).status).toBe(401)
+  })
+
+  it('existing admin matching BOOTSTRAP_EMAIL, legacy route, flag OFF → 401', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    const env = { ...adminEnv({ db, legacyLogin: undefined }), BOOTSTRAP_EMAIL: TEST_EMAIL } as never
+    expect(((await call(makeReq(TEST_EMAIL), env, { legacy: true })) as Response).status).toBe(401)
+  })
+
+  it('empty table + BOOTSTRAP_EMAIL on a Google-only route → 401 and no row inserted', async () => {
+    const { db, sqlite } = testDb()
+    const env = { ...adminEnv({ db }), BOOTSTRAP_EMAIL: TEST_EMAIL } as never
+    expect(((await call(makeReq(TEST_EMAIL), env)) as Response).status).toBe(401)
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM admin').get()).toEqual({ n: 0 })
   })
 })
