@@ -642,3 +642,244 @@ describe('requireAdmin — DDL failure (ensureSchema integration)', () => {
     expect(state.ddl).toBeGreaterThan(0)
   })
 })
+
+// ============================================================
+// Phase 1 — Google session admin path (new behaviour)
+// ============================================================
+// These tests are RED: requireAdmin does not yet support Google sessions,
+// the ADMIN_LEGACY_LOGIN env key, or the google_sub pinning contract.
+
+import {
+  createNewTables,
+  seedAdminEmail,
+  pinAdminSub,
+  seedUser,
+  seedSession,
+  makeRawToken,
+  googleAdminEnv,
+  makeLegacyAdminReq,
+  makeSessionReq,
+  SESSION_COOKIE_NAME,
+  TEST_EMAIL as GOOGLE_TEST_EMAIL,
+  TEST_SUB,
+  TEST_EMAIL_WORKSPACE,
+  TEST_HD,
+  TEST_EMAIL_OTHER,
+} from './testGoogle.ts'
+
+// --- Google session admin: happy path ---
+
+describe('requireAdmin — Google session admin access', () => {
+  it('valid session for email in admin list (Gmail) → returns { email }', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = googleAdminEnv({ db })
+
+    await seedAdminEmail(db, GOOGLE_TEST_EMAIL)
+    const userId = await seedUser(db, { email: GOOGLE_TEST_EMAIL, sub: TEST_SUB })
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = makeSessionReq(rawToken)
+    const r = await requireAdmin(req, env as never)
+    expect(r).toEqual({ email: GOOGLE_TEST_EMAIL })
+  })
+
+  it('valid session for workspace email (hd set in admin) → returns { email }', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = googleAdminEnv({ db })
+
+    await seedAdminEmail(db, TEST_EMAIL_WORKSPACE)
+    const userId = await seedUser(db, { email: TEST_EMAIL_WORKSPACE, sub: 'ws-sub-999' })
+    // Store hd in app_user: for the Google authority check, the email must end with @gmail.com
+    // OR have a valid hd. We set hd via a flag column (app_user.hd) if the implementation stores it,
+    // or via the admin email domain rule. For Gmail authority: TEST_EMAIL_WORKSPACE needs an hd.
+    // The `isGoogleAuthoritative` check is on the DOMAIN, not a stored hd column.
+    // TEST_EMAIL_WORKSPACE is `admin@workspace.example.com` — not @gmail.com.
+    // Authority is conferred by hd being present on sign-in token. For DB-side admin check,
+    // the authority rule is re-evaluated at every request using the admin email domain.
+    // Since workspace.example.com is not gmail.com, it must come via `hd` column stored at sign-in.
+    // We seed an hd column here for the test (app_user.hd stores the last hd claim from token).
+    sqlite.exec(`ALTER TABLE app_user ADD COLUMN IF NOT EXISTS hd TEXT`)
+    sqlite.prepare('UPDATE app_user SET hd = ? WHERE id = ?').run(TEST_HD, userId)
+
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    const req = makeSessionReq(rawToken)
+    const r = await requireAdmin(req, env as never)
+    expect(r).toEqual({ email: TEST_EMAIL_WORKSPACE })
+  })
+})
+
+// --- Non-authoritative email in admin list ---
+
+describe('requireAdmin — non-authoritative email in admin list', () => {
+  it('admin email is @school.edu (not Gmail, no hd stored) → 403 not authoritative', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = googleAdminEnv({ db })
+
+    await seedAdminEmail(db, TEST_EMAIL_OTHER)  // 'admin@school.edu'
+    const userId = await seedUser(db, { email: TEST_EMAIL_OTHER, sub: 'other-sub-001' })
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = makeSessionReq(rawToken)
+    const r = await requireAdmin(req, env as never)
+    expect((r as Response).status).toBe(403)
+  })
+})
+
+// --- google_sub pinning ---
+
+describe('requireAdmin — google_sub pinning', () => {
+  it('first Google sign-in pins admin.google_sub with the user sub', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = googleAdminEnv({ db })
+
+    await seedAdminEmail(db, GOOGLE_TEST_EMAIL)  // google_sub is NULL initially
+    const userId = await seedUser(db, { email: GOOGLE_TEST_EMAIL, sub: TEST_SUB })
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = makeSessionReq(rawToken)
+    await requireAdmin(req, env as never)
+
+    const row = sqlite
+      .prepare('SELECT google_sub FROM admin WHERE email = ?')
+      .get(GOOGLE_TEST_EMAIL.toLowerCase()) as { google_sub: string | null } | undefined
+    expect(row?.google_sub).toBe(TEST_SUB)
+  })
+
+  it('different sub with same email after sub pinned → 403 (recycled email protection)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = googleAdminEnv({ db })
+
+    await seedAdminEmail(db, GOOGLE_TEST_EMAIL)
+    await pinAdminSub(db, GOOGLE_TEST_EMAIL, 'original-sub-aaa')
+
+    // A new user with same email but different sub
+    const userId = await seedUser(db, { email: GOOGLE_TEST_EMAIL, sub: 'different-sub-bbb' })
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = makeSessionReq(rawToken)
+    const r = await requireAdmin(req, env as never)
+    expect((r as Response).status).toBe(403)
+  })
+})
+
+// --- Non-admin Google user ---
+
+describe('requireAdmin — non-admin Google session', () => {
+  it('valid session but email NOT in admin list → 403', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = googleAdminEnv({ db })
+
+    // Admin table has a different email
+    await seedAdminEmail(db, 'other-admin@gmail.com')
+    // User is a regular non-admin
+    const userId = await seedUser(db, { email: GOOGLE_TEST_EMAIL, sub: TEST_SUB })
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = makeSessionReq(rawToken)
+    const r = await requireAdmin(req, env as never)
+    expect((r as Response).status).toBe(403)
+  })
+})
+
+// --- Google path never bootstraps ---
+
+describe('requireAdmin — Google path does not bootstrap', () => {
+  it('Google session request on empty admin table → 403 (no BOOTSTRAP_EMAIL / ALLOW_FIRST_CLAIM on Google path)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    // No admins seeded; ALLOW_FIRST_CLAIM not set
+    const env = googleAdminEnv({ db })
+
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = makeSessionReq(rawToken)
+    const r = await requireAdmin(req, env as never)
+    // Must NOT auto-claim admin, must NOT use bootstrap
+    expect((r as Response).status).toBe(403)
+
+    // No admin row was inserted
+    const count = (db.prepare('SELECT COUNT(*) AS c FROM admin').first<{ c: number }>())
+    // We use the sync DB to check
+    const countSync = sqlite
+      .prepare('SELECT COUNT(*) AS c FROM admin')
+      .get() as { c: number }
+    expect(countSync.c).toBe(0)
+  })
+})
+
+// --- Legacy flag ON: 20/11 routes allowed, log emitted ---
+
+describe('requireAdmin — ADMIN_LEGACY_LOGIN flag and legacy path', () => {
+  it('flag ON + opts.legacy:true + valid email → returns { email } AND logs "admin: legacy login used"', async () => {
+    const { db } = testDb()
+    const errorCalls: unknown[][] = []
+    vi.spyOn(console, 'error').mockImplementation((...a) => { errorCalls.push(a) })
+
+    await seedAdmin(db, TEST_EMAIL)  // from existing testAuth.ts helper
+    const env = { ...adminEnv({ db }), ADMIN_LEGACY_LOGIN: '1' } as never
+
+    const req = makeReq(TEST_EMAIL)
+    const r = await (requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>)(req, env, { legacy: true })
+
+    expect(r).toEqual({ email: TEST_EMAIL })
+    const logMessages = errorCalls.map((c) => c[0])
+    expect(logMessages).toContain('admin: legacy login used')
+
+    vi.restoreAllMocks()
+  })
+
+  it('legacy log call has no additional arguments (no email or sub logged)', async () => {
+    const { db } = testDb()
+    const errorCalls: unknown[][] = []
+    vi.spyOn(console, 'error').mockImplementation((...a) => { errorCalls.push(a) })
+
+    await seedAdmin(db, TEST_EMAIL)
+    const env = { ...adminEnv({ db }), ADMIN_LEGACY_LOGIN: '1' } as never
+    const req = makeReq(TEST_EMAIL)
+    await (requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>)(req, env, { legacy: true })
+
+    const legacyCalls = errorCalls.filter((c) => c[0] === 'admin: legacy login used')
+    expect(legacyCalls.length).toBeGreaterThan(0)
+    // Each legacy login log must have exactly one argument
+    for (const call of legacyCalls) {
+      expect(call).toHaveLength(1)
+      expect(call[0]).toBe('admin: legacy login used')
+    }
+
+    vi.restoreAllMocks()
+  })
+
+  it('flag ON but opts.legacy not set → 401 (email header alone not enough)', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    const env = { ...adminEnv({ db }), ADMIN_LEGACY_LOGIN: '1' } as never
+    const req = makeReq(TEST_EMAIL)
+    // No opts.legacy — legacy path must not activate
+    const r = await (requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>)(req, env)
+    expect((r as Response).status).toBe(401)
+  })
+
+  it('flag OFF (no ADMIN_LEGACY_LOGIN) + opts.legacy:true → 401', async () => {
+    const { db } = testDb()
+    await seedAdmin(db, TEST_EMAIL)
+    // No ADMIN_LEGACY_LOGIN in env
+    const env = adminEnv({ db }) as never
+    const req = makeReq(TEST_EMAIL)
+    const r = await (requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>)(req, env, { legacy: true })
+    expect((r as Response).status).toBe(401)
+  })
+})

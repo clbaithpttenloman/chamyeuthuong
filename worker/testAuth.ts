@@ -12,12 +12,14 @@ export const TEST_EMAIL = 'admin@example.com'
 
 // ---- Env type and builder ----
 
-/** Minimal env shape for the new requireAdmin. */
+/** Minimal env shape for requireAdmin (legacy path). */
 export type AdminEnv = {
   ADMIN_FAIL_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   DB: D1
   BOOTSTRAP_EMAIL?: string
   ALLOW_FIRST_CLAIM?: string
+  /** Phase 1: controls whether the legacy X-Admin-Email path is active. */
+  ADMIN_LEGACY_LOGIN?: string
 }
 
 type AdminEnvOpts = {
@@ -29,6 +31,12 @@ type AdminEnvOpts = {
   bootstrapEmail?: string
   /** Set ALLOW_FIRST_CLAIM in env. Pass '1' to enable open first-user claim. */
   allowFirstClaim?: string
+  /**
+   * Set ADMIN_LEGACY_LOGIN in env.
+   * Default: '1' (so the existing tests that use X-Admin-Email keep passing;
+   * the existing requireAdmin call sites are updated with opts.legacy:true in Phase 1).
+   */
+  legacyLogin?: string
 }
 
 /**
@@ -41,6 +49,7 @@ export function adminEnv(opts: AdminEnvOpts = {}): AdminEnv {
     DB: opts.db ?? testDb().db,
     BOOTSTRAP_EMAIL: opts.bootstrapEmail,
     ALLOW_FIRST_CLAIM: opts.allowFirstClaim,
+    ADMIN_LEGACY_LOGIN: opts.legacyLogin,
   }
 }
 

@@ -1056,3 +1056,195 @@ describe('teacher role (chức vụ)', () => {
     expect(((await r.json()) as AdminTeacher).role).toBe('Phó hiệu trưởng')
   })
 })
+
+// ============================================================
+// Phase 1 — Admin route scoping: Google session vs legacy path
+// ============================================================
+// These tests are RED: handleAdmin does not yet pass opts.legacy to requireAdmin,
+// nor does it support campaigns routes or Google session auth.
+//
+// Legacy = X-Admin-Email header (typed email, legacy R1 risk)
+// Google session = __Host-cyt_s cookie from /api/auth/google
+//
+// Route policy (ADR-3):
+//   Legacy ALLOWED (with ADMIN_LEGACY_LOGIN=1):
+//     teachers, templates, images, wishes, cards, about, GET admins
+//   Legacy NOT ALLOWED:
+//     POST/DELETE /api/admin/admins, /api/admin/campaigns*
+//   Google session: works for all admin routes
+
+import { vi as vi2 } from 'vitest'
+import {
+  createNewTables,
+  seedAdminEmail,
+  seedUser,
+  seedSession,
+  makeRawToken,
+  SESSION_COOKIE_NAME,
+  TEST_EMAIL as GOOGLE_ADMIN_EMAIL,
+  TEST_SUB as GOOGLE_ADMIN_SUB,
+} from './testGoogle.ts'
+import { testDb as testDb2 } from './testDb.ts'
+
+/** Build an env with ADMIN_LEGACY_LOGIN toggled. */
+function makeEnvWithFlag(db: ReturnType<typeof testDb2>['db'], legacyOn: boolean) {
+  return {
+    DB: db,
+    ASSETS: { fetch: async () => new Response('asset') },
+    PUBLIC_IP_LIMIT: { limit: async () => ({ success: true }) },
+    SUBMIT_IP_LIMIT: { limit: async () => ({ success: true }) },
+    CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
+    ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: true }) },
+    IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
+    BOOTSTRAP_EMAIL: undefined as string | undefined,
+    ALLOW_FIRST_CLAIM: undefined as string | undefined,
+    ADMIN_LEGACY_LOGIN: legacyOn ? '1' : undefined,
+  }
+}
+
+/**
+ * Build a request with X-Admin-Email (legacy) header.
+ * Uses TEST_EMAIL ('admin@example.com') which is seeded by the outer beforeEach,
+ * so the email IS in the admin table and requireAdmin reaches the route policy check.
+ */
+function legacyReq(method: string, path: string, body?: unknown): Request {
+  const headers: Record<string, string> = {
+    // Use TEST_EMAIL (from testAuth.ts) = 'admin@example.com', which is seeded by the outer beforeEach.
+    'X-Admin-Email': TEST_EMAIL,
+    'CF-Connecting-IP': '1.2.3.4',
+  }
+  if (method !== 'GET') headers['X-Requested-With'] = 'fetch'
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  return new Request(`https://x${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+}
+
+/** Build a request with a session cookie. */
+function sessionReq(sessionToken: string, method: string, path: string, body?: unknown): Request {
+  const headers: Record<string, string> = {
+    'CF-Connecting-IP': '1.2.3.4',
+    Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
+  }
+  if (method !== 'GET') {
+    headers['X-Requested-With'] = 'fetch'
+    headers['Content-Type'] = 'application/json'
+  }
+  return new Request(`https://x${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+}
+
+// ── Google session admin works on all existing routes ─────────────────────────
+
+describe('admin route scoping — Google session admin: all routes accessible', () => {
+  let sessionToken: string
+
+  beforeEach(async () => {
+    const { db: freshDb, sqlite } = testDb2()
+    createNewTables(sqlite)
+    db = freshDb  // reuse the outer db variable
+
+    await seedAdminEmail(freshDb, GOOGLE_ADMIN_EMAIL)
+    const userId = await seedUser(freshDb, { email: GOOGLE_ADMIN_EMAIL, sub: GOOGLE_ADMIN_SUB })
+    sessionToken = makeRawToken()
+    await seedSession(freshDb, userId, sessionToken)
+
+    // Also seed an admin row (required by legacy tests below)
+    // already done by seedAdminEmail
+  })
+
+  it('Google session: GET /api/admin/teachers → 200', async () => {
+    const r = await handleAdmin(sessionReq(sessionToken, 'GET', '/api/admin/teachers'), makeEnvWithFlag(db, true))
+    expect(r.status).toBe(200)
+  })
+
+  it('Google session: GET /api/admin/admins → 200', async () => {
+    const r = await handleAdmin(sessionReq(sessionToken, 'GET', '/api/admin/admins'), makeEnvWithFlag(db, true))
+    expect(r.status).toBe(200)
+  })
+
+  it('Google session: POST /api/admin/admins → not 401 (Google session allowed)', async () => {
+    const r = await handleAdmin(
+      sessionReq(sessionToken, 'POST', '/api/admin/admins', { email: 'new@gmail.com' }),
+      makeEnvWithFlag(db, true),
+    )
+    // Should not be 401 — could be 200 or 409 (conflict), but NOT 401
+    expect(r.status).not.toBe(401)
+  })
+})
+
+// ── Legacy flag ON: 20/11 routes → 200 + log line ────────────────────────────
+
+describe('admin route scoping — ADMIN_LEGACY_LOGIN=1: 20/11 routes work + log line', () => {
+  it('GET /api/admin/teachers with legacy email + flag ON → 200 and logs "admin: legacy login used"', async () => {
+    const errorCalls: unknown[][] = []
+    vi2.spyOn(console, 'error').mockImplementation((...a) => { errorCalls.push(a) })
+
+    const r = await handleAdmin(legacyReq('GET', '/api/admin/teachers'), makeEnvWithFlag(db, true))
+    expect(r.status).toBe(200)
+
+    const legacyLogs = errorCalls.filter((c) => c[0] === 'admin: legacy login used')
+    expect(legacyLogs.length).toBeGreaterThan(0)
+
+    vi2.restoreAllMocks()
+  })
+
+  it('GET /api/admin/admins with legacy email + flag ON → 200 (read-only admins allowed)', async () => {
+    const r = await handleAdmin(legacyReq('GET', '/api/admin/admins'), makeEnvWithFlag(db, true))
+    expect(r.status).toBe(200)
+  })
+})
+
+// ── Legacy flag ON: sensitive routes → 401 ───────────────────────────────────
+
+describe('admin route scoping — ADMIN_LEGACY_LOGIN=1: POST/DELETE /api/admin/admins → 401', () => {
+  it('POST /api/admin/admins with legacy email → 401 (changing admin list requires Google session)', async () => {
+    const r = await handleAdmin(
+      legacyReq('POST', '/api/admin/admins', { email: 'new@gmail.com' }),
+      makeEnvWithFlag(db, true),
+    )
+    expect(r.status).toBe(401)
+  })
+
+  it('DELETE /api/admin/admins/1 with legacy email → 401', async () => {
+    const r = await handleAdmin(
+      legacyReq('DELETE', '/api/admin/admins/1'),
+      makeEnvWithFlag(db, true),
+    )
+    expect(r.status).toBe(401)
+  })
+})
+
+describe('admin route scoping — ADMIN_LEGACY_LOGIN=1: /api/admin/campaigns* → 401 with legacy', () => {
+  it('GET /api/admin/campaigns with legacy email → 401 (new endpoints require Google session)', async () => {
+    const r = await handleAdmin(legacyReq('GET', '/api/admin/campaigns'), makeEnvWithFlag(db, true))
+    expect(r.status).toBe(401)
+  })
+
+  it('POST /api/admin/campaigns with legacy email → 401', async () => {
+    const r = await handleAdmin(
+      legacyReq('POST', '/api/admin/campaigns', { slug: 'test', kind: 'gift_tree', name: 'T' }),
+      makeEnvWithFlag(db, true),
+    )
+    expect(r.status).toBe(401)
+  })
+})
+
+// ── Legacy flag OFF: ALL legacy attempts → 401 ───────────────────────────────
+
+describe('admin route scoping — ADMIN_LEGACY_LOGIN not set: legacy email → 401 everywhere', () => {
+  it('GET /api/admin/teachers with legacy email, NO flag → 401', async () => {
+    const r = await handleAdmin(legacyReq('GET', '/api/admin/teachers'), makeEnvWithFlag(db, false))
+    expect(r.status).toBe(401)
+  })
+
+  it('GET /api/admin/admins with legacy email, NO flag → 401', async () => {
+    const r = await handleAdmin(legacyReq('GET', '/api/admin/admins'), makeEnvWithFlag(db, false))
+    expect(r.status).toBe(401)
+  })
+})

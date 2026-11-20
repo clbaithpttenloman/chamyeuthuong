@@ -1315,3 +1315,623 @@ describe('seed images — shipped files are safe', () => {
     }
   })
 })
+
+// ===================================================================
+// Campaign platform (Phase 1) — schema tests (red phase)
+// ===================================================================
+//
+// Fixtures: deployedDb() — current deployed shape (font/ink present, no campaign/campaign_id)
+//           olderDeployedDb() — pre-card-v3 + pre-privacy (old teacher_profile, old student_card),
+//                               still without campaign/campaign_id.
+// Both use hardcoded pre-campaign DDL so the fixture is stable after implementation adds
+// campaign DDL to SCHEMA.
+
+// --- Pre-campaign DDL constants (snapshot of the tables as deployed, without campaign_id) ---
+
+const PRE_CAMPAIGN_TEMPLATE_DDL = `CREATE TABLE template (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT    NOT NULL,
+  layout     TEXT    NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  created_at TEXT    NOT NULL,
+  created_by TEXT    NOT NULL
+)`
+
+const PRE_CAMPAIGN_WISH_DDL = `CREATE TABLE wish (
+  id         INTEGER PRIMARY KEY,
+  title      TEXT    NOT NULL,
+  body       TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  created_by TEXT    NOT NULL
+)`
+
+const PRE_CAMPAIGN_STUDENT_CARD_DDL = `CREATE TABLE student_card (
+  id          INTEGER PRIMARY KEY,
+  public_id   TEXT    UNIQUE NOT NULL,
+  teacher_id  INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+  template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE RESTRICT,
+  message     TEXT    NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+  from_name   TEXT    NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
+  from_class  TEXT    NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
+  anonymous   INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
+  status      TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
+  created_at  TEXT    NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by TEXT,
+  font        TEXT    NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32),
+  ink         TEXT    NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
+)`
+
+// --- Content expected in campaign 1 after upgrade (from src/content/site.json .home) ---
+// Inlined to avoid a top-level import in the appended section.
+const SITE_HOME = {
+  kicker: 'Ngày Nhà giáo Việt Nam 20/11/2026',
+  heading: 'Gửi thầy cô muôn vàn lời tri ân',
+  body: 'Hãy chọn mẫu thiệp đẹp, chọn thầy cô bạn muốn gửi, và viết lời chúc từ trái tim. Mỗi lời chúc được CLB AI duyệt trước khi hiển thị — để thầy cô nhận được những tình cảm chân thành nhất.',
+}
+
+/**
+ * Builds a DB shaped like the current deployed schema (61107f8 era):
+ * all current non-campaign tables intact, but template/wish/student_card have NO campaign_id,
+ * and no campaign table exists. Stable before and after implementation.
+ */
+function deployedDb(): ReturnType<typeof testDb> {
+  const t = testDb({ schema: false })
+  // Apply all current SCHEMA statements; after implementation this includes campaign DDL,
+  // which we immediately strip away below.
+  for (const sql of SCHEMA) t.sqlite.exec(sql)
+  t.sqlite.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('images_seeded', 'test')")
+
+  // Strip campaign-related things (a no-op before implementation, mandatory after).
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_template_campaign_id')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_wish_campaign_id')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_campaign_id')
+  t.sqlite.exec('DROP TABLE IF EXISTS campaign')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_teacher_status')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_status_created')
+  t.sqlite.exec('DROP TABLE IF EXISTS student_card')
+  t.sqlite.exec('DROP TABLE IF EXISTS template_image')
+  t.sqlite.exec('DROP TABLE IF EXISTS template')
+  t.sqlite.exec('DROP TABLE IF EXISTS wish')
+  // Recreate in pre-campaign form
+  t.sqlite.exec(PRE_CAMPAIGN_TEMPLATE_DDL)
+  t.sqlite.exec(PRE_CAMPAIGN_WISH_DDL)
+  t.sqlite.exec(PRE_CAMPAIGN_STUDENT_CARD_DDL)
+  t.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_student_card_teacher_status ON student_card (teacher_id, status)')
+  t.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_student_card_status_created ON student_card (status, created_at)')
+
+  // Seed representative data
+  t.sqlite.exec("INSERT OR IGNORE INTO teacher (id, token, name, subject, created_at) VALUES (1, 'tok1234567890abc', 'Thầy Khoa', 'Toán', '2026-11-01')")
+  t.sqlite.exec("INSERT OR IGNORE INTO teacher_profile (teacher_id, department, show_on_home) VALUES (1, 'Tổ Toán', 1)")
+  t.sqlite.exec("INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (1, 'Mẫu thiệp', 'classic', 1, '2026-11-01', 'admin@test.com')")
+  t.sqlite.exec("INSERT INTO wish (id, title, body, created_at, created_by) VALUES (1, 'Chúc mừng', 'Chúc thầy cô sức khỏe', '2026-11-01', 'seed')")
+  t.sqlite.exec("INSERT INTO student_card (public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at) VALUES ('card123456789012', 1, 1, 'Chúc thầy', 'Học sinh A', '10A1', 0, 'pending', '2026-11-17')")
+  return t
+}
+
+/**
+ * Builds a DB shaped like a much older deployment:
+ * old teacher_profile (with public_id, no role) + old student_card (no font/ink) +
+ * no campaign/campaign_id. Uses the existing OLD_TEACHER_PROFILE and OLD_STUDENT_CARD
+ * constants defined earlier in this file.
+ */
+function olderDeployedDb(): ReturnType<typeof testDb> {
+  const t = testDb({ schema: false })
+  for (const sql of SCHEMA) t.sqlite.exec(sql)
+  t.sqlite.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('images_seeded', 'test')")
+
+  // Strip campaign-related things
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_template_campaign_id')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_wish_campaign_id')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_campaign_id')
+  t.sqlite.exec('DROP TABLE IF EXISTS campaign')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_teacher_status')
+  t.sqlite.exec('DROP INDEX IF EXISTS idx_student_card_status_created')
+  t.sqlite.exec('DROP TABLE IF EXISTS student_card')
+  t.sqlite.exec('DROP TABLE IF EXISTS template_image')
+  t.sqlite.exec('DROP TABLE IF EXISTS template')
+  t.sqlite.exec('DROP TABLE IF EXISTS wish')
+
+  // Revert teacher_profile to 4d3a5df shape (public_id, no role)
+  t.sqlite.exec('DROP TABLE teacher_profile')
+  t.sqlite.exec(OLD_TEACHER_PROFILE)
+
+  // Recreate pre-campaign tables in pre-card-v3 form
+  t.sqlite.exec(PRE_CAMPAIGN_TEMPLATE_DDL)
+  t.sqlite.exec(PRE_CAMPAIGN_WISH_DDL)
+  t.sqlite.exec(OLD_STUDENT_CARD) // no font, no ink, no campaign_id
+  t.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_student_card_teacher_status ON student_card (teacher_id, status)')
+  t.sqlite.exec('CREATE INDEX IF NOT EXISTS idx_student_card_status_created ON student_card (status, created_at)')
+
+  // Seed representative data
+  t.sqlite.exec("INSERT OR IGNORE INTO teacher (id, token, name, subject, created_at) VALUES (1, 'tok1234567890abc', 'Thầy Khoa', 'Toán', '2026-11-01')")
+  t.sqlite.exec("INSERT INTO teacher_profile (teacher_id, public_id, department, show_on_home) VALUES (1, 'pub1234567890abc', 'Tổ Toán', 1)")
+  t.sqlite.exec("INSERT INTO template (id, name, layout, active, created_at, created_by) VALUES (1, 'Mẫu thiệp', 'classic', 1, '2026-11-01', 'admin@test.com')")
+  t.sqlite.exec("INSERT INTO wish (id, title, body, created_at, created_by) VALUES (1, 'Chúc mừng', 'Chúc thầy cô sức khỏe', '2026-11-01', 'seed')")
+  t.sqlite.exec("INSERT INTO student_card (public_id, teacher_id, template_id, message, from_name, from_class, anonymous, status, created_at) VALUES ('card123456789012', 1, 1, 'Chúc thầy', 'Học sinh A', '10A1', 0, 'pending', '2026-11-17')")
+  return t
+}
+
+// --- campaign table structure — fresh DB ---
+
+describe('campaign table — ensureSchema creates it on a fresh DB', () => {
+  it('campaign table exists after ensureSchema', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (
+      sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    expect(names).toContain('campaign')
+  })
+})
+
+describe('campaign table — slug CHECK', () => {
+  it('slug CHECK rejects underscore (a_b)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    // Valid slug insertion first — fails NOW because no campaign table, which makes the test red
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    // Invalid slug must throw CHECK constraint
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('a_b', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('slug CHECK rejects uppercase (A)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('Ab', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('slug CHECK rejects single char (x — too short)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('x', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('slug CHECK rejects 33-char slug (too long)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    const long = 'a'.repeat(33)
+    expect(() => {
+      sqlite
+        .prepare(
+          `INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ` +
+            `VALUES ('${long}', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')`,
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('slug CHECK rejects space (a b)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('a b', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('slug CHECK accepts 2-char valid slug', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).not.toThrow()
+  })
+
+  it('slug CHECK accepts 32-char valid slug (maximum length)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const slug32 = 'a'.repeat(32)
+    expect(() => {
+      sqlite
+        .prepare(
+          `INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ` +
+            `VALUES ('${slug32}', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')`,
+        )
+        .run()
+    }).not.toThrow()
+  })
+
+  it('kind CHECK accepts teacher_cards and gift_tree', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    for (const [slug, kind] of [['tc', 'teacher_cards'], ['gt', 'gift_tree']] as [string, string][]) {
+      expect(() => {
+        sqlite
+          .prepare(
+            `INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ` +
+              `VALUES ('${slug}', '${kind}', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')`,
+          )
+          .run()
+      }).not.toThrow()
+    }
+  })
+
+  it('kind CHECK rejects unknown kind', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    // Valid insert first (makes test red if campaign table missing)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('cd', 'unknown_kind', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('status CHECK accepts draft, active, closed', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    for (const [slug, status] of [['s1', 'draft'], ['s2', 'closed']] as [string, string][]) {
+      expect(() => {
+        sqlite
+          .prepare(
+            `INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ` +
+              `VALUES ('${slug}', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', '${status}', datetime('now'), 'test')`,
+          )
+          .run()
+      }).not.toThrow()
+    }
+  })
+
+  it('status CHECK rejects unknown status', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('ab', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('cd', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'published', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+})
+
+describe('campaign table — partial unique index (at most one active)', () => {
+  it('inserting a second active campaign fails', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    // First active insert
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('c1', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
+    // Second active insert must fail
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('c2', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+        )
+        .run()
+    }).toThrow()
+  })
+
+  it('two drafts or two closed can coexist without violating the index', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite
+      .prepare(
+        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES ('d1', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    expect(() => {
+      sqlite
+        .prepare(
+          "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+            "VALUES ('d2', 'teacher_cards', 'N2', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        )
+        .run()
+    }).not.toThrow()
+  })
+})
+
+// --- campaign_id columns on template / wish / student_card (fresh DB via ensureSchema) ---
+
+describe('campaign_id columns on template, wish, student_card — fresh DB', () => {
+  it('template has campaign_id column after ensureSchema', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const cols = (
+      sqlite.prepare("PRAGMA table_info('template')").all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(cols).toContain('campaign_id')
+  })
+
+  it('wish has campaign_id column after ensureSchema', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const cols = (
+      sqlite.prepare("PRAGMA table_info('wish')").all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(cols).toContain('campaign_id')
+  })
+
+  it('student_card has campaign_id column after ensureSchema', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const cols = (
+      sqlite.prepare("PRAGMA table_info('student_card')").all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(cols).toContain('campaign_id')
+  })
+
+  it('index exists on template(campaign_id)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const indexes = (
+      sqlite.prepare('PRAGMA index_list(template)').all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    const hasCampaignIdx = indexes.some((name) => {
+      const cols = (
+        sqlite.prepare(`PRAGMA index_info(${name})`).all() as Array<{ name: string }>
+      ).map((c) => c.name)
+      return cols.includes('campaign_id')
+    })
+    expect(hasCampaignIdx).toBe(true)
+  })
+
+  it('index exists on wish(campaign_id)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const indexes = (
+      sqlite.prepare('PRAGMA index_list(wish)').all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    const hasCampaignIdx = indexes.some((name) => {
+      const cols = (
+        sqlite.prepare(`PRAGMA index_info(${name})`).all() as Array<{ name: string }>
+      ).map((c) => c.name)
+      return cols.includes('campaign_id')
+    })
+    expect(hasCampaignIdx).toBe(true)
+  })
+
+  it('index exists on student_card(campaign_id)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const indexes = (
+      sqlite.prepare('PRAGMA index_list(student_card)').all() as Array<{ name: string }>
+    ).map((r) => r.name)
+    const hasCampaignIdx = indexes.some((name) => {
+      const cols = (
+        sqlite.prepare(`PRAGMA index_info(${name})`).all() as Array<{ name: string }>
+      ).map((c) => c.name)
+      return cols.includes('campaign_id')
+    })
+    expect(hasCampaignIdx).toBe(true)
+  })
+})
+
+// --- Upgrade from deployed schema (61107f8 era): font/ink present, no campaign/campaign_id ---
+
+describe('ensureSchema — campaign upgrade from deployed schema (61107f8: font/ink, no campaign_id)', () => {
+  it('creates campaign 1 (slug=20-11, kind=teacher_cards, status=active)', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT slug, kind, status FROM campaign WHERE id = 1')
+      .get() as { slug: string; kind: string; status: string } | undefined
+    expect(row).toBeDefined()
+    expect(row?.slug).toBe('20-11')
+    expect(row?.kind).toBe('teacher_cards')
+    expect(row?.status).toBe('active')
+  })
+
+  it('campaign 1 content round-trips home object from site.json exactly', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT content FROM campaign WHERE id = 1')
+      .get() as { content: string } | undefined
+    expect(row).toBeDefined()
+    expect(() => JSON.parse(row!.content)).not.toThrow()
+    expect(JSON.parse(row!.content)).toEqual(SITE_HOME)
+  })
+
+  it('campaign 1 is effectively open on 2026-11-20T12:00:00Z (starts_at ≤ now ≤ ends_at)', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT status, starts_at, ends_at FROM campaign WHERE id = 1')
+      .get() as { status: string; starts_at: string; ends_at: string } | undefined
+    expect(row).toBeDefined()
+    expect(row!.status).toBe('active')
+    const now = new Date('2026-11-20T12:00:00Z')
+    const starts = new Date(row!.starts_at)
+    const ends = new Date(row!.ends_at)
+    expect(now >= starts && now <= ends).toBe(true)
+  })
+
+  it('all existing template rows have campaign_id = 1 after upgrade', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const rows = sqlite.prepare('SELECT campaign_id FROM template').all() as Array<{ campaign_id: number }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(r.campaign_id).toBe(1)
+  })
+
+  it('all existing wish rows have campaign_id = 1 after upgrade', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const rows = sqlite.prepare('SELECT campaign_id FROM wish').all() as Array<{ campaign_id: number }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(r.campaign_id).toBe(1)
+  })
+
+  it('all existing student_card rows have campaign_id = 1 after upgrade', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const rows = sqlite
+      .prepare('SELECT campaign_id FROM student_card')
+      .all() as Array<{ campaign_id: number }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(r.campaign_id).toBe(1)
+  })
+
+  it('existing student_card content (message, from_name) is unchanged after upgrade', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT message, from_name FROM student_card WHERE public_id = ?')
+      .get('card123456789012') as { message: string; from_name: string } | undefined
+    expect(row?.message).toBe('Chúc thầy')
+    expect(row?.from_name).toBe('Học sinh A')
+  })
+
+  it('ensureSchema twice on the same db settles with exactly one campaign row', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    await ensureSchema(db) // second call: cached promise, no-op
+    const count = (
+      sqlite.prepare('SELECT COUNT(*) AS c FROM campaign').get() as { c: number }
+    ).c
+    expect(count).toBe(1)
+  })
+
+  it('two concurrent D1 objects (shareWith) settle with exactly one campaign row (AC-1 concurrency)', async () => {
+    const { db: db1, sqlite } = deployedDb()
+    const { db: db2 } = testDb({ shareWith: sqlite })
+    await Promise.allSettled([ensureSchema(db1), ensureSchema(db2)])
+    // One may have failed with duplicate-column-name or UNIQUE; that's acceptable.
+    const count = (
+      sqlite.prepare('SELECT COUNT(*) AS c FROM campaign').get() as { c: number }
+    ).c
+    expect(count).toBe(1)
+  })
+})
+
+// --- Upgrade from older deployed shape (pre-card-v3: no font/ink, old teacher_profile) ---
+
+describe('ensureSchema — campaign upgrade from pre-card-v3 shape (old teacher_profile + old student_card)', () => {
+  it('creates campaign 1 from an older DB fixture', async () => {
+    const { db, sqlite } = olderDeployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT slug, kind, status FROM campaign WHERE id = 1')
+      .get() as { slug: string; kind: string; status: string } | undefined
+    expect(row?.slug).toBe('20-11')
+    expect(row?.kind).toBe('teacher_cards')
+    expect(row?.status).toBe('active')
+  })
+
+  it('all rows in older fixture have campaign_id = 1 after upgrade', async () => {
+    const { db, sqlite } = olderDeployedDb()
+    await ensureSchema(db)
+    for (const table of ['template', 'wish', 'student_card'] as const) {
+      const rows = sqlite
+        .prepare(`SELECT campaign_id FROM ${table}`)
+        .all() as Array<{ campaign_id: number }>
+      expect(rows.length, `${table} should have rows`).toBeGreaterThan(0)
+      for (const r of rows) {
+        expect(r.campaign_id, `${table}.campaign_id`).toBe(1)
+      }
+    }
+  })
+
+  it('pre-v3 card message is unchanged after upgrade (font/ink/campaign_id added, content intact)', async () => {
+    const { db, sqlite } = olderDeployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT message, from_name, font, ink, campaign_id FROM student_card WHERE public_id = ?')
+      .get('card123456789012') as {
+        message: string
+        from_name: string
+        font: string
+        ink: string
+        campaign_id: number
+      } | undefined
+    expect(row?.message).toBe('Chúc thầy')
+    expect(row?.from_name).toBe('Học sinh A')
+    // font and ink got defaults via ADD COLUMN DEFAULT
+    expect(row?.font).toBe('patrick-hand')
+    expect(row?.ink).toBe('#1d3fa6')
+    expect(row?.campaign_id).toBe(1)
+  })
+
+  it('teacher_profile is rebuilt (old public_id gone, role present) during same ensureSchema', async () => {
+    const { db, sqlite } = olderDeployedDb()
+    await ensureSchema(db)
+    const cols = (
+      sqlite.prepare("PRAGMA table_info('teacher_profile')").all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(cols).not.toContain('public_id')
+    expect(cols).toContain('role')
+  })
+})
