@@ -3,13 +3,15 @@
  *
  * Public endpoints: no auth headers.
  * Admin endpoints (/api/admin/*): X-Admin-Email + X-Requested-With (CSRF).
+ * Auth/session endpoints (/api/auth/*, /api/me): X-Requested-With only (session cookie).
+ * Campaign public endpoints (/api/campaigns/*): plain fetch, no auth.
  */
 import type {
   AboutContent,
   AdminCard,
+  AdminTemplate,
   AdminTeacher,
   AdminTeacherInput,
-  AdminTemplate,
   AdminTemplateInput,
   BulkTeacherInputItem,
   BulkTeacherRequest,
@@ -21,7 +23,7 @@ import type {
   WishPublic,
 } from '../shared/api.ts'
 
-export type { AboutContent, AdminCard, AdminTeacher, AdminTeacherInput, AdminTemplate, AdminTemplateInput,
+export type { AboutContent, AdminCard, AdminTemplate, AdminTeacher, AdminTeacherInput, AdminTemplateInput,
   BulkTeacherInputItem, BulkTeacherRequest,
   QrResponse, ReviewRequest, SubmitCardRequest, TemplatePublic,
   WallResponse, WishPublic }
@@ -51,6 +53,60 @@ export type AdminRow = {
   email: string
   created_at: string
   created_by: string
+}
+
+// ── Auth / session types ──────────────────────────────────────────────────
+
+/** Signed-in user shape returned by /api/me and /api/auth/google. */
+export type MeUser = {
+  nickname: string
+  className: string
+  isAdmin: boolean
+}
+
+// ── Campaign types ────────────────────────────────────────────────────────
+
+/** Public campaign shape returned by /api/campaigns/active and /api/campaigns/<slug>. */
+export type CampaignData = {
+  slug: string
+  kind: string
+  name: string
+  tagline: string
+  content: unknown
+  themeColors: unknown
+  settings: unknown
+  startsAt: string
+  endsAt: string
+  status: string
+  open: boolean
+}
+
+/** Campaign row returned by GET /api/admin/campaigns. */
+export type AdminCampaignRow = {
+  id: number
+  slug: string
+  kind: string
+  name: string
+  tagline: string
+  starts_at: string
+  ends_at: string
+  status: string
+  created_at: string
+  created_by: string
+}
+
+/** Input shape for POST /api/admin/campaigns and PATCH /api/admin/campaigns/<id>. */
+export type AdminCampaignInput = {
+  slug?: string
+  kind?: string
+  name?: string
+  tagline?: string
+  content?: string
+  theme_colors?: string
+  settings?: string
+  starts_at?: string
+  ends_at?: string
+  status?: string
 }
 
 export class ApiError extends Error {
@@ -97,6 +153,7 @@ export function clearAdminEmail(): void {
 
 // ── Core fetch helpers ────────────────────────────────────────────────────
 
+/** Admin fetch: adds X-Requested-With + X-Admin-Email (if stored). */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
     ...(init.headers as Record<string, string>),
@@ -107,9 +164,31 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   return fetch(path, { ...init, headers })
 }
 
+/** Session/auth fetch: adds X-Requested-With only (session arrives via cookie). */
+async function sessionFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...(init.headers as Record<string, string>),
+    'X-Requested-With': 'fetch',
+  }
+  return fetch(path, { ...init, headers })
+}
+
 async function expectOk(res: Response): Promise<Response> {
   if (!res.ok) {
     if (res.status === 401) clearAdminEmail()
+    let code = 'unknown'
+    try {
+      const body = await res.json() as { error?: string }
+      code = body.error ?? 'unknown'
+    } catch { /* ignore */ }
+    throw new ApiError(res.status, code)
+  }
+  return res
+}
+
+/** Like expectOk but does NOT clear the admin email (for session-based auth endpoints). */
+async function sessionExpectOk(res: Response): Promise<Response> {
+  if (!res.ok) {
     let code = 'unknown'
     try {
       const body = await res.json() as { error?: string }
@@ -149,6 +228,92 @@ export async function getQr(token: string): Promise<QrResponse> {
 /** GET /api/about — public About content. */
 export async function getAbout(): Promise<AboutContent> {
   return (await expectOk(await fetch('/api/about'))).json() as Promise<AboutContent>
+}
+
+// ── Campaign public API (no auth, cached by server) ───────────────────────
+
+/** GET /api/campaigns/active — the currently active campaign, or throws 404. */
+export async function getActiveCampaign(): Promise<CampaignData> {
+  return (await expectOk(await fetch('/api/campaigns/active'))).json() as Promise<CampaignData>
+}
+
+/** GET /api/campaigns/<slug> — a specific campaign by slug, or throws 404. */
+export async function getCampaign(slug: string): Promise<CampaignData> {
+  return (await expectOk(await fetch(`/api/campaigns/${encodeURIComponent(slug)}`))).json() as Promise<CampaignData>
+}
+
+// ── Auth / session API ────────────────────────────────────────────────────
+
+/** GET /api/auth/nonce — returns a one-time nonce for the Google sign-in flow. */
+export async function getNonce(): Promise<string> {
+  const res = await sessionExpectOk(await fetch('/api/auth/nonce', {
+    headers: { 'X-Requested-With': 'fetch' },
+  }))
+  const data = await res.json() as { nonce: string }
+  return data.nonce
+}
+
+/** POST /api/auth/google — verify Google credential, create session, return user. */
+export async function signInWithGoogle(credential: string): Promise<MeUser> {
+  const res = await sessionExpectOk(await sessionFetch('/api/auth/google', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential }),
+  }))
+  const data = await res.json() as { user: MeUser }
+  return data.user
+}
+
+/** POST /api/auth/logout — revoke current session cookie (best-effort). */
+export async function logout(): Promise<void> {
+  await sessionFetch('/api/auth/logout', { method: 'POST' })
+}
+
+/** GET /api/me — returns current signed-in user (or null) and isAdmin flag. */
+export async function getMe(): Promise<{ user: MeUser | null; isAdmin: boolean }> {
+  const res = await fetch('/api/me', { headers: { 'X-Requested-With': 'fetch' } })
+  if (!res.ok) return { user: null, isAdmin: false }
+  return res.json() as Promise<{ user: MeUser | null; isAdmin: boolean }>
+}
+
+/** PUT /api/me — update nickname (1–30 chars) and className (≤10 chars). */
+export async function updateMe(nickname: string, className: string): Promise<void> {
+  await sessionExpectOk(await sessionFetch('/api/me', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nickname, className }),
+  }))
+}
+
+// ── Admin campaign API ────────────────────────────────────────────────────
+
+/** GET /api/admin/campaigns — list all campaigns. Requires Google session. */
+export async function listAdminCampaigns(): Promise<AdminCampaignRow[]> {
+  const data = await (await expectOk(await apiFetch('/api/admin/campaigns'))).json() as { campaigns: AdminCampaignRow[] }
+  return data.campaigns
+}
+
+/** POST /api/admin/campaigns — create a new campaign. Requires Google session. */
+export async function createAdminCampaign(input: AdminCampaignInput): Promise<{ id: number }> {
+  return (await expectOk(await apiFetch('/api/admin/campaigns', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }))).json() as Promise<{ id: number }>
+}
+
+/** PATCH /api/admin/campaigns/<id> — update an existing campaign. Requires Google session. */
+export async function updateAdminCampaign(id: number, input: AdminCampaignInput): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/campaigns/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }))
+}
+
+/** POST /api/admin/campaigns/<id>/activate — activate a campaign (closes the current active one). */
+export async function activateAdminCampaign(id: number): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/campaigns/${id}/activate`, { method: 'POST' }))
 }
 
 // ── Admin teachers ────────────────────────────────────────────────────────

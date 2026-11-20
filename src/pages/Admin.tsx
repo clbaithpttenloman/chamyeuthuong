@@ -1,13 +1,19 @@
 /**
  * Admin — /admin
  *
- * Email verification shell → admin sections:
- *   Duyệt thiệp (default) | Mẫu thiệp | Thầy cô |
- *   Thư viện lời chúc | Thư viện ảnh | Giới thiệu CLB | Quản trị viên
+ * Two authentication paths (Phase 1, legacy flag on):
+ *   1. Google session: "Đăng nhập bằng Google" → useMe() detects isAdmin
+ *   2. Legacy email: existing email form → listAdminTeachers() verify
+ *
+ * Admin sections:
+ *   Duyệt thiệp | Mẫu thiệp | Thầy cô | Thư viện lời chúc | Thư viện ảnh
+ *   Giới thiệu CLB | Quản trị viên | Chiến dịch
+ *
+ * CampaignsSection requires a Google session; it shows a hint when called via legacy email.
  *
  * First page load: at most 2 admin API calls
- *   1. listAdminTeachers() — auth verify + data for teacher filter
- *   2. ModerationSection loads GET /api/admin/cards?status=pending on mount
+ *   1. getMe() — Google session detection (from useMe hook)
+ *   2. listAdminTeachers() — legacy email verify + data for teacher filter
  *   AboutSection loads GET /api/admin/about only when that tab is opened.
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -17,11 +23,15 @@ import {
   clearAdminEmail,
   getAdminEmail,
   listAdminTeachers,
+  logout,
   messageFor,
   setAdminEmail,
 } from '../api'
+import GoogleSignIn from '../auth/GoogleSignIn.tsx'
+import { useMe } from '../auth/useMe.ts'
 import AboutSection from './admin/AboutSection.tsx'
 import AdminsSection from './admin/AdminsSection.tsx'
+import CampaignsSection from './admin/CampaignsSection.tsx'
 import ImageLibrary from './admin/ImageLibrary.tsx'
 import ModerationSection from './admin/ModerationSection.tsx'
 import TeachersSection from './admin/TeachersSection.tsx'
@@ -54,40 +64,66 @@ function isValidEmailFormat(raw: string): boolean {
   return labels.every((l) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(l))
 }
 
-// ── Email input form ──────────────────────────────────────────────────────
+// ── Sign-in page ──────────────────────────────────────────────────────────
 
-function EmailInputForm({ error, onSubmit }: { error: string | null; onSubmit: (e: string) => void }) {
+type SignInPageProps = {
+  emailError: string | null
+  onEmailSubmit: (e: string) => void
+  onGoogleSignedIn: () => void
+}
+
+function SignInPage({ emailError, onEmailSubmit, onGoogleSignedIn }: SignInPageProps) {
   const [email, setEmail] = useState('')
+
   return (
     <section className="admin-signin">
-      <h1>Nhập email quản trị</h1>
-      {error && <p className="admin-signin-error" role="alert">{error}</p>}
-      <form
-        className="admin-form"
-        onSubmit={(e) => { e.preventDefault(); onSubmit(email.trim().toLowerCase()) }}
-      >
-        <label>
-          Email <span aria-hidden="true">*</span>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            maxLength={254}
-            required
-            autoFocus
-          />
-        </label>
-        <div className="form-actions">
-          <button type="submit">Đăng nhập</button>
-        </div>
-      </form>
+      <h1>Quản lý</h1>
+
+      {/* Google sign-in (primary path in Phase 1+) */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <h2 style={{ fontSize: '1rem', marginTop: 0, marginBottom: '0.75rem' }}>
+          Đăng nhập bằng Google
+        </h2>
+        <GoogleSignIn onSignedIn={onGoogleSignedIn} />
+      </div>
+
+      <hr style={{ margin: '1.5rem 0', borderColor: '#fed7aa' }} />
+
+      {/* Legacy email path (while ADMIN_LEGACY_LOGIN = "1") */}
+      <div>
+        <h2 style={{ fontSize: '1rem', marginTop: 0, marginBottom: '0.5rem' }}>
+          Hoặc nhập email quản trị
+        </h2>
+        {emailError && <p className="admin-signin-error" role="alert">{emailError}</p>}
+        <form
+          className="admin-form"
+          style={{ background: 'none', border: 'none', padding: 0 }}
+          onSubmit={(e) => { e.preventDefault(); onEmailSubmit(email.trim().toLowerCase()) }}
+        >
+          <label htmlFor="admin-email-input">
+            Email
+            <input
+              id="admin-email-input"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              maxLength={254}
+              required
+              autoComplete="email"
+            />
+          </label>
+          <div className="form-actions">
+            <button type="submit">Đăng nhập bằng email</button>
+          </div>
+        </form>
+      </div>
     </section>
   )
 }
 
 // ── Section tabs ──────────────────────────────────────────────────────────
 
-type Section = 'moderation' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins'
+type Section = 'moderation' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins' | 'campaigns'
 
 const SECTION_LABELS: Record<Section, string> = {
   moderation: 'Duyệt thiệp',
@@ -97,6 +133,7 @@ const SECTION_LABELS: Record<Section, string> = {
   images: 'Thư viện ảnh',
   about: 'Giới thiệu CLB',
   admins: 'Quản trị viên',
+  campaigns: 'Chiến dịch',
 }
 
 // ── Main admin page ───────────────────────────────────────────────────────
@@ -104,9 +141,21 @@ const SECTION_LABELS: Record<Section, string> = {
 export default function Admin() {
   useNoIndex()
 
+  // ── Google session path ──────────────────────────────────────────────
+  const me = useMe()
+  // Track whether Google sign-in was confirmed in this session
+  // (avoids depending on me.isAdmin after a re-render that might not have refreshed yet).
+  const [googleVerified, setGoogleVerified] = useState(false)
+
+  // Sync googleVerified when useMe resolves an existing session.
+  useEffect(() => {
+    if (!me.loading && me.isAdmin) setGoogleVerified(true)
+  }, [me.loading, me.isAdmin])
+
+  // ── Legacy email path ────────────────────────────────────────────────
   const [adminEmail, setAdminEmailState] = useState<string | null>(() => getAdminEmail())
   const [emailError, setEmailError] = useState<string | null>(null)
-  const [verified, setVerified] = useState(false)
+  const [legacyVerified, setLegacyVerified] = useState(false)
   const [checking, setChecking] = useState(false)
 
   const [teachers, setTeachers] = useState<AdminTeacher[]>([])
@@ -114,12 +163,15 @@ export default function Admin() {
 
   const [section, setSection] = useState<Section>('moderation')
 
+  // Combined: verified if either path succeeds.
+  const verified = googleVerified || legacyVerified
+
   const handleAccessError = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError) {
       if (e.status === 401) {
         clearAdminEmail()
         setAdminEmailState(null)
-        setVerified(false)
+        setLegacyVerified(false)
         setChecking(false)
         setEmailError('Email này chưa có quyền quản trị')
         setTeachers([])
@@ -130,9 +182,9 @@ export default function Admin() {
     return false
   }, [])
 
-  // Auth verification: load teachers list (1 API call)
+  // Load teachers for the legacy email path
   useEffect(() => {
-    if (!adminEmail || verified) return
+    if (!adminEmail || legacyVerified) return
     let cancelled = false
     setChecking(true)
     setEmailError(null)
@@ -140,10 +192,9 @@ export default function Admin() {
       .then((ts) => {
         if (cancelled) return
         setTeachers(ts)
-        // Count pending from card counts across all teachers
         const pending = ts.reduce((sum, t) => sum + t.cardCounts.pending, 0)
         setPendingCount(pending)
-        setVerified(true)
+        setLegacyVerified(true)
       })
       .catch((e) => {
         if (cancelled) return
@@ -157,7 +208,18 @@ export default function Admin() {
       })
       .finally(() => { if (!cancelled) setChecking(false) })
     return () => { cancelled = true }
-  }, [adminEmail, verified])
+  }, [adminEmail, legacyVerified])
+
+  // Load teachers for the Google session path (after googleVerified becomes true)
+  useEffect(() => {
+    if (!googleVerified || teachers.length > 0) return
+    listAdminTeachers()
+      .then((ts) => {
+        setTeachers(ts)
+        setPendingCount(ts.reduce((sum, t) => sum + t.cardCounts.pending, 0))
+      })
+      .catch(() => { /* non-critical; ModerationSection handles its own load */ })
+  }, [googleVerified, teachers.length])
 
   function handleEmailSubmit(email: string) {
     if (!isValidEmailFormat(email)) { setEmailError('Email không hợp lệ'); return }
@@ -166,29 +228,54 @@ export default function Admin() {
     setEmailError(null)
   }
 
-  function handleSignOut() {
+  async function handleSignOut() {
+    // Revoke Google session if one is active
+    if (me.user !== null || googleVerified) {
+      await logout().catch(() => {})
+    }
+    // Reset all auth state
+    setGoogleVerified(false)
     clearAdminEmail()
     setAdminEmailState(null)
-    setVerified(false)
+    setLegacyVerified(false)
     setChecking(false)
     setEmailError(null)
     setTeachers([])
+    setPendingCount(0)
     setSection('moderation')
   }
 
-  if (!adminEmail || !verified) {
-    if (checking) {
+  // Show loading while Google session check is in progress (before legacy email can help)
+  if (!verified) {
+    if (me.loading || checking) {
       return <section className="admin-signin"><p>Đang kiểm tra…</p></section>
     }
-    return <EmailInputForm error={emailError} onSubmit={handleEmailSubmit} />
+    return (
+      <SignInPage
+        emailError={emailError}
+        onEmailSubmit={handleEmailSubmit}
+        onGoogleSignedIn={() => { me.refresh(); setGoogleVerified(true) }}
+      />
+    )
   }
+
+  const signedInLabel = me.user?.nickname
+    ? `${me.user.nickname} (Google)`
+    : adminEmail ?? ''
 
   return (
     <section className="admin-page">
       <div className="admin-header">
-        <h1>Quản lý thiệp</h1>
+        <h1>Quản lý</h1>
         <div className="admin-header-actions">
-          <button type="button" onClick={handleSignOut} className="btn-ghost">Đổi email</button>
+          {signedInLabel && <span style={{ fontSize: '0.85rem', color: '#78716c' }}>{signedInLabel}</span>}
+          <button
+            type="button"
+            onClick={() => { void handleSignOut() }}
+            className="btn-ghost"
+          >
+            {googleVerified ? 'Đăng xuất' : 'Đổi email'}
+          </button>
         </div>
       </div>
 
@@ -239,6 +326,9 @@ export default function Admin() {
         )}
         {section === 'admins' && (
           <AdminsSection onAccessError={handleAccessError} />
+        )}
+        {section === 'campaigns' && (
+          <CampaignsSection onAccessError={handleAccessError} />
         )}
       </div>
     </section>
