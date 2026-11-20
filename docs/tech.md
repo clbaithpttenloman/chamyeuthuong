@@ -290,3 +290,80 @@ INSERT INTO template_image VALUES ((SELECT MAX(id) FROM template), 'background',
 - Why: Georgia and `system-ui` differ per device (Android has no Georgia; some fallbacks place stacked Vietnamese marks such as "ẫ", "ầ" badly). Both families are designed with full Vietnamese coverage.
 - The weight CSS files declare `unicode-range` subsets, so a browser only downloads the latin, latin-ext and vietnamese files it needs (checked: 15 woff2 files on the wall page, all same-origin, no CSP change needed because `default-src 'self'` covers fonts). The build copies every subset (about 1 MB in `dist/assets`), which is not downloaded unless used.
 - `font-display: swap`: text shows at once in the fallback font and switches when the file arrives.
+
+---
+
+## Google sign-in + sessions (campaign platform, Phase 1)
+
+Verified 2026-11-20 for plan `.kiro/delivery/2026-11-18-campaign-platform/` (ADR-3).
+
+### `jose` — version 6.2.17
+- Pin `"jose": "6.2.17"`: released 2026-11-09. 6.2.18 (2026-11-18) is inside the 7-day quarantine. ESM (`"type": "module"`).
+- Imports: `import { createRemoteJWKSet, jwtVerify, errors } from 'jose'`.
+- `createRemoteJWKSet(url: URL, options?: { timeoutDuration?, cooldownDuration?, cacheMaxAge?, ... }): RemoteJWKSet` — one instance per isolate; `cooldownDuration` stops unknown-`kid` tokens from forcing refetches.
+- `jwtVerify(jwt, getKey, options)` where `options` includes `algorithms`, `issuer` (string | string[]), `audience`, `clockTolerance`, `maxTokenAge`, `requiredClaims`, `currentDate`.
+- Errors: `errors.JWTExpired` (code `ERR_JWT_EXPIRED`), `errors.JWTClaimValidationFailed` (`ERR_JWT_CLAIM_VALIDATION_FAILED`), `errors.JWKSNoMatchingKey`, `errors.JWKSTimeout`.
+- Behaviour checked locally with node 22: options `{ algorithms: ['RS256'], issuer: ['https://accounts.google.com','accounts.google.com'], audience, clockTolerance: 60, maxTokenAge: '1h', requiredClaims: ['sub','exp','iat'] }`.
+  - `iat` = now passes; `iat` = now + 30 s passes (within tolerance).
+  - `iat` = now + 300 s fails: "iat claim timestamp check failed (it should be in the past)".
+  - Expired `exp` fails with `ERR_JWT_EXPIRED`.
+- Source: package types in `node_modules/jose/dist/types/{jwks/remote.d.ts,jwt/verify.d.ts,types.d.ts,util/errors.d.ts}` (6.2.17); `npm view jose time`.
+
+### Google Identity Services (browser)
+- Script: `<script src="https://accounts.google.com/gsi/client" async></script>`. It must be loaded from Google; self-hosting is unsupported.
+- `google.accounts.id.initialize({ client_id, callback, nonce, ux_mode: 'popup', use_fedcm_for_button: true, context: 'signin' })`, then `google.accounts.id.renderButton(el, options)`.
+  - `callback` receives `{ credential }`, which is the ID token.
+  - `nonce` is "a random string for ID tokens … to prevent replay attacks" and is echoed in the token's `nonce` claim.
+  - Call `initialize` only once per page.
+  - `use_fedcm_for_prompt` is deprecated and ignored.
+- CSP when these directives are present:
+  - `script-src https://accounts.google.com/gsi/client`
+  - `frame-src https://accounts.google.com/gsi/`
+  - `connect-src https://accounts.google.com/gsi/` (use the parent URL, not individual endpoints)
+  - `style-src https://accounts.google.com/gsi/style`
+- COOP: no change is needed when FedCM is enabled. Without FedCM, `same-origin-allow-popups` is required for popups. We set no COOP header.
+- FedCM inside iframes needs `allow="identity-credentials-get"`. Not applicable: the sign-in page is top-level.
+- Sources:
+  - https://developers.google.com/identity/gsi/web/reference/js-reference
+  - https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid (CSP, COOP)
+  - https://developers.google.com/identity/gsi/web/guides/fedcm-migration
+
+### Verifying the ID token (Worker)
+- JWKS: `https://www.googleapis.com/oauth2/v3/certs`. Keys rotate, so honour `Cache-Control`.
+- Checks:
+  - Signature.
+  - `aud` = our client ID.
+  - `iss` ∈ {`accounts.google.com`, `https://accounts.google.com`}.
+  - `exp` not passed.
+  - Plus our own: RS256, `iat`/`sub` required, max age 1 h, `email_verified === true`, `nonce` equals the signed nonce cookie.
+- **Email authority (affects admin matching):** Google is authoritative for an email only when it ends with `@gmail.com`, or when `email_verified` is true and `hd` is set (Workspace). For other addresses, Google says ownership "may have since changed". Rule: an `admin` entry matches only if the token's email is authoritative by this test. In every case, `admin.google_sub` is pinned on first sign-in.
+- Use `sub` as the user key, never email ("Email is not a good choice because it can be changed by the user").
+- GIS also sends a `g_csrf_token` cookie and body field, but only in `login_uri` (redirect) mode. We use the JS callback and POST JSON ourselves, so CSRF protection is our nonce plus `X-Requested-With` plus `Sec-Fetch-Site`.
+- Source: https://developers.google.com/identity/gsi/web/guides/verify-google-id-token
+
+### Embedded in-app browsers
+- Google blocks OAuth in embedded webviews ("disallowed_useragent") since 2021-09-30.
+- Source: https://developers.googleblog.com/upcoming-security-changes-to-googles-oauth-20-authorization-endpoint-in-embedded-webviews/
+- User-agent markers to detect (best-effort, case-insensitive). There is no official list, so test on real devices:
+  - `Zalo`
+  - `FBAN`, `FBAV`, `FB_IAB` (Facebook and Messenger)
+  - `Instagram`
+  - ` Line/`
+  - `musical_ly`, `BytedanceWebview` (TikTok)
+  - Android webview `; wv)`
+- When detected, show the "Mở bằng Chrome/Safari" guide plus a copy-link button instead of the Google button.
+
+### Cloudflare platform
+- **Rate limiting binding:**
+  - `limit({ key, delta? })`, where `key` can be any string.
+  - `simple.period` is 10 or 60 s, counted per Cloudflare location, and approximate.
+  - Cloudflare recommends user/tenant ids over IP keys because users share IPs.
+  - Source: https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
+- **Cache API:** needs a custom domain or route. It has no effect on `*.workers.dev`. Source: https://developers.cloudflare.com/r2/examples/cache-api/
+- **Environments:**
+  - `env.<name>` deploys as Worker `<name>-<env>`.
+  - `vars`, D1 and other bindings, and `secrets` are **non-inheritable**: they must be repeated in `env.staging`. Assume `ratelimits` is non-inheritable too and verify with `wrangler deploy --dry-run --env staging`.
+  - `secrets.required: string[]` lists secret names that must be set to deploy.
+  - Sources: https://developers.cloudflare.com/workers/wrangler/environments/ and https://developers.cloudflare.com/workers/wrangler/configuration/ ("Non-inheritable keys").
+- **Secrets, non-interactive:** `printf '%s' "$VALUE" | npx wrangler secret put NAME [--env staging]` (reads stdin). Use `npx wrangler secret bulk file.json` for several at once.
+- **Git tag `sso-google-signin`** (commit 1c14767) is the starting point. Its CSP line still matches Google's current guidance (script/frame/connect/style as above). Its `jose` verification options match the list above, except that it does not use `nonce` and `requiredClaims`. Add both.
