@@ -86,6 +86,14 @@ let db: D1
 beforeEach(async () => {
   ;({ db } = testDb())
   vi.mocked(newToken).mockReturnValue('newcard00000001a')
+  // Campaign 1 (slug '20-11') must be effectively open for all submit tests.
+  // The campaigns.test.ts campaign_closed tests override this with their own seed.
+  await db
+    .prepare(
+      "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "VALUES (1, '20-11', 'teacher_cards', 'Ngày 20/11', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+    )
+    .run()
 })
 
 // ---- Happy path ----
@@ -490,7 +498,16 @@ describe('POST /api/cards — security headers', () => {
 
 describe('POST /api/cards — more invisible and malformed characters (security review suggestion)', () => {
   let db: D1
-  beforeEach(() => { db = testDb().db })
+  beforeEach(async () => {
+    db = testDb().db
+    // Campaign 1 must be open for submit to reach validation (not campaign_closed).
+    await db
+      .prepare(
+        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
+  })
   const cases: Array<[string, string]> = [
     ['line separator U+2028', 'a\u2028b'],
     ['paragraph separator U+2029', 'a\u2029b'],
@@ -532,6 +549,13 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
   it('teacherId (show_on_home=1) → 201', async () => {
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
+    // Campaign 1 must be open.
+    await freshDb
+      .prepare(
+        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
     // Seed teacher with show_on_home=1
     await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
     const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
@@ -550,6 +574,13 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
   it('teacherToken (any teacher, including hidden) → 201', async () => {
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
+    // Campaign 1 must be open.
+    await freshDb
+      .prepare(
+        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
     const TOKEN = 'tok1234567890abc'
     await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind(TOKEN, 'T', '', now).run()
     const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind(TOKEN).first<{ id: number }>())!.id
@@ -569,6 +600,13 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
   it('teacherId for show_on_home=0 teacher → 404', async () => {
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
+    // Campaign 1 must be open so the check doesn't return 409 before reaching teacher lookup.
+    await freshDb
+      .prepare(
+        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
     await freshDb.prepare('INSERT INTO teacher (token, name, subject, created_at) VALUES (?, ?, ?, ?)').bind('tok1234567890abc', 'T', '', now).run()
     const tid = (await freshDb.prepare('SELECT id FROM teacher WHERE token=?').bind('tok1234567890abc').first<{ id: number }>())!.id
     await freshDb.prepare('INSERT INTO teacher_title (teacher_id, title) VALUES (?, ?)').bind(tid, 'Thầy').run()
@@ -604,6 +642,13 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
   it('unknown teacherId → 404', async () => {
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
+    // Campaign 1 must be open so the check doesn't return 409 before reaching teacher lookup.
+    await freshDb
+      .prepare(
+        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
     const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
 
@@ -688,6 +733,13 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     const MARKER = 'UNIQUE_NOTFOUND_MARKER_XYZ'
     const { db: freshDb } = testDb()
     const now = new Date().toISOString()
+    // Campaign 1 must be open so the check doesn't return 409 before reaching teacher lookup.
+    await freshDb
+      .prepare(
+        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
+      )
+      .run()
     await freshDb.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)').bind('T', 'classic', 1, now, 'a@b.com').run()
     const tmplId = (await freshDb.prepare('SELECT id FROM template WHERE name=?').bind('T').first<{ id: number }>())!.id
     const r = await handleSubmit(

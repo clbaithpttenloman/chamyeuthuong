@@ -4,6 +4,8 @@ import { handleQr } from './qr.ts'
 import { handleAdmin } from './admin.ts'
 import { handleAbout } from './about.ts'
 import { handlePublicImage } from './images.ts'
+import { handleCampaigns, handleAdminCampaigns } from './campaigns.ts'
+import { requireAdmin } from './auth.ts'
 import { error } from './http.ts'
 import type { Env, ExecutionContext } from './types.ts'
 
@@ -37,6 +39,16 @@ export default {
       if (pathname === '/api/about') return await handleAbout(request, env)
       if (pathname === '/api/cards') return await handleSubmit(request, env)
       if (pathname.startsWith('/api/qr/')) return await handleQr(request, env)
+      // Campaign public endpoints (no auth; memoised per isolate)
+      if (pathname === '/api/campaigns/active' || pathname.startsWith('/api/campaigns/')) {
+        return await handleCampaigns(request, env)
+      }
+      // Campaign admin CRUD — legacy email auth; TODO(phase1-task2): require Google session
+      if (pathname.startsWith('/api/admin/campaigns')) {
+        const auth = await requireAdmin(request, env)
+        if (auth instanceof Response) return auth
+        return await handleAdminCampaigns(request, env, auth.email)
+      }
       if (pathname.startsWith('/api/admin/')) return await handleAdmin(request, env)
       if (pathname.startsWith('/api/')) return error('not_found')
       return env.ASSETS.fetch(request)

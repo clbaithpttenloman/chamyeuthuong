@@ -1,6 +1,7 @@
 import type { D1 } from './types.ts'
 import { SEEDS } from './seed.ts'
 import { aboutSeedSql } from './aboutSeed.ts'
+import SITE_CONTENT from '../src/content/site.json'
 
 // DDL for all tables, converted to CREATE TABLE IF NOT EXISTS so each run is idempotent.
 // IF NOT EXISTS never alters an existing table: any column change also needs an upgrade
@@ -18,6 +19,32 @@ const INK_COLUMN =
 // Labels must match ROLES in shared/api.ts (tested).
 const ROLE_COLUMN =
   "TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))"
+
+// campaign_id column added to template, wish, student_card via ALTER TABLE (ADR-2).
+// SQLite rejects ADD COLUMN … REFERENCES … DEFAULT <non-null>, so there is no FK here.
+// campaign 1 is inserted before every ADD COLUMN so the DEFAULT 1 is always valid.
+const CAMPAIGN_ID_COLUMN = 'INTEGER NOT NULL DEFAULT 1'
+
+// Content for campaign 1 (20/11) is derived from src/content/site.json .home.
+const CAMPAIGN_1_CONTENT = JSON.stringify((SITE_CONTENT as { home: unknown }).home).replace(/'/g, "''")
+
+/** SQL for the campaign upgrade: conditional INSERT for campaign 1 then per-table ADD COLUMN + index.
+ *  The INSERT uses WHERE EXISTS (SELECT 1 FROM template) so a fresh empty DB does not
+ *  get an active campaign (which would break the partial-unique-index tests).
+ *  Exported so testDb() can apply them directly to represent a fully-upgraded live DB baseline.
+ */
+export const CAMPAIGN_UPGRADE_SQLS: string[] = [
+  // Insert campaign 1 only when old data exists (ADR-2). INSERT OR IGNORE is safe for concurrent runs.
+  `INSERT OR IGNORE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ` +
+    `SELECT 1, '20-11', 'teacher_cards', 'Ngày 20/11', 'Tri ân thầy cô', '${CAMPAIGN_1_CONTENT}', '{}', '{}', '2026-01-01T00:00:00Z', '2026-12-31T23:59:59Z', 'active', datetime('now'), 'upgrade' ` +
+    `WHERE EXISTS (SELECT 1 FROM template)`,
+  'ALTER TABLE template ADD COLUMN campaign_id ' + CAMPAIGN_ID_COLUMN,
+  'CREATE INDEX IF NOT EXISTS idx_template_campaign_id ON template(campaign_id)',
+  'ALTER TABLE wish ADD COLUMN campaign_id ' + CAMPAIGN_ID_COLUMN,
+  'CREATE INDEX IF NOT EXISTS idx_wish_campaign_id ON wish(campaign_id)',
+  'ALTER TABLE student_card ADD COLUMN campaign_id ' + CAMPAIGN_ID_COLUMN,
+  'CREATE INDEX IF NOT EXISTS idx_student_card_campaign_id ON student_card(campaign_id)',
+]
 
 export const SCHEMA: string[] = [
   // ---- Core tables ----
@@ -104,6 +131,29 @@ export const SCHEMA: string[] = [
   updated_at TEXT NOT NULL,
   updated_by TEXT NOT NULL
 )`,
+  // ---- Campaign platform (ADR-1, ADR-2) ----
+  // campaign_id on template/wish/student_card is added via UPGRADES (ALTER TABLE), not here,
+  // because the SCHEMA batch runs on old DBs too and CREATE INDEX on a column that does not
+  // yet exist would fail. See CAMPAIGN_UPGRADE_SQLS below.
+  `CREATE TABLE IF NOT EXISTS campaign (
+  id          INTEGER PRIMARY KEY,
+  slug        TEXT    UNIQUE NOT NULL
+              CHECK (length(slug) BETWEEN 2 AND 32 AND NOT slug GLOB '*[^a-z0-9-]*'),
+  kind        TEXT    NOT NULL CHECK (kind IN ('teacher_cards','gift_tree')),
+  name        TEXT    NOT NULL DEFAULT '',
+  tagline     TEXT    NOT NULL DEFAULT '',
+  content     TEXT    NOT NULL DEFAULT '{}',
+  theme_colors TEXT   NOT NULL DEFAULT '{}',
+  settings    TEXT    NOT NULL DEFAULT '{}',
+  starts_at   TEXT    NOT NULL,
+  ends_at     TEXT    NOT NULL,
+  status      TEXT    NOT NULL DEFAULT 'draft'
+              CHECK (status IN ('draft','active','closed')),
+  created_at  TEXT    NOT NULL,
+  created_by  TEXT    NOT NULL
+)`,
+  // Partial unique index: at most one active campaign at a time (FR-2 / ADR-1).
+  `CREATE UNIQUE INDEX IF NOT EXISTS one_active ON campaign(status) WHERE status = 'active'`,
   // ---- Seeds: 12 example wishes + meta flag (run once, guarded by meta flag) ----
   ...SEEDS,
   // ---- About seed (INSERT OR IGNORE — idempotent) ----
@@ -120,8 +170,15 @@ const TABLES: Table[] = ['teacher_profile', 'student_card']
  * In-place upgrades for databases created by older deploys, run in order. Each entry checks
  * the live columns of its own table and, only if they are old, runs its SQL in one batch
  * (one D1 transaction, so a failure rolls back and the next request retries).
+ * Entries with `runFn` run per-SQL instead of as a single batch (used when partial state
+ * is possible, e.g. when only some tables may need the new column).
  */
-const UPGRADES: { table: Table; needed(cols: Set<string>): boolean; sql: string[] }[] = [
+const UPGRADES: {
+  table: Table
+  needed(cols: Set<string>): boolean
+  sql: string[]
+  runFn?: (db: D1) => Promise<void>
+}[] = [
   {
     // 4d3a5df had teacher_profile.public_id TEXT UNIQUE NOT NULL; the column was removed in
     // plan 2026-11-18-privacy-about. SQLite cannot DROP a UNIQUE column, so copy the table.
@@ -158,6 +215,30 @@ const UPGRADES: { table: Table; needed(cols: Set<string>): boolean; sql: string[
     table: 'student_card',
     needed: (cols) => !cols.has('ink'),
     sql: [`ALTER TABLE student_card ADD COLUMN ink ${INK_COLUMN}`],
+  },
+  {
+    // ADR-2: add campaign_id (DEFAULT 1) to the three legacy tables, preceded by an
+    // INSERT OR IGNORE for campaign 1 so the default value is always valid.
+    // The `sql` field lists all 7 statements so UPGRADE_SQL includes them for the testDb
+    // ddl counter. The `runFn` runs each SQL individually, catching only "duplicate column
+    // name" so a partially-upgraded DB (template/wish already have campaign_id but
+    // student_card does not) is handled without failing the whole batch.
+    table: 'student_card',
+    needed: (cols) => !cols.has('campaign_id'),
+    sql: CAMPAIGN_UPGRADE_SQLS,
+    runFn: async (db: D1) => {
+      for (const sql of CAMPAIGN_UPGRADE_SQLS) {
+        await db.batch([db.prepare(sql)]).catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e)
+          // ALTER TABLE … ADD COLUMN fails with "duplicate column name: campaign_id" if the
+          // column was already added by a concurrent isolate or a prior partial upgrade.
+          // CREATE INDEX … IF NOT EXISTS never throws on a duplicate; INSERT OR IGNORE never
+          // fails on a PK conflict. Any other error is a real failure that must propagate.
+          if (msg.includes('duplicate column name')) return
+          throw e
+        })
+      }
+    },
   },
 ]
 
@@ -225,11 +306,20 @@ async function runUpgrades(db: D1): Promise<void> {
   for (const t of TABLES) cols.set(t, await tableColumns(db, t))
   for (const u of UPGRADES) {
     if (!u.needed(cols.get(u.table)!)) continue
-    // Fixed string only: tells an operator this 503 is a failed upgrade, not a D1 outage.
-    await db.batch(u.sql.map((q) => db.prepare(q))).catch((e: unknown) => {
-      console.error('schema: upgrade failed')
-      throw e
-    })
+    if (u.runFn) {
+      // Per-SQL execution for entries that must tolerate partial state (e.g. some tables
+      // already upgraded). The runFn is responsible for its own error handling.
+      await u.runFn(db).catch((e: unknown) => {
+        console.error('schema: upgrade failed')
+        throw e
+      })
+    } else {
+      // Fixed string only: tells an operator this 503 is a failed upgrade, not a D1 outage.
+      await db.batch(u.sql.map((q) => db.prepare(q))).catch((e: unknown) => {
+        console.error('schema: upgrade failed')
+        throw e
+      })
+    }
     cols.set(u.table, await tableColumns(db, u.table))
   }
 }

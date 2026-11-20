@@ -27,6 +27,7 @@ import {
   MAX_MESSAGE, MAX_FROM_NAME, MAX_FROM_CLASS, MAX_NEWLINES,
   PENDING_CAP, PENDING_CAP_PER_TEACHER,
 } from '../shared/api.ts'
+import { isEffectivelyOpen } from '../shared/campaign.ts'
 import type { Env } from './types.ts'
 
 /** Known top-level keys in the submit body. */
@@ -138,6 +139,23 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
 
   // 14. ensureSchema
   await ensureSchema(env.DB)
+
+  // 14b. Campaign 1 (slug '20-11') must be effectively open.
+  // Treats missing campaign as closed — foreign users cannot submit to a non-existent campaign.
+  const campaign1 = await env.DB
+    .prepare("SELECT status, starts_at, ends_at FROM campaign WHERE slug = '20-11' LIMIT 1")
+    .first<{ status: 'draft' | 'active' | 'closed'; starts_at: string; ends_at: string }>()
+  if (!campaign1 || !isEffectivelyOpen(campaign1, new Date())) {
+    return new Response(JSON.stringify({ error: 'campaign_closed' }), {
+      status: 409,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Robots-Tag': 'noindex',
+      },
+    })
+  }
 
   // 15. Atomic INSERT with teacher exists + template active + global cap + per-teacher cap
   const now = new Date().toISOString()

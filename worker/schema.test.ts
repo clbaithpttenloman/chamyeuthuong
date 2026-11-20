@@ -11,9 +11,10 @@ import { testDb } from './testDb.ts'
 import type { D1Stmt } from './types.ts'
 
 // Statements a fresh (unseeded) database prepares on its first ensureSchema: the SCHEMA batch,
-// one column probe per upgradable table (teacher_profile, student_card), the seed-flag probe,
-// and the seed batch.
-const FRESH_COLD_START = SCHEMA.length + 3 + SEED_STATEMENT_COUNT
+// one column probe per upgradable table (teacher_profile, student_card), the campaign upgrade
+// (7 statements: INSERT campaign 1 + 3×ADD COLUMN + 3×CREATE INDEX), one re-probe after the
+// campaign upgrade, the seed-flag probe, and the seed batch.
+const FRESH_COLD_START = SCHEMA.length + 11 + SEED_STATEMENT_COUNT
 
 // ---- SCHEMA shape ----
 
@@ -26,7 +27,9 @@ describe('SCHEMA shape', () => {
 
   it('every entry is idempotent DDL (CREATE TABLE/INDEX IF NOT EXISTS) or a seed INSERT', () => {
     for (const s of SCHEMA) {
-      expect(s.trim().toUpperCase()).toMatch(/^(CREATE TABLE IF NOT EXISTS|CREATE INDEX IF NOT EXISTS|INSERT)\s/)
+      expect(s.trim().toUpperCase()).toMatch(
+        /^(CREATE TABLE IF NOT EXISTS|CREATE (UNIQUE )?INDEX IF NOT EXISTS|INSERT)\s/,
+      )
     }
   })
 

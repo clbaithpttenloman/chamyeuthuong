@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DatabaseSync } from 'node:sqlite'
-import { SCHEMA, UPGRADE_SQL, IMAGES_SEEDED_KEY } from './schema.ts'
+import { SCHEMA, UPGRADE_SQL, IMAGES_SEEDED_KEY, CAMPAIGN_UPGRADE_SQLS } from './schema.ts'
 
 /** Minimal D1 binding types (no @cloudflare/workers-types). Matches worker/types.ts. */
 export type D1Stmt = {
@@ -44,6 +44,16 @@ export function testDb(opts: { schema?: false; seeded?: false; shareWith?: Datab
     if (opts.schema !== false) {
       for (const sql of SCHEMA) {
         sqlite.exec(sql)
+      }
+      // Apply the campaign upgrade baseline so testDb() represents a fully-upgraded live DB.
+      // This keeps ensureSchema() from re-running the upgrade in 'current DB' tests.
+      // Only swallow "duplicate column name" (column already added) and "already exists"
+      // (index already created). Any other error indicates a real SQL problem and is rethrown.
+      for (const sql of CAMPAIGN_UPGRADE_SQLS) {
+        try { sqlite.exec(sql) } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!msg.includes('duplicate column name') && !msg.includes('already exists')) throw e
+        }
       }
       // Mark the one-time image seed as done so handler tests start from an empty library.
       // Pass { seeded: false } to exercise the seed itself.
