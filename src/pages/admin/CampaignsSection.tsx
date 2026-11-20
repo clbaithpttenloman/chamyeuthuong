@@ -3,46 +3,44 @@
  *
  * Lists campaigns and provides a create/edit form (Phase 1 cut line):
  *   slug, kind, name, tagline, content JSON, starts/ends dates in Asia/Ho_Chi_Minh (UTC+7),
- *   status, settings with defaults from validateSettings, activate.
+ *   settings with defaults, activate and close.
+ *
+ * Editing fetches the full row via GET /api/admin/campaigns/<id> so that content,
+ * theme_colors and settings are populated from D1, not defaulted to {}. (Fix F2.)
  *
  * Campaign admin APIs require a Google session (not legacy email).
  * When the API returns 401, shows a "sign in with Google" hint.
+ *
+ * Status changes go only through activate/close (decisions.md 2026-11-16 item 5).
+ * PATCH does NOT send status.
  *
  * FR-7; plan.md § "Admin CRUD" and "cut line"; requirements.md FR-1…FR-7.
  */
 import { useCallback, useEffect, useState } from 'react'
 import {
   activateAdminCampaign,
+  closeAdminCampaign,
   ApiError,
   createAdminCampaign,
+  getAdminCampaign,
   listAdminCampaigns,
   messageFor,
   updateAdminCampaign,
 } from '../../api.ts'
-import type { AdminCampaignInput, AdminCampaignRow } from '../../api.ts'
-import { CAMPAIGN_KINDS, isValidSlug, validateSettings } from '../../../shared/campaign.ts'
-import type { CampaignKind } from '../../../shared/campaign.ts'
-
-// ── Date helpers (Vietnam = UTC+7, no DST) ────────────────────────────────
-
-const VN_OFFSET_MS = 7 * 60 * 60 * 1000
-
-/** "YYYY-MM-DDTHH:MM" in Vietnam time ← UTC ISO string */
-function utcToVnDatetime(utcStr: string): string {
-  if (!utcStr) return ''
-  const d = new Date(utcStr)
-  if (isNaN(d.getTime())) return ''
-  const vnDate = new Date(d.getTime() + VN_OFFSET_MS)
-  return vnDate.toISOString().slice(0, 16)
-}
-
-/** UTC ISO string ← "YYYY-MM-DDTHH:MM" in Vietnam time */
-function vnDatetimeToUtc(localStr: string): string {
-  if (!localStr) return ''
-  const d = new Date(localStr + ':00+07:00')
-  if (isNaN(d.getTime())) return ''
-  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
-}
+import type { AdminCampaignRow } from '../../api.ts'
+import { isValidSlug, validateSettings } from '../../../shared/campaign.ts'
+import {
+  rowToForm,
+  formToInput,
+  defaultForm,
+  utcToVnDatetime,
+  vnDatetimeToUtc,
+  DEFAULT_GIFT_TREE_SETTINGS,
+  GIFT_TREE_RANGES,
+  type CampaignFormState,
+  type GiftTreeSettings,
+  type AdminCampaignFullRow,
+} from './campaignFormHelpers.ts'
 
 // ── Vietnamese error messages ─────────────────────────────────────────────
 
@@ -55,84 +53,10 @@ function campaignMessageFor(e: unknown): string {
   return messageFor(e)
 }
 
-// ── Gift tree settings form state ─────────────────────────────────────────
-
-type GiftTreeSettings = {
-  report_threshold: number
-  hearts_per_day: number
-  gifts_per_user: number
-  tree_slots: number
-  ground_slots: number
-}
-
-const DEFAULT_GIFT_TREE_SETTINGS: GiftTreeSettings = {
-  report_threshold: 3,
-  hearts_per_day: 5,
-  gifts_per_user: 3,
-  tree_slots: 15,
-  ground_slots: 10,
-}
-
-const GIFT_TREE_RANGES: Record<keyof GiftTreeSettings, [number, number, string]> = {
-  report_threshold: [2, 20, 'Báo cáo tự ẩn sau'],
-  hearts_per_day: [1, 20, 'Tim mỗi ngày'],
-  gifts_per_user: [1, 10, 'Quà mỗi người'],
-  tree_slots: [5, 25, 'Ô trên cây'],
-  ground_slots: [0, 15, 'Ô dưới đất'],
-}
-
 // ── Campaign form ─────────────────────────────────────────────────────────
 
-type FormState = {
-  slug: string
-  kind: CampaignKind
-  name: string
-  tagline: string
-  content: string
-  startsAt: string   // Vietnam local datetime "YYYY-MM-DDTHH:MM"
-  endsAt: string
-  status: string
-  settings: GiftTreeSettings
-}
-
-function defaultForm(): FormState {
-  return {
-    slug: '',
-    kind: 'teacher_cards',
-    name: '',
-    tagline: '',
-    content: '{}',
-    startsAt: '',
-    endsAt: '',
-    status: 'draft',
-    settings: { ...DEFAULT_GIFT_TREE_SETTINGS },
-  }
-}
-
-function rowToForm(row: AdminCampaignRow): FormState {
-  let settings = { ...DEFAULT_GIFT_TREE_SETTINGS }
-  if (row.kind === 'gift_tree') {
-    // try to parse existing settings
-    try {
-      const parsed = JSON.parse('{}') as Record<string, unknown> // placeholder; actual from full row
-      void parsed
-    } catch { /* use defaults */ }
-  }
-  return {
-    slug: row.slug,
-    kind: row.kind as CampaignKind,
-    name: row.name,
-    tagline: row.tagline,
-    content: '{}',   // list row doesn't carry content; full row fetched on edit
-    startsAt: utcToVnDatetime(row.starts_at),
-    endsAt: utcToVnDatetime(row.ends_at),
-    status: row.status,
-    settings,
-  }
-}
-
 type CampaignFormProps = {
-  initial: FormState
+  initial: CampaignFormState
   editing: boolean    // true = PATCH existing; false = POST new
   editId: number | null
   onSaved: () => void
@@ -140,11 +64,11 @@ type CampaignFormProps = {
 }
 
 function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignFormProps) {
-  const [form, setForm] = useState<FormState>(initial)
+  const [form, setForm] = useState<CampaignFormState>(initial)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  function update<K extends keyof FormState>(key: K, value: FormState[K]) {
+  function update<K extends keyof CampaignFormState>(key: K, value: CampaignFormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
@@ -159,7 +83,7 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
     e.preventDefault()
 
     // Client-side validation
-    if (!isValidSlug(form.slug)) {
+    if (!editing && !isValidSlug(form.slug)) {
       setError('Slug phải 2–32 ký tự gồm chữ thường, số và dấu gạch ngang; không được dùng tên dành riêng.')
       return
     }
@@ -189,17 +113,7 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
       return
     }
 
-    const input: AdminCampaignInput = {
-      slug: form.slug,
-      kind: form.kind,
-      name: form.name.trim(),
-      tagline: form.tagline.trim(),
-      content: contentJson,
-      settings: JSON.stringify(settingsResult.value),
-      starts_at: startsUtc,
-      ends_at: endsUtc,
-      status: form.status,
-    }
+    const input = formToInput({ ...form, content: contentJson }, editing)
 
     setSaving(true)
     setError(null)
@@ -243,14 +157,11 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
         <select
           id="camp-kind"
           value={form.kind}
-          onChange={(e) => update('kind', e.target.value as CampaignKind)}
+          onChange={(e) => update('kind', e.target.value as CampaignFormState['kind'])}
           disabled={editing}
         >
-          {CAMPAIGN_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {k === 'teacher_cards' ? 'Thiệp giáo viên (teacher_cards)' : 'Cây thông điều ước (gift_tree)'}
-            </option>
-          ))}
+          <option value="teacher_cards">Thiệp giáo viên (teacher_cards)</option>
+          <option value="gift_tree">Cây thông điều ước (gift_tree)</option>
         </select>
         <small>Không thể thay đổi sau khi tạo.</small>
       </label>
@@ -299,19 +210,6 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
           onChange={(e) => update('endsAt', e.target.value)}
           required
         />
-      </label>
-
-      <label htmlFor="camp-status">
-        Trạng thái
-        <select
-          id="camp-status"
-          value={form.status}
-          onChange={(e) => update('status', e.target.value)}
-        >
-          <option value="draft">Nháp (draft)</option>
-          <option value="active">Đang hoạt động (active)</option>
-          <option value="closed">Đã đóng (closed)</option>
-        </select>
       </label>
 
       <label htmlFor="camp-content">
@@ -374,7 +272,7 @@ export default function CampaignsSection({ onAccessError }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [needsGoogleSignIn, setNeedsGoogleSignIn] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [editRow, setEditRow] = useState<AdminCampaignRow | null>(null)
+  const [editForm, setEditForm] = useState<{ id: number; initial: CampaignFormState } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -410,6 +308,38 @@ export default function CampaignsSection({ onAccessError }: Props) {
     }
   }
 
+  async function handleClose(id: number) {
+    setError(null)
+    try {
+      await closeAdminCampaign(id)
+      await load()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setNeedsGoogleSignIn(true)
+      } else {
+        setError(campaignMessageFor(e))
+      }
+    }
+  }
+
+  /**
+   * Fetch the full campaign row (with content/settings/theme_colors) before opening the editor.
+   * Using the list row would leave content as {} — that is F2.
+   */
+  async function handleEdit(id: number) {
+    setError(null)
+    try {
+      const full: AdminCampaignFullRow = await getAdminCampaign(id)
+      setEditForm({ id, initial: rowToForm(full) })
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setNeedsGoogleSignIn(true)
+      } else {
+        setError(campaignMessageFor(e))
+      }
+    }
+  }
+
   if (loading) return <p className="admin-loading">Đang tải…</p>
 
   if (needsGoogleSignIn) {
@@ -435,14 +365,14 @@ export default function CampaignsSection({ onAccessError }: Props) {
     )
   }
 
-  if (editRow) {
+  if (editForm) {
     return (
       <CampaignForm
-        initial={rowToForm(editRow)}
+        initial={editForm.initial}
         editing={true}
-        editId={editRow.id}
-        onSaved={() => { setEditRow(null); void load() }}
-        onCancel={() => setEditRow(null)}
+        editId={editForm.id}
+        onSaved={() => { setEditForm(null); void load() }}
+        onCancel={() => setEditForm(null)}
       />
     )
   }
@@ -486,7 +416,7 @@ export default function CampaignsSection({ onAccessError }: Props) {
                   <td>{utcToVnDatetime(c.ends_at)}</td>
                   <td>
                     <div className="admin-actions">
-                      <button type="button" onClick={() => setEditRow(c)}>Sửa</button>
+                      <button type="button" onClick={() => { void handleEdit(c.id) }}>Sửa</button>
                       {c.status !== 'active' && (
                         <button
                           type="button"
@@ -494,6 +424,15 @@ export default function CampaignsSection({ onAccessError }: Props) {
                           onClick={() => { void handleActivate(c.id) }}
                         >
                           Kích hoạt
+                        </button>
+                      )}
+                      {c.status === 'active' && (
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          onClick={() => { void handleClose(c.id) }}
+                        >
+                          Đóng
                         </button>
                       )}
                     </div>

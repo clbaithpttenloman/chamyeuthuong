@@ -42,6 +42,7 @@ import {
   TEST_EMAIL,
   TEST_SUB,
   TEST_NONCE_KEY,
+  TEST_CLIENT_ID,
 } from './testGoogle.ts'
 
 /** Get all Set-Cookie header values, handling both Cloudflare Workers (getAll) and Node.js 22 (getSetCookie). */
@@ -72,6 +73,39 @@ function makeSignInReq(
 }
 
 // ── GET /api/auth/nonce ───────────────────────────────────────────────────────
+
+describe('GET /api/auth/nonce — clientId delivery (decisions.md 2026-11-16 item 3)', () => {
+  it('response includes clientId equal to env.GOOGLE_CLIENT_ID when set', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    // meEnv sets GOOGLE_CLIENT_ID = TEST_CLIENT_ID by default
+    const env = meEnv({ db })
+    const req = new Request('https://x/api/auth/nonce', { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
+    const r = await handleAuth(req, env)
+    expect(r.status).toBe(200)
+    const body = await r.json() as { nonce?: string; clientId?: string }
+    expect(typeof body.clientId).toBe('string')
+    expect(body.clientId).toBe(TEST_CLIENT_ID)
+  })
+
+  it('clientId is empty string when GOOGLE_CLIENT_ID is absent', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    // Build env without GOOGLE_CLIENT_ID
+    const envNoId = {
+      DB: db,
+      GOOGLE_CLIENT_ID: undefined as unknown as string,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const req = new Request('https://x/api/auth/nonce', { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
+    const r = await handleAuth(req, envNoId)
+    expect(r.status).toBe(200)
+    const body = await r.json() as { nonce?: string; clientId?: string }
+    expect(body.clientId).toBe('')
+  })
+})
 
 describe('GET /api/auth/nonce', () => {
   it('returns 200 with { nonce } body and sets __Host-cyt_n cookie', async () => {

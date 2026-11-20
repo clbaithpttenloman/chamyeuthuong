@@ -151,7 +151,7 @@ export async function handleAuth(
   // GET /api/auth/nonce — no CSRF needed, no auth needed
   if (request.method === 'GET' && pathname === '/api/auth/nonce') {
     const { nonce, cookie } = await issueNonce(env)
-    return resp({ nonce }, 200, [cookie])
+    return resp({ nonce, clientId: env.GOOGLE_CLIENT_ID ?? '' }, 200, [cookie])
   }
 
   // POST /api/auth/google

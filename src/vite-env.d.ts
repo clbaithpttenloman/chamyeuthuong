@@ -1,8 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Google OAuth client ID for the Google Identity Services button. Set via VITE_GOOGLE_CLIENT_ID. */
-  readonly VITE_GOOGLE_CLIENT_ID?: string
+  // The Google client ID is delivered via GET /api/auth/nonce — no build-time env var needed.
 }
 
 interface ImportMeta {

@@ -2,8 +2,8 @@
  * worker/campaigns.ts — campaign public read APIs and admin lifecycle helpers.
  *
  * Public endpoints (no auth required):
- *   GET /api/campaigns/active  → the current active campaign, or 404
- *   GET /api/campaigns/<slug>  → a campaign by slug, or 404 / 404 for invalid slug
+ *   GET /api/campaigns/active  → the current active campaign, or most recent closed (FR-3)
+ *   GET /api/campaigns/<slug>  → a campaign by slug (active/closed only; draft → 404)
  *
  * Both responses carry Cache-Control: public, max-age=5 and are memoised per D1 binding
  * keyed by pathname (query string ignored), TTL 5 s, ≤ 32 hit entries.
@@ -18,7 +18,8 @@
  */
 import { error, json, readJson, HttpError } from './http.ts'
 import { ensureSchema } from './schema.ts'
-import { isValidSlug, isEffectivelyOpen } from '../shared/campaign.ts'
+import { isValidSlug, isEffectivelyOpen, CAMPAIGN_KINDS, validateSettings } from '../shared/campaign.ts'
+import type { CampaignKind } from '../shared/campaign.ts'
 import type { D1, Env } from './types.ts'
 
 // ---- Response shape ----
@@ -144,7 +145,10 @@ const SELECT_CAMPAIGN =
 
 /**
  * Handles GET /api/campaigns/active and GET /api/campaigns/<slug>.
- * Returns 404 for invalid slugs (bad charset or reserved) or not-found campaigns.
+ *
+ * /active: returns the active campaign; if none is active, falls back to the most recent
+ *   closed campaign (FR-3, open: false). Returns 404 only when no campaigns exist at all.
+ * /<slug>: 404 for draft campaigns (decisions.md item 4) and for unknown or invalid slugs.
  * Responses are memoised per D1 binding; Cache-Control: public, max-age=5, no Vary, no Set-Cookie.
  */
 export async function handleCampaigns(
@@ -164,9 +168,18 @@ export async function handleCampaigns(
   const now = new Date()
 
   if (pathname === '/api/campaigns/active') {
-    const row = await db
+    // Try active first
+    let row = await db
       .prepare(`${SELECT_CAMPAIGN} WHERE status = 'active' LIMIT 1`)
       .first<CampaignRow>()
+
+    // FR-3: no active → fall back to the most recent closed campaign (read-only, open: false)
+    if (!row) {
+      row = await db
+        .prepare(`${SELECT_CAMPAIGN} WHERE status = 'closed' ORDER BY id DESC LIMIT 1`)
+        .first<CampaignRow>()
+    }
+
     if (!row) {
       memoSet404(db, pathname)
       return error('not_found')
@@ -194,6 +207,13 @@ export async function handleCampaigns(
     memoSet404(db, pathname)
     return error('not_found')
   }
+
+  // Draft campaigns are not publicly readable (decisions.md 2026-11-16 item 4).
+  if (row.status === 'draft') {
+    memoSet404(db, pathname)
+    return error('not_found')
+  }
+
   const data = toCampaignData(row, now)
   memoSet(db, pathname, data)
   return campaignResponse(data)
@@ -212,7 +232,7 @@ export async function activateCampaign(db: D1, id: number): Promise<void> {
   ])
 }
 
-// ---- Admin CRUD ----
+// ---- Admin CRUD helpers ----
 
 /** Returns true if any legacy table rows reference this campaign_id. */
 async function campaignHasRows(db: D1, id: number): Promise<boolean> {
@@ -226,11 +246,86 @@ async function campaignHasRows(db: D1, id: number): Promise<boolean> {
   return false
 }
 
+/** Parse a JSON string and check it is a non-null, non-array object.
+ *  Returns the object on success, or null on failure. */
+function parseJsonObj(s: unknown): Record<string, unknown> | null {
+  if (s === undefined || s === null) return {}  // absent → treat as empty object (defaults)
+  const str = typeof s === 'string' ? s : JSON.stringify(s)
+  try {
+    const v = JSON.parse(str)
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
+    return v as Record<string, unknown>
+  } catch { return null }
+}
+
+/** Returns true when s is a valid ISO date string (parseable, non-NaN). */
+function isValidIso(s: unknown): s is string {
+  if (typeof s !== 'string') return false
+  const d = new Date(s)
+  return !isNaN(d.getTime())
+}
+
+/**
+ * Validate POST/PATCH body fields shared between create and update.
+ * Returns 'ok' or an error Response.
+ *
+ * @param kind           - the campaign kind (from body for POST; from DB for PATCH)
+ * @param body           - the parsed request body
+ * @param isPatch        - true for PATCH (skips required-field checks for starts_at/ends_at)
+ */
+function validateCampaignBody(
+  kind: CampaignKind,
+  body: Record<string, unknown>,
+  isPatch: boolean,
+): Response | 'ok' {
+  // content must be a JSON object when present
+  if ('content' in body) {
+    const c = parseJsonObj(body.content)
+    if (c === null) return error('bad_request')
+    // Replace raw value with the parsed form so caller gets sanitised string
+    body.content = JSON.stringify(c)
+  }
+
+  // theme_colors must be a JSON object when present
+  if ('theme_colors' in body) {
+    const tc = parseJsonObj(body.theme_colors)
+    if (tc === null) return error('bad_request')
+    body.theme_colors = JSON.stringify(tc)
+  }
+
+  // settings must pass validateSettings when present
+  if ('settings' in body) {
+    const parsed = parseJsonObj(body.settings)
+    if (parsed === null) return error('bad_request')
+    const result = validateSettings(kind, parsed)
+    if (!result.ok) return error('bad_request')
+    body.settings = JSON.stringify(result.value)
+  }
+
+  // Date validation
+  const hasStart = 'starts_at' in body
+  const hasEnd = 'ends_at' in body
+  if (hasStart && !isValidIso(body.starts_at)) return error('bad_request')
+  if (hasEnd && !isValidIso(body.ends_at)) return error('bad_request')
+  if (!isPatch) {
+    // For POST: both dates are required and end must be after start
+    if (!hasStart || !hasEnd) return error('bad_request')
+  }
+  if (hasStart && hasEnd) {
+    // When both are provided: end must be strictly after start
+    const start = new Date(body.starts_at as string).getTime()
+    const end = new Date(body.ends_at as string).getTime()
+    if (end <= start) return error('bad_request')
+  }
+
+  return 'ok'
+}
+
+const BODY_LIMIT = 16_384  // 16 KB
+
 /**
  * Admin CRUD handler for /api/admin/campaigns and /api/admin/campaigns/<id>/*.
  * Callers MUST verify admin auth before invoking — this function assumes auth is done.
- * // TODO(phase1-task2): require Google session — the next task swaps requireAdmin so it also
- * // accepts Google-issued sessions; this function's signature remains the same.
  */
 export async function handleAdminCampaigns(
   request: Request,
@@ -254,17 +349,25 @@ export async function handleAdminCampaigns(
 
     if (request.method === 'POST') {
       let body: Record<string, unknown>
-      try { body = (await readJson<Record<string, unknown>>(request, 4096)) as Record<string, unknown> }
+      try { body = (await readJson<Record<string, unknown>>(request, BODY_LIMIT)) as Record<string, unknown> }
       catch (e) { return error(e instanceof HttpError ? e.code : 'bad_request') }
 
-      const { slug, kind, name, tagline, content, themeColors, settings, startsAt, endsAt, status } = body
+      // snake_case keys (matching D1 columns and the editor's AdminCampaignInput)
+      const { slug, kind, name, tagline, starts_at, ends_at, status } = body
+
       if (
         typeof slug !== 'string' || !isValidSlug(slug) ||
-        typeof kind !== 'string' ||
         typeof name !== 'string' ||
-        typeof startsAt !== 'string' ||
-        typeof endsAt !== 'string'
+        typeof starts_at !== 'string' ||
+        typeof ends_at !== 'string'
       ) return error('bad_request')
+
+      // Validate kind against allowed values
+      if (!CAMPAIGN_KINDS.includes(kind as CampaignKind)) return error('bad_request')
+      const campaignKind = kind as CampaignKind
+
+      const bodyValidation = validateCampaignBody(campaignKind, body, false)
+      if (bodyValidation !== 'ok') return bodyValidation
 
       const now = new Date().toISOString()
       try {
@@ -274,15 +377,15 @@ export async function handleAdminCampaigns(
           )
           .bind(
             slug,
-            kind,
+            campaignKind,
             name ?? '',
-            tagline ?? '',
-            typeof content === 'string' ? content : JSON.stringify(content ?? {}),
-            typeof themeColors === 'string' ? themeColors : JSON.stringify(themeColors ?? {}),
-            typeof settings === 'string' ? settings : JSON.stringify(settings ?? {}),
-            startsAt,
-            endsAt,
-            status ?? 'draft',
+            typeof tagline === 'string' ? tagline : '',
+            typeof body.content === 'string' ? body.content : '{}',
+            typeof body.theme_colors === 'string' ? body.theme_colors : '{}',
+            typeof body.settings === 'string' ? body.settings : '{}',
+            starts_at,
+            ends_at,
+            typeof status === 'string' ? status : 'draft',
             now,
             email,
           )
@@ -310,6 +413,12 @@ export async function handleAdminCampaigns(
     return json({ ok: true })
   }
 
+  if (sub === '/close') {
+    if (request.method !== 'POST') return error('method')
+    await db.prepare("UPDATE campaign SET status = 'closed' WHERE id = ?").bind(id).run()
+    return json({ ok: true })
+  }
+
   if (sub === '' || sub === '/') {
     if (request.method === 'GET') {
       const row = await db
@@ -322,12 +431,31 @@ export async function handleAdminCampaigns(
 
     if (request.method === 'PATCH') {
       let body: Record<string, unknown>
-      try { body = (await readJson<Record<string, unknown>>(request, 4096)) as Record<string, unknown> }
+      try { body = (await readJson<Record<string, unknown>>(request, BODY_LIMIT)) as Record<string, unknown> }
       catch (e) { return error(e instanceof HttpError ? e.code : 'bad_request') }
+
+      // status and kind are immutable via PATCH (use /activate or /close)
+      if ('status' in body) return error('bad_request')
+      if ('kind' in body) return error('bad_request')
+
+      // Fetch existing campaign kind (needed to validate settings)
+      let campaignKind: CampaignKind = 'teacher_cards'
+      if ('settings' in body) {
+        const existing = await db
+          .prepare('SELECT kind FROM campaign WHERE id = ?')
+          .bind(id)
+          .first<{ kind: string }>()
+        if (existing && CAMPAIGN_KINDS.includes(existing.kind as CampaignKind)) {
+          campaignKind = existing.kind as CampaignKind
+        }
+      }
+
+      const bodyValidation = validateCampaignBody(campaignKind, body, true)
+      if (bodyValidation !== 'ok') return bodyValidation
 
       const fields: string[] = []
       const values: unknown[] = []
-      const allowed = ['name', 'tagline', 'content', 'theme_colors', 'settings', 'starts_at', 'ends_at', 'status'] as const
+      const allowed = ['name', 'tagline', 'content', 'theme_colors', 'settings', 'starts_at', 'ends_at'] as const
       for (const f of allowed) {
         if (f in body) {
           fields.push(`${f} = ?`)

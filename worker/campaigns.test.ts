@@ -8,7 +8,7 @@ vi.mock('./token.ts', () => ({
 }))
 
 // These imports fail NOW (modules do not exist yet — expected red phase)
-import { handleCampaigns, activateCampaign } from './campaigns.ts'
+import { handleCampaigns, activateCampaign, handleAdminCampaigns } from './campaigns.ts'
 import { handleSubmit } from './submit.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { newToken } from './token.ts'
@@ -446,5 +446,497 @@ describe('POST /api/cards — 409 campaign_closed when campaign 1 is not effecti
     )
     expect(r.status).toBe(409)
     expect((await r.json() as { error: string }).error).toBe('campaign_closed')
+  })
+})
+
+// ============================================================
+// Fix Group 4a — new tests (red phase until implementation)
+// ============================================================
+
+// ---- Admin request helpers ----
+
+function adminPost(url: string, body: unknown) {
+  return new Request(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+    body: JSON.stringify(body),
+  })
+}
+
+function adminPatch(url: string, body: unknown) {
+  return new Request(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+// ---- handleAdminCampaigns — POST: snake_case body the editor sends ----
+
+describe('handleAdminCampaigns — POST accepts snake_case body the editor sends', () => {
+  it('POST with snake_case keys (starts_at, ends_at, theme_colors) → 201', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'noel-2026',
+        kind: 'gift_tree',
+        name: 'Noel 2026',
+        tagline: 'Treo ước nguyện',
+        content: '{"home":{"kicker":"test"}}',
+        theme_colors: '{"primary":"#cc0000"}',
+        settings: '{}',
+        starts_at: '2026-12-01T00:00:00Z',
+        ends_at: '2026-12-31T23:59:59Z',
+        status: 'draft',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(201)
+    const body = await r.json() as { id?: number }
+    expect(typeof body.id).toBe('number')
+  })
+
+  it('POST with camelCase keys (startsAt, endsAt) alone → 400 (dates required)', async () => {
+    // The API no longer reads camelCase; camelCase body has no dates → bad_request
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        startsAt: '2026-01-01T00:00:00Z',  // camelCase — not read
+        endsAt: '2026-12-31T00:00:00Z',    // camelCase — not read
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- handleAdminCampaigns — POST: validation ----
+
+describe('handleAdminCampaigns — POST: validation', () => {
+  it('unknown kind → 400 bad_request', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'unknown_kind',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('invalid gift_tree settings (report_threshold out of range) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'gift_tree',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        settings: JSON.stringify({ report_threshold: 100 }),
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('invalid gift_tree settings (tree_slots too low) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'gift_tree',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        settings: JSON.stringify({ tree_slots: 1 }),  // min is 5
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('non-object content (JSON array string) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        content: '[1,2,3]',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('non-object content (null JSON string) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        content: 'null',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('non-object theme_colors (JSON array) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        theme_colors: '[1,2,3]',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('non-ISO starts_at → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: 'not-a-date',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('non-ISO ends_at → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: 'bad-date',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('ends_at equal to starts_at → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-06-01T00:00:00Z',
+        ends_at: '2026-06-01T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('ends_at before starts_at → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-12-31T00:00:00Z',
+        ends_at: '2026-01-01T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- handleAdminCampaigns — PATCH: status and kind rejected ----
+
+describe('handleAdminCampaigns — PATCH: status and kind rejected', () => {
+  beforeEach(async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', kind: 'teacher_cards', status: 'draft' })
+  })
+
+  it('PATCH with status field → 400 bad_request', async () => {
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', { status: 'active' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('PATCH with kind field → 400 bad_request', async () => {
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', { kind: 'gift_tree' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('PATCH with invalid settings → 400', async () => {
+    // First upgrade campaign to gift_tree so settings validation is tested
+    await db.prepare("UPDATE campaign SET kind = 'gift_tree' WHERE id = 1").run()
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', {
+        settings: JSON.stringify({ tree_slots: 999 }),
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH with non-object content → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', { content: '[1,2,3]' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH with ends_at ≤ starts_at (both provided) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', {
+        starts_at: '2026-12-31T00:00:00Z',
+        ends_at: '2026-01-01T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH valid name only → 200, content unchanged', async () => {
+    // Insert with specific content
+    await db.prepare("UPDATE campaign SET content = '{\"home\":{\"kicker\":\"keep me\"}}' WHERE id = 1").run()
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', { name: 'Updated Name' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(200)
+    // Content must remain intact
+    const row = await db.prepare('SELECT content FROM campaign WHERE id = 1').first<{ content: string }>()
+    expect(row?.content).toBe('{"home":{"kicker":"keep me"}}')
+  })
+})
+
+// ---- handleAdminCampaigns — body limit (16 KB) ----
+
+describe('handleAdminCampaigns — body limit 16 KB', () => {
+  it('POST body > 16 KB → 413 too_long', async () => {
+    // Build a body > 16 KB
+    const big = 'x'.repeat(16385)
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: big,
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(413)
+  })
+
+  it('POST body ≤ 16 KB with real content does NOT return 413', async () => {
+    // A 15 KB payload (> old 4 KB limit, < new 16 KB limit)
+    const bigContent = 'a'.repeat(14000)
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'big-content',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        content: JSON.stringify({ data: bigContent }),
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    // Should NOT be 413; it may be 201 (success) or 400 (bad_request for other reasons)
+    expect(r.status).not.toBe(413)
+  })
+
+  it('PATCH body > 16 KB → 413 too_long', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11' })
+    const big = 'x'.repeat(16385)
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: big,
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(413)
+  })
+})
+
+// ---- handleAdminCampaigns — /close endpoint ----
+
+describe('handleAdminCampaigns — /close endpoint', () => {
+  it('POST /close → sets campaign status to closed → 200 { ok: true }', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/1/close', { method: 'POST' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as { ok: boolean }).ok).toBe(true)
+    const row = await db.prepare('SELECT status FROM campaign WHERE id = 1').first<{ status: string }>()
+    expect(row?.status).toBe('closed')
+  })
+
+  it('/close on a draft campaign → 200, status becomes closed', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'draft' })
+    await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/1/close', { method: 'POST' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    const row = await db.prepare('SELECT status FROM campaign WHERE id = 1').first<{ status: string }>()
+    expect(row?.status).toBe('closed')
+  })
+
+  it('GET /close → 405 method not allowed', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/1/close', { method: 'GET' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(405)
+  })
+})
+
+// ---- handleAdminCampaigns — GET <id> returns full row (content, settings, theme_colors) ----
+
+describe('handleAdminCampaigns — GET /api/admin/campaigns/<id> returns full row', () => {
+  it('returns content, settings, theme_colors fields', async () => {
+    await db
+      .prepare(
+        'INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ' +
+        "VALUES (1, '20-11', 'teacher_cards', 'Test', '', '{\"k\":\"v\"}', '{\"primary\":\"#abc\"}', '{\"x\":1}', '2026-01-01T00:00:00Z', '2026-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+      )
+      .run()
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/1', { method: 'GET' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(200)
+    const row = await r.json() as Record<string, unknown>
+    expect(row.content).toBe('{"k":"v"}')
+    expect(row.theme_colors).toBe('{"primary":"#abc"}')
+    expect(row.settings).toBe('{"x":1}')
+    expect(row.slug).toBe('20-11')
+    expect(row.kind).toBe('teacher_cards')
+  })
+})
+
+// ---- handleCampaigns — FR-3: no active → most recent closed ----
+
+describe('handleCampaigns — FR-3 fallback (no active → most recent closed)', () => {
+  it('no active campaign, one closed → 200 with open: false', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'closed' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/active'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { slug: string; open: boolean }
+    expect(body.slug).toBe('20-11')
+    expect(body.open).toBe(false)
+  })
+
+  it('no active campaign, two closed → returns the most recent one (highest id)', async () => {
+    await seedCampaign(db, { id: 1, slug: 'old-campaign', status: 'closed' })
+    await seedCampaign(db, { id: 2, slug: 'newer-campaign', status: 'closed' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/active'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(200)
+    expect((await r.json() as { slug: string }).slug).toBe('newer-campaign')
+  })
+
+  it('no campaigns at all → 404', async () => {
+    // DB is empty of campaigns (beforeEach creates a fresh db)
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/active'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(404)
+  })
+
+  it('FR-3 fallback: closed campaign returned with Cache-Control: public, max-age=5', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'closed' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/active'),
+      campaignsEnv(db),
+    )
+    expect(r.headers.get('Cache-Control')).toBe('public, max-age=5')
+  })
+})
+
+// ---- handleCampaigns — draft campaigns not publicly readable (decisions.md 4) ----
+
+describe('handleCampaigns — draft campaigns not public', () => {
+  it('GET /api/campaigns/<draft-slug> → 404', async () => {
+    await seedCampaign(db, { id: 1, slug: 'noel-2026', kind: 'gift_tree', status: 'draft' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/noel-2026'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(404)
+  })
+
+  it('GET /api/campaigns/<active-slug> → 200 (active campaign is public)', async () => {
+    await seedCampaign(db, { id: 1, slug: 'noel-2026', kind: 'gift_tree', status: 'active' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/noel-2026'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('GET /api/campaigns/<closed-slug> → 200 (closed campaigns are readable)', async () => {
+    await seedCampaign(db, { id: 1, slug: 'noel-2026', kind: 'gift_tree', status: 'closed' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/noel-2026'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(200)
   })
 })

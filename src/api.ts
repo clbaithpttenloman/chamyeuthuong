@@ -109,6 +109,23 @@ export type AdminCampaignInput = {
   status?: string
 }
 
+/** Full campaign row returned by GET /api/admin/campaigns/<id> (includes content/settings/theme_colors). */
+export type AdminCampaignFullRow = {
+  id: number
+  slug: string
+  kind: string
+  name: string
+  tagline: string
+  content: string
+  theme_colors: string
+  settings: string
+  starts_at: string
+  ends_at: string
+  status: string
+  created_at: string
+  created_by: string
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -244,13 +261,13 @@ export async function getCampaign(slug: string): Promise<CampaignData> {
 
 // ── Auth / session API ────────────────────────────────────────────────────
 
-/** GET /api/auth/nonce — returns a one-time nonce for the Google sign-in flow. */
-export async function getNonce(): Promise<string> {
+/** GET /api/auth/nonce — returns a one-time nonce and the Google client ID for the sign-in flow. */
+export async function getNonce(): Promise<{ nonce: string; clientId: string }> {
   const res = await sessionExpectOk(await fetch('/api/auth/nonce', {
     headers: { 'X-Requested-With': 'fetch' },
   }))
-  const data = await res.json() as { nonce: string }
-  return data.nonce
+  const data = await res.json() as { nonce: string; clientId?: string }
+  return { nonce: data.nonce, clientId: data.clientId ?? '' }
 }
 
 /** POST /api/auth/google — verify Google credential, create session, return user. */
@@ -314,6 +331,16 @@ export async function updateAdminCampaign(id: number, input: AdminCampaignInput)
 /** POST /api/admin/campaigns/<id>/activate — activate a campaign (closes the current active one). */
 export async function activateAdminCampaign(id: number): Promise<void> {
   await expectOk(await apiFetch(`/api/admin/campaigns/${id}/activate`, { method: 'POST' }))
+}
+
+/** GET /api/admin/campaigns/<id> — fetch the full campaign row including content/settings/theme_colors. */
+export async function getAdminCampaign(id: number): Promise<AdminCampaignFullRow> {
+  return (await expectOk(await apiFetch(`/api/admin/campaigns/${id}`))).json() as Promise<AdminCampaignFullRow>
+}
+
+/** POST /api/admin/campaigns/<id>/close — close a campaign. */
+export async function closeAdminCampaign(id: number): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/campaigns/${id}/close`, { method: 'POST' }))
 }
 
 // ── Admin teachers ────────────────────────────────────────────────────────

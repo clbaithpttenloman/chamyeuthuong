@@ -1,15 +1,13 @@
 /**
  * src/auth/GoogleSignIn.tsx — Google Identity Services sign-in button.
  *
- * Loads the GSI script on demand (only when this component mounts).
- * Fetches a nonce from /api/auth/nonce, initialises the GIS button,
- * POSTs the credential to /api/auth/google on click.
+ * Loads the GSI script and fetches the nonce + Google client ID from
+ * GET /api/auth/nonce (which now returns { nonce, clientId }).
+ * No build-time env var needed for the client ID — it is delivered at runtime via GET /api/auth/nonce.
+ *
  * Shows the in-app browser guide (AC-6) when isInAppBrowser(navigator.userAgent) is true.
  * Shows the nickname/class onboarding form (FR-10) when the new user has no nickname.
- *
- * GOOGLE_CLIENT_ID is supplied via the VITE_GOOGLE_CLIENT_ID build-time env var.
- * When the var is unset (e.g. local dev without a Google project), the button is hidden
- * and a note is shown so the legacy email form can still be used.
+ * Shows the existing Vietnamese note when clientId is empty (not configured).
  *
  * FR-8, FR-10, FR-12, AC-6; docs/tech.md § "Google sign-in + sessions".
  */
@@ -62,7 +60,6 @@ function loadGsiScript(): Promise<void> {
       'script[src="https://accounts.google.com/gsi/client"]',
     )
     if (existing) {
-      // Script already added; listen for load or resolve immediately if already loaded.
       existing.addEventListener('load', () => resolve(), { once: true })
       if (window.google?.accounts?.id) resolve()
       return
@@ -78,11 +75,12 @@ function loadGsiScript(): Promise<void> {
 // ── GoogleSignIn component ────────────────────────────────────────────────
 
 export default function GoogleSignIn({ onSignedIn }: Props) {
-  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
   const buttonRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
+  // undefined = still loading from API; '' = no client ID configured; non-empty = ready
+  const [clientId, setClientId] = useState<string | undefined>(undefined)
 
   // Keep ref in sync so the GIS callback always uses the latest onSignedIn.
   const onSignedInRef = useRef(onSignedIn)
@@ -91,19 +89,23 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
   const inApp = isInAppBrowser(navigator.userAgent)
 
   useEffect(() => {
-    if (inApp || !clientId || !buttonRef.current) return
+    if (inApp) return
     let cancelled = false
 
     void (async () => {
       try {
         await loadGsiScript()
-        if (cancelled || !buttonRef.current) return
+        if (cancelled) return
 
-        const nonce = await getNonce()
-        if (cancelled || !buttonRef.current) return
+        const { nonce, clientId: cid } = await getNonce()
+        if (cancelled) return
+
+        setClientId(cid)
+
+        if (!cid || !buttonRef.current) return
 
         window.google!.accounts.id.initialize({
-          client_id: clientId,
+          client_id: cid,
           nonce,
           ux_mode: 'popup',
           use_fedcm_for_button: true,
@@ -126,26 +128,34 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
           },
         })
 
-        window.google!.accounts.id.renderButton(buttonRef.current, {
-          type: 'standard',
-          text: 'signin_with',
-          locale: 'vi',
-        })
+        if (buttonRef.current) {
+          window.google!.accounts.id.renderButton(buttonRef.current, {
+            type: 'standard',
+            text: 'signin_with',
+            locale: 'vi',
+          })
+        }
       } catch (e) {
-        if (!cancelled) setError(messageFor(e))
+        if (!cancelled) {
+          setClientId('')  // treat fetch failure as unconfigured
+          setError(messageFor(e))
+        }
       }
     })()
 
     return () => { cancelled = true }
-    // onSignedIn is intentionally accessed via ref; clientId and inApp are compile-time constants.
-  }, [clientId, inApp])
+    // inApp is derived from navigator.userAgent — stable across renders
+  }, [inApp])
 
   if (inApp) return <InAppBrowserGuide />
+
+  // Still loading nonce/clientId from server
+  if (clientId === undefined) return null
 
   if (!clientId) {
     return (
       <p className="admin-loading">
-        Google Sign-In chưa được cấu hình (VITE_GOOGLE_CLIENT_ID chưa đặt).
+        Google Sign-In chưa được cấu hình (client ID chưa đặt).
       </p>
     )
   }
