@@ -36,8 +36,17 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: opts.adminFailLimit ?? true }) },
     IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
+    AUTH_LIMIT: { limit: async () => ({ success: true }) },
+    USER_READ_LIMIT: { limit: async () => ({ success: true }) },
+    USER_WRITE_LIMIT: { limit: async () => ({ success: true }) },
     BOOTSTRAP_EMAIL: undefined as string | undefined,
     ALLOW_FIRST_CLAIM: undefined as string | undefined,
+    // Phase 1: allow legacy X-Admin-Email login on 20/11 routes while the flag is on.
+    ADMIN_LEGACY_LOGIN: '1' as string | undefined,
+    GOOGLE_CLIENT_ID: '',
+    NONCE_KEY: '',
+    SUB_HMAC_KEY: '',
+    IP_HMAC_KEY: '',
   }
 }
 
@@ -955,12 +964,22 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
     expect(r.status).toBe(403)
   })
 
-  it('POST /api/admin/admins (authenticated) → 200 with created_by = TEST_EMAIL', async () => {
-    const r = await handleAdmin(adminReq('POST', '/api/admin/admins', { email: 'second@example.com' }), makeEnv(db))
+  it('POST /api/admin/admins (authenticated via Google session) → 200 with created_by = admin email', async () => {
+    // POST /api/admin/admins requires Google session in Phase 1 — update auth setup.
+    const { db: freshDb, sqlite: freshSqlite } = testDb2()
+    createNewTables(freshSqlite)
+    await seedAdminEmail(freshDb, GOOGLE_ADMIN_EMAIL)
+    const googleUserId = await seedUser(freshDb, { email: GOOGLE_ADMIN_EMAIL, sub: GOOGLE_ADMIN_SUB })
+    const googleToken = makeRawToken()
+    await seedSession(freshDb, googleUserId, googleToken)
+
+    const env = makeEnvWithFlag(freshDb, true)
+    const req = sessionReq(googleToken, 'POST', '/api/admin/admins', { email: 'second@example.com' })
+    const r = await handleAdmin(req, env)
     expect(r.status).toBe(200)
     const body = await r.json() as { email: string; created_by: string }
     expect(body.email).toBe('second@example.com')
-    expect(body.created_by).toBe(TEST_EMAIL)
+    expect(body.created_by).toBe(GOOGLE_ADMIN_EMAIL)
   })
 
   it('/api/admin/admins/1/x → 404 not_found (unknown sub-path)', async () => {

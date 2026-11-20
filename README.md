@@ -226,7 +226,7 @@ Private teacher QR token → approved cards + teacher profile
 - `images` contains only `background`
 - Unknown/malformed token → 404
 - Private token never appears in any response
-- Response header `X-Robots-Tag: noindex` and `Referrer-Policy: no-referrer`
+- Response header `X-Robots-Tag: noindex` and `Referrer-Policy: strict-origin-when-cross-origin` (Google sign-in needs the origin; paths never leave the site)
 
 ### GET /api/templates
 Rate limit: **120/60 s per IP**

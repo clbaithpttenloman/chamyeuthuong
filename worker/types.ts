@@ -31,8 +31,25 @@ export type Env = {
   ADMIN_FAIL_LIMIT: RateLimit
   /** Rate limit for public image fetches: 300 req/60 s per IP, namespace 2003. */
   IMAGE_IP_LIMIT: RateLimit
+  /** Rate limit for auth endpoints (failures): 300 req/60 s per IP. */
+  AUTH_LIMIT?: RateLimit
+  /** Rate limit for session reads (GET /api/me, /api/me/gifts): 120 req/60 s per user. */
+  USER_READ_LIMIT?: RateLimit
+  /** Rate limit for session writes (PUT /api/me, DELETE, logout): 10 req/60 s per user. */
+  USER_WRITE_LIMIT?: RateLimit
   /** Set to a specific email to restrict who can claim the first-admin bootstrap. */
   BOOTSTRAP_EMAIL?: string
   /** Set to '1' (only when BOOTSTRAP_EMAIL is unset) to allow any user to claim the first admin slot. */
   ALLOW_FIRST_CLAIM?: string
+  // ---- Phase 1: Google sign-in + sessions ----
+  /** Google OAuth client ID. Must end with .apps.googleusercontent.com. */
+  GOOGLE_CLIENT_ID?: string
+  /** Secret for HMAC-signing nonces (32+ bytes). Set via `wrangler secret put NONCE_KEY`. */
+  NONCE_KEY?: string
+  /** Secret for HMAC-hashing Google subs in ban tombstones. Set via `wrangler secret put SUB_HMAC_KEY`. */
+  SUB_HMAC_KEY?: string
+  /** Secret for HMAC-hashing IP addresses. Set via `wrangler secret put IP_HMAC_KEY`. */
+  IP_HMAC_KEY?: string
+  /** Set to '1' in Phase 1 to allow legacy X-Admin-Email login on 20/11 routes (transition only). */
+  ADMIN_LEGACY_LOGIN?: string
 }

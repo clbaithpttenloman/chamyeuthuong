@@ -42,6 +42,10 @@ type AdminEnvOpts = {
 /**
  * Build a minimal env for direct requireAdmin tests.
  * Example: requireAdmin(req, adminEnv({ db }))
+ *
+ * ADMIN_LEGACY_LOGIN defaults to '1' so existing tests that use X-Admin-Email keep
+ * passing after Phase 1 (which requires opts.legacy:true + flag on for the email path).
+ * Pass legacyLogin: undefined explicitly to test the flag-off code path.
  */
 export function adminEnv(opts: AdminEnvOpts = {}): AdminEnv {
   return {
@@ -49,7 +53,9 @@ export function adminEnv(opts: AdminEnvOpts = {}): AdminEnv {
     DB: opts.db ?? testDb().db,
     BOOTSTRAP_EMAIL: opts.bootstrapEmail,
     ALLOW_FIRST_CLAIM: opts.allowFirstClaim,
-    ADMIN_LEGACY_LOGIN: opts.legacyLogin,
+    // Default to '1' so existing legacy-path tests keep passing without each needing
+    // to set the flag explicitly. Use `legacyLogin: undefined` to test flag-off.
+    ADMIN_LEGACY_LOGIN: 'legacyLogin' in opts ? opts.legacyLogin : '1',
   }
 }
 

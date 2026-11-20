@@ -86,22 +86,22 @@ describe('requireAdmin — header: normalization and lookup', () => {
   })
 
   it('email normalized (uppercase) matches stored row → returns { email }', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL.toUpperCase()), adminEnv({ db }))
+    const r = await requireAdmin(makeReq(TEST_EMAIL.toUpperCase()), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('email normalized (leading/trailing whitespace) matches stored row → returns { email }', async () => {
-    const r = await requireAdmin(makeReq('  ' + TEST_EMAIL + '  '), adminEnv({ db }))
+    const r = await requireAdmin(makeReq('  ' + TEST_EMAIL + '  '), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('known email → returns { email }', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }))
+    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('unknown email on populated table → 401, no insert', async () => {
-    const r = await requireAdmin(makeReq('stranger@example.com'), adminEnv({ db }))
+    const r = await requireAdmin(makeReq('stranger@example.com'), adminEnv({ db }), { legacy: true })
     expect((r as Response).status).toBe(401)
     const count = await db.prepare('SELECT COUNT(*) as c FROM admin').first<{ c: number }>()
     expect(count?.c).toBe(1)
@@ -164,12 +164,12 @@ describe('requireAdmin — CSRF checks', () => {
   })
 
   it('POST with valid admin email AND X-Requested-With: fetch → returns { email }', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'POST' }), adminEnv({ db }))
+    const r = await requireAdmin(makeReq(TEST_EMAIL, { method: 'POST' }), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
   it('GET with valid admin email and no X-Requested-With → returns { email } (GET exempt from CSRF)', async () => {
-    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }))
+    const r = await requireAdmin(makeReq(TEST_EMAIL), adminEnv({ db }), { legacy: true })
     expect(r).toEqual({ email: TEST_EMAIL })
   })
 
@@ -657,9 +657,7 @@ import {
   seedSession,
   makeRawToken,
   googleAdminEnv,
-  makeLegacyAdminReq,
   makeSessionReq,
-  SESSION_COOKIE_NAME,
   TEST_EMAIL as GOOGLE_TEST_EMAIL,
   TEST_SUB,
   TEST_EMAIL_WORKSPACE,
@@ -700,8 +698,9 @@ describe('requireAdmin — Google session admin access', () => {
     // Authority is conferred by hd being present on sign-in token. For DB-side admin check,
     // the authority rule is re-evaluated at every request using the admin email domain.
     // Since workspace.example.com is not gmail.com, it must come via `hd` column stored at sign-in.
-    // We seed an hd column here for the test (app_user.hd stores the last hd claim from token).
-    sqlite.exec(`ALTER TABLE app_user ADD COLUMN IF NOT EXISTS hd TEXT`)
+    // We seed the hd column here for the test (app_user.hd stores the last hd claim from token).
+    // hd is part of the SCHEMA so it already exists; this is a no-op safety net.
+    try { sqlite.exec('ALTER TABLE app_user ADD COLUMN hd TEXT') } catch { /* already exists */ }
     sqlite.prepare('UPDATE app_user SET hd = ? WHERE id = ?').run(TEST_HD, userId)
 
     const rawToken = makeRawToken()
@@ -811,9 +810,7 @@ describe('requireAdmin — Google path does not bootstrap', () => {
     // Must NOT auto-claim admin, must NOT use bootstrap
     expect((r as Response).status).toBe(403)
 
-    // No admin row was inserted
-    const count = (db.prepare('SELECT COUNT(*) AS c FROM admin').first<{ c: number }>())
-    // We use the sync DB to check
+    // No admin row was inserted — verify via synchronous sqlite handle
     const countSync = sqlite
       .prepare('SELECT COUNT(*) AS c FROM admin')
       .get() as { c: number }
@@ -876,8 +873,8 @@ describe('requireAdmin — ADMIN_LEGACY_LOGIN flag and legacy path', () => {
   it('flag OFF (no ADMIN_LEGACY_LOGIN) + opts.legacy:true → 401', async () => {
     const { db } = testDb()
     await seedAdmin(db, TEST_EMAIL)
-    // No ADMIN_LEGACY_LOGIN in env
-    const env = adminEnv({ db }) as never
+    // Explicitly override the default '1' to test flag-off behaviour
+    const env = adminEnv({ db, legacyLogin: undefined }) as never
     const req = makeReq(TEST_EMAIL)
     const r = await (requireAdmin as (req: Request, env: unknown, opts?: { legacy?: boolean }) => Promise<{ email: string } | Response>)(req, env, { legacy: true })
     expect((r as Response).status).toBe(401)

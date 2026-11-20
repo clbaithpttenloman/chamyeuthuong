@@ -33,8 +33,16 @@ function makeEnv(db: D1) {
     CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
     IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
+    AUTH_LIMIT: { limit: async () => ({ success: true }) },
+    USER_READ_LIMIT: { limit: async () => ({ success: true }) },
+    USER_WRITE_LIMIT: { limit: async () => ({ success: true }) },
     BOOTSTRAP_EMAIL: undefined as string | undefined,
     ALLOW_FIRST_CLAIM: undefined as string | undefined,
+    ADMIN_LEGACY_LOGIN: '1' as string | undefined,
+    GOOGLE_CLIENT_ID: '',
+    NONCE_KEY: '',
+    SUB_HMAC_KEY: '',
+    IP_HMAC_KEY: '',
   }
 }
 

@@ -11,10 +11,10 @@ import { testDb } from './testDb.ts'
 import type { D1Stmt } from './types.ts'
 
 // Statements a fresh (unseeded) database prepares on its first ensureSchema: the SCHEMA batch,
-// one column probe per upgradable table (teacher_profile, student_card), the campaign upgrade
+// one column probe per upgradable table (teacher_profile, student_card, admin), the campaign upgrade
 // (7 statements: INSERT campaign 1 + 3×ADD COLUMN + 3×CREATE INDEX), one re-probe after the
 // campaign upgrade, the seed-flag probe, and the seed batch.
-const FRESH_COLD_START = SCHEMA.length + 11 + SEED_STATEMENT_COUNT
+const FRESH_COLD_START = SCHEMA.length + 12 + SEED_STATEMENT_COUNT
 
 // ---- SCHEMA shape ----
 
@@ -974,7 +974,7 @@ describe('ensureSchema — upgrades teacher_profile from the 4d3a5df shape', () 
     const before = sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()
     await ensureSchema(db)
     expect(sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()).toEqual(before)
-    expect(state.ddl).toBe(SCHEMA.length + 3) // SCHEMA + 2 table probes + seed probe, no rebuild
+    expect(state.ddl).toBe(SCHEMA.length + 4) // SCHEMA + 3 table probes + seed probe, no rebuild
   })
 
   it('running the rebuild twice keeps the same rows', async () => {
@@ -1155,7 +1155,7 @@ describe('ensureSchema — student_card.font / ink', () => {
     const { db, state } = testDb()
     await ensureSchema(db)
     // SCHEMA batch + teacher_profile probe + student_card probe + seed-flag probe
-    expect(state.ddl).toBe(SCHEMA.length + 3)
+    expect(state.ddl).toBe(SCHEMA.length + 4)
     expect(state.prepares).toBe(0)
   })
 })
@@ -1249,7 +1249,7 @@ describe('ensureSchema — one-time image seed', () => {
   it('flag already set → no seed statement is prepared', async () => {
     const { db, sqlite, state } = testDb()
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length + 3)
+    expect(state.ddl).toBe(SCHEMA.length + 4)
     expect(count(sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(0)
   })
 
@@ -1936,5 +1936,34 @@ describe('ensureSchema — campaign upgrade from pre-card-v3 shape (old teacher_
     ).map((c) => c.name)
     expect(cols).not.toContain('public_id')
     expect(cols).toContain('role')
+  })
+})
+
+// --- Regression: admin tables created before Phase 1 have no google_sub column ---
+// deployedDb() rebuilds admin from the current SCHEMA, so it cannot catch a missing upgrade.
+
+describe('ensureSchema — admin.google_sub upgrade (pre-Phase-1 admin table)', () => {
+  function preGoogleAdminDb(): ReturnType<typeof testDb> {
+    const t = deployedDb()
+    t.sqlite.exec('DROP TABLE admin')
+    t.sqlite.exec(`CREATE TABLE admin (
+  id         INTEGER PRIMARY KEY,
+  email      TEXT    UNIQUE NOT NULL,
+  created_at TEXT           NOT NULL,
+  created_by TEXT           NOT NULL,
+  CHECK (email = lower(email) AND length(email) <= 254)
+)`)
+    t.sqlite.exec("INSERT INTO admin (email, created_at, created_by) VALUES ('a@gmail.com', '2026-11-01', 'bootstrap')")
+    return t
+  }
+
+  it('adds google_sub (NULL) and keeps existing admins', async () => {
+    const { db, sqlite } = preGoogleAdminDb()
+    await ensureSchema(db)
+    const cols = (sqlite.prepare("PRAGMA table_info('admin')").all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toContain('google_sub')
+    expect(sqlite.prepare('SELECT email, google_sub FROM admin').all()).toEqual([
+      { email: 'a@gmail.com', google_sub: null },
+    ])
   })
 })

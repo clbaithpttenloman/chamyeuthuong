@@ -331,15 +331,27 @@ async function createBulk(request: Request, env: Env): Promise<Response> {
 
 /**
  * Routes all /api/admin/* requests after checking auth.
+ * 20/11 routes (teachers, templates, images, wishes, moderation, about, GET admins)
+ * accept the legacy X-Admin-Email path while ADMIN_LEGACY_LOGIN = '1'.
+ * POST/DELETE /api/admin/admins requires a Google session (never legacy).
  */
 export async function handleAdmin(request: Request, env: Env): Promise<Response> {
-  const authResult = await requireAdmin(request, env)
-  if (authResult instanceof Response) return authResult
-  const { email } = authResult
-
   const { pathname } = new URL(request.url)
   const { method } = request
   const parts = pathname.split('/').filter(Boolean)
+
+  // Campaign endpoints and POST/DELETE admin-list changes always require a Google session.
+  // All 20/11 routes (teachers, templates, images, wishes, moderation, about, GET admins)
+  // accept the legacy X-Admin-Email path while ADMIN_LEGACY_LOGIN = '1'.
+  const requiresGoogle =
+    parts.length >= 3 && (
+      parts[2] === 'campaigns' ||
+      (parts[2] === 'admins' && (method === 'POST' || method === 'DELETE'))
+    )
+
+  const authResult = await requireAdmin(request, env, { legacy: !requiresGoogle })
+  if (authResult instanceof Response) return authResult
+  const { email } = authResult
 
   try {
     if (parts.length >= 3 && parts[2] === 'admins') {

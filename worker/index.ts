@@ -6,6 +6,7 @@ import { handleAbout } from './about.ts'
 import { handlePublicImage } from './images.ts'
 import { handleCampaigns, handleAdminCampaigns } from './campaigns.ts'
 import { requireAdmin } from './auth.ts'
+import { handleAuth, handleMe } from './me.ts'
 import { error } from './http.ts'
 import type { Env, ExecutionContext } from './types.ts'
 
@@ -19,13 +20,14 @@ import type { Env, ExecutionContext } from './types.ts'
  *   /api/templates        → handlePublic
  *   /api/wishes           → handlePublic
  *   /api/about            → handleAbout  (public GET, rate-limited)
+ *   /api/auth/*           → handleAuth   (nonce, google sign-in, logout)
+ *   /api/me               → handleMe     (profile read/update)
  *   /api/cards            → handleSubmit
  *   /api/qr/*             → handleQr
+ *   /api/admin/campaigns* → handleAdminCampaigns (Google session required)
  *   /api/admin/*          → handleAdmin
  *   /api/*                → 404
  *   /*                    → ASSETS (SPA)
- *
- * /api/teachers/* is intentionally removed (no public teacher detail page).
  */
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -37,13 +39,16 @@ export default {
         return await handlePublic(request, env)
       }
       if (pathname === '/api/about') return await handleAbout(request, env)
+      // Auth and profile endpoints (no legacy email auth)
+      if (pathname.startsWith('/api/auth/')) return await handleAuth(request, env as never)
+      if (pathname === '/api/me') return await handleMe(request, env as never)
       if (pathname === '/api/cards') return await handleSubmit(request, env)
       if (pathname.startsWith('/api/qr/')) return await handleQr(request, env)
       // Campaign public endpoints (no auth; memoised per isolate)
       if (pathname === '/api/campaigns/active' || pathname.startsWith('/api/campaigns/')) {
         return await handleCampaigns(request, env)
       }
-      // Campaign admin CRUD — legacy email auth; TODO(phase1-task2): require Google session
+      // Campaign admin CRUD — requires Google session (not legacy email)
       if (pathname.startsWith('/api/admin/campaigns')) {
         const auth = await requireAdmin(request, env)
         if (auth instanceof Response) return auth

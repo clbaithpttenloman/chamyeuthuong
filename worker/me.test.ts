@@ -42,8 +42,13 @@ import {
   TEST_EMAIL,
   TEST_SUB,
   TEST_NONCE_KEY,
-  TEST_CLIENT_ID,
 } from './testGoogle.ts'
+
+/** Get all Set-Cookie header values, handling both Cloudflare Workers (getAll) and Node.js 22 (getSetCookie). */
+function getSetCookies(res: Response): string[] {
+  const h = res.headers as typeof res.headers & { getAll?: (n: string) => string[]; getSetCookie?: () => string[] }
+  return h.getAll?.('Set-Cookie') ?? h.getSetCookie?.() ?? [h.get('Set-Cookie') ?? '']
+}
 
 // ── Helper: build POST /api/auth/google request ───────────────────────────────
 
@@ -124,7 +129,7 @@ describe('POST /api/auth/google — successful sign-in', () => {
     const r = await handleAuth(req, env, { keys: await localJwks() })
 
     expect(r.status).toBe(200)
-    const setCookie = r.headers.getAll?.('Set-Cookie') ?? [r.headers.get('Set-Cookie') ?? '']
+    const setCookie = getSetCookies(r)
     const sessionCookieHeader = setCookie.find((c) => c.startsWith(`${SESSION_COOKIE_NAME}=`))
     expect(sessionCookieHeader).toBeDefined()
     expect(sessionCookieHeader).toContain('HttpOnly')
@@ -197,11 +202,7 @@ describe('POST /api/auth/google — successful sign-in', () => {
 
     await handleAuth(req, env, { keys: await localJwks() })
 
-    // Old session must be gone
-    const remaining = sqlite
-      .prepare('SELECT 1 FROM session WHERE user_id = ?')
-      .get(userId) as undefined | {}  // the NEW session is different; the old one must be deleted
-    // Actually we need to check that the specific old token hash is gone
+    // Old session must be gone (check the specific old token hash)
     const { sha256Hex: sha256HexFn } = await import('./testGoogle.ts')
     const oldHash = await sha256HexFn(oldToken)
     const oldRow = sqlite.prepare('SELECT 1 FROM session WHERE token_hash = ?').get(oldHash)
@@ -217,7 +218,9 @@ describe('POST /api/auth/google — successful sign-in', () => {
     const req = makeSignInReq(credential, nonceValue)
 
     const r = await handleAuth(req, env, { keys: await localJwks() })
-    const headers = r.headers.getAll?.('Set-Cookie') ?? [r.headers.get('Set-Cookie') ?? '']
+    // Use getAll (Cloudflare Workers) or getSetCookie (Node.js 22) for Set-Cookie headers
+    const h = r.headers as typeof r.headers & { getAll?: (n: string) => string[]; getSetCookie?: () => string[] }
+    const headers = h.getAll?.('Set-Cookie') ?? h.getSetCookie?.() ?? [h.get('Set-Cookie') ?? '']
     const nonceClear = headers.find((c) => c.startsWith(`${NONCE_COOKIE_NAME}=`) && c.includes('Max-Age=0'))
     expect(nonceClear).toBeDefined()
   })
@@ -273,7 +276,7 @@ describe('POST /api/auth/google — CSRF guards', () => {
     const req = makeSignInReq(credential, nonceValue, { crossSite: true })
 
     const r = await handleAuth(req, env, { keys: await localJwks() })
-    const setCookies = r.headers.getAll?.('Set-Cookie') ?? [r.headers.get('Set-Cookie') ?? '']
+    const setCookies = getSetCookies(r)
     const sessionCookieSet = setCookies.some(
       (c) => c.startsWith(`${SESSION_COOKIE_NAME}=`) && !c.includes('Max-Age=0'),
     )
@@ -337,7 +340,7 @@ describe('POST /api/auth/google — nonce validation', () => {
 
     const r = await handleAuth(req, env, { keys: await localJwks() })
     // Even on 401, the nonce cookie must be cleared
-    const headers = r.headers.getAll?.('Set-Cookie') ?? [r.headers.get('Set-Cookie') ?? '']
+    const headers = getSetCookies(r)
     const nonceClear = headers.find((c) => c.startsWith(`${NONCE_COOKIE_NAME}=`) && c.includes('Max-Age=0'))
     expect(nonceClear).toBeDefined()
   })
@@ -365,7 +368,7 @@ describe('POST /api/auth/logout', () => {
     const r = await handleAuth(req, env)
     expect(r.status).toBe(200)
 
-    const setCookies = r.headers.getAll?.('Set-Cookie') ?? [r.headers.get('Set-Cookie') ?? '']
+    const setCookies = getSetCookies(r)
     const cleared = setCookies.find((c) => c.startsWith(`${SESSION_COOKIE_NAME}=`) && c.includes('Max-Age=0'))
     expect(cleared).toBeDefined()
   })

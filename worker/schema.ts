@@ -47,6 +47,29 @@ export const CAMPAIGN_UPGRADE_SQLS: string[] = [
 ]
 
 export const SCHEMA: string[] = [
+  // ---- Phase 1: Google sign-in users + sessions ----
+  // These are new tables — no existing data to migrate.
+  // app_user: keyed by Google sub; email refreshed from every verified token.
+  // hd: stored from the token's hd claim (Workspace) — used for isGoogleAuthoritative.
+  `CREATE TABLE IF NOT EXISTS app_user (
+  id           INTEGER PRIMARY KEY,
+  google_sub   TEXT    UNIQUE NOT NULL,
+  email        TEXT    NOT NULL,
+  nickname     TEXT    NOT NULL DEFAULT '',
+  class_name   TEXT    NOT NULL DEFAULT '',
+  hd           TEXT,
+  banned       INTEGER NOT NULL DEFAULT 0 CHECK (banned IN (0,1)),
+  created_at   TEXT    NOT NULL,
+  last_seen_at TEXT    NOT NULL
+)`,
+  // session: stores only the SHA-256 hash of the token (never the raw token).
+  `CREATE TABLE IF NOT EXISTS session (
+  token_hash TEXT    PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  expires_at TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  ip_hash    TEXT    NOT NULL DEFAULT ''
+)`,
   // ---- Core tables ----
   `CREATE TABLE IF NOT EXISTS teacher (
   id         INTEGER PRIMARY KEY,
@@ -70,6 +93,7 @@ export const SCHEMA: string[] = [
   email      TEXT    UNIQUE NOT NULL,
   created_at TEXT           NOT NULL,
   created_by TEXT           NOT NULL,
+  google_sub TEXT,
   CHECK (email = lower(email) AND length(email) <= 254)
 )`,
   `CREATE TABLE IF NOT EXISTS image (
@@ -162,9 +186,9 @@ export const SCHEMA: string[] = [
 
 const TEACHER_PROFILE_DDL = SCHEMA.find((q) => q.includes('IF NOT EXISTS teacher_profile ('))!
 
-type Table = 'teacher_profile' | 'student_card'
+type Table = 'teacher_profile' | 'student_card' | 'admin'
 const columnsSql = (t: Table) => `PRAGMA table_info('${t}')`
-const TABLES: Table[] = ['teacher_profile', 'student_card']
+const TABLES: Table[] = ['teacher_profile', 'student_card', 'admin']
 
 /**
  * In-place upgrades for databases created by older deploys, run in order. Each entry checks
@@ -239,6 +263,12 @@ const UPGRADES: {
         })
       }
     },
+  },  {
+    // ADR-3: the Google sub pinned on an admin's first Google sign-in. Admin tables created
+    // before Phase 1 lack it. A racing isolate loses with "duplicate column name" (one 503).
+    table: 'admin',
+    needed: (cols) => !cols.has('google_sub'),
+    sql: ['ALTER TABLE admin ADD COLUMN google_sub TEXT'],
   },
 ]
 

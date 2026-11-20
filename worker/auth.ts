@@ -1,97 +1,172 @@
 import { normalizeEmail } from './email.ts'
 import { error } from './http.ts'
 import { ensureSchema } from './schema.ts'
+import { readSession, getCookieValue, SESSION_COOKIE } from './session.ts'
+import { isGoogleAuthoritative } from './google.ts'
 import type { Env } from './types.ts'
 
 /**
- * Guards every /api/admin/* request using a typed email header + DB admin table.
+ * Guards every /api/admin/* request.
  *
- * Returns `{ email }` when the request may proceed, or a Response on any failure.
- * Order: (1) rate limit → (2) X-Admin-Email (normalise, validate) →
- *        (3) CSRF checks (Sec-Fetch-Site, X-Requested-With) →
- *        (4) ensureSchema → (5) DB lookup / claim gate / atomic bootstrap.
+ * Authentication order:
+ *   1. Rate limit (always first).
+ *   2. If a session cookie is present: Google session path.
+ *      Verifies the user's email is in the admin list, that Google is authoritative
+ *      for it, and pins admin.google_sub on first Google admin sign-in.
+ *   3. No session cookie — email header path.
+ *      a. Normalise X-Admin-Email header; if absent/invalid → 401.
+ *      b. CSRF checks (Sec-Fetch-Site: cross-site, non-GET without X-Requested-With).
+ *      c. DB lookup: if email found in admin table →
+ *           - opts.legacy AND ADMIN_LEGACY_LOGIN='1' → { email }, log 'admin: legacy login used'
+ *           - ALLOW_FIRST_CLAIM='1' OR BOOTSTRAP_EMAIL matches → { email }
+ *           - otherwise → 401 (email header requires explicit legacy mode in Phase 1)
+ *         if email not found, table non-empty → 401
+ *         if table empty → bootstrap (requires X-Requested-With: fetch):
+ *           BOOTSTRAP_EMAIL or ALLOW_FIRST_CLAIM='1' → INSERT → { email }
  *
- * The email is never logged — fixed-string logs only.
+ * Returns `{ email }` on success or a Response on any failure.
+ * Email and sub are never logged.
  */
 export async function requireAdmin(
   request: Request,
-  env: Pick<Env, 'ADMIN_FAIL_LIMIT' | 'DB' | 'BOOTSTRAP_EMAIL' | 'ALLOW_FIRST_CLAIM'>,
+  env: Pick<Env,
+    | 'ADMIN_FAIL_LIMIT' | 'DB'
+    | 'BOOTSTRAP_EMAIL' | 'ALLOW_FIRST_CLAIM'
+    | 'ADMIN_LEGACY_LOGIN'>,
+  opts?: { legacy?: boolean },
 ): Promise<{ email: string } | Response> {
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
 
-  // 1. Rate limit — always checked first; prevents any work on flooded IPs.
+  // 1. Rate limit — always checked first.
   const { success } = await env.ADMIN_FAIL_LIMIT.limit({ key: ip })
   if (!success) return error('rate_limited')
 
-  // 2. X-Admin-Email — normalise (trim, lower-case, ASCII pattern, ≤ 254 chars).
-  //    Headers.get() on a duplicated header returns a comma-joined value → normalizeEmail returns null.
+  // ── Google session path ──────────────────────────────────────────────────
+  const sessionToken = getCookieValue(request, SESSION_COOKIE)
+  if (sessionToken) {
+    // CSRF for the session path (same rules as email path)
+    if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return error('forbidden')
+    if (request.method !== 'GET' && request.headers.get('X-Requested-With') !== 'fetch') {
+      return error('forbidden')
+    }
+
+    await ensureSchema(env.DB)
+    const session = await readSession(request, env.DB)
+    if (!session) return error('unauthorized')
+
+    const userRow = await env.DB
+      .prepare('SELECT email, google_sub, hd FROM app_user WHERE id = ?')
+      .bind(session.userId)
+      .first<{ email: string; google_sub: string; hd: string | null }>()
+    if (!userRow) return error('unauthorized')
+
+    const adminRow = await env.DB
+      .prepare('SELECT google_sub FROM admin WHERE lower(email) = ?')
+      .bind(userRow.email.toLowerCase())
+      .first<{ google_sub: string | null }>()
+    if (!adminRow) return error('forbidden')
+
+    if (!isGoogleAuthoritative(userRow.email, userRow.hd ?? undefined)) return error('forbidden')
+
+    if (adminRow.google_sub === null) {
+      // Pin only while still unpinned; a racing sign-in by a different sub loses here.
+      const pinned = await env.DB
+        .prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ? AND google_sub IS NULL')
+        .bind(userRow.google_sub, userRow.email.toLowerCase())
+        .run()
+      if (!pinned.meta?.changes) {
+        const now = await env.DB
+          .prepare('SELECT google_sub FROM admin WHERE lower(email) = ?')
+          .bind(userRow.email.toLowerCase())
+          .first<{ google_sub: string | null }>()
+        if (now?.google_sub !== userRow.google_sub) return error('forbidden')
+      }
+    } else if (adminRow.google_sub !== userRow.google_sub) {
+      return error('forbidden')
+    }
+
+    return { email: userRow.email }
+  }
+
+  // ── Email header path ────────────────────────────────────────────────────
+  // 2a. Normalise X-Admin-Email (trim, lower-case, ASCII pattern, ≤ 254 chars).
   const rawEmail = request.headers.get('X-Admin-Email')
   const email = normalizeEmail(rawEmail)
   if (email === null) return error('unauthorized')
 
-  // 3. CSRF checks (after email, before DB):
-  //    - Sec-Fetch-Site: cross-site → 403 for every method.
-  //    - Non-GET without X-Requested-With: fetch → 403.
+  // 2b. CSRF checks (after email, before DB).
   if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return error('forbidden')
   if (request.method !== 'GET' && request.headers.get('X-Requested-With') !== 'fetch') {
     return error('forbidden')
   }
 
-  // 4. DB lookup: single query checks caller membership AND whether the table has any admins.
-  //    This avoids a second round-trip and keeps bootstrap-path prepares at exactly 1 SELECT + 1 INSERT.
+  // 2c. DB lookup.
   await ensureSchema(env.DB)
-  const check = await env.DB.prepare(
-    'SELECT (SELECT COUNT(*) FROM admin WHERE email = ?) AS is_caller,' +
-    ' (SELECT COUNT(*) FROM admin) AS total_admins',
-  ).bind(email).first<{ is_caller: number; total_admins: number }>()
+  const check = await env.DB
+    .prepare(
+      'SELECT (SELECT COUNT(*) FROM admin WHERE email = ?) AS is_caller,' +
+      ' (SELECT COUNT(*) FROM admin) AS total_admins',
+    )
+    .bind(email)
+    .first<{ is_caller: number; total_admins: number }>()
 
-  if ((check?.is_caller ?? 0) > 0) return { email }
+  if ((check?.is_caller ?? 0) > 0) {
+    // Email is in the admin table. Decide which gate allows it.
 
-  // Caller is not an admin. If the table already has admins (just not this caller), deny silently.
+    // (a) Legacy path: explicit opt-in AND flag on.
+    if (opts?.legacy && env.ADMIN_LEGACY_LOGIN === '1') {
+      console.error('admin: legacy login used')
+      return { email }
+    }
+
+    // (b) Bootstrap / open-claim mode: ALLOW_FIRST_CLAIM lets any email through (temporary).
+    if (env.ALLOW_FIRST_CLAIM === '1') return { email }
+
+    // (c) BOOTSTRAP_EMAIL set and matches the caller (inert once the row exists).
+    const rawBootstrapEmail = env.BOOTSTRAP_EMAIL
+    if (rawBootstrapEmail !== undefined) {
+      const bootstrapEmail = rawBootstrapEmail.trim().toLowerCase()
+      if (bootstrapEmail && bootstrapEmail === email) return { email }
+    }
+
+    // opts.legacy set but flag off → 401.
+    if (opts?.legacy) return error('unauthorized')
+
+    // No gate matches — email header alone is not enough in Phase 1.
+    return error('unauthorized')
+  }
+
+  // Email not in admin table.
   if ((check?.total_admins ?? 0) > 0) return error('unauthorized')
 
-  // ---- Bootstrap path: table is empty ----
-
+  // ── Bootstrap path: table is empty ──────────────────────────────────────
   // Bootstrap write requires X-Requested-With: fetch on every method (including GET).
-  // Standard CSRF (above) only guards non-GET; this guard covers GET specifically for bootstrap.
   if (request.headers.get('X-Requested-With') !== 'fetch') return error('forbidden')
 
-  // Gate evaluation: BOOTSTRAP_EMAIL present (even empty string) takes precedence
-  // over ALLOW_FIRST_CLAIM. Only if BOOTSTRAP_EMAIL is undefined does ALLOW_FIRST_CLAIM apply.
   const rawBootstrapEmail = env.BOOTSTRAP_EMAIL
   if (rawBootstrapEmail !== undefined) {
-    // BOOTSTRAP_EMAIL is set; normalise and compare. Empty or mismatch → 401.
     const bootstrapEmail = rawBootstrapEmail.trim().toLowerCase()
     if (!bootstrapEmail || bootstrapEmail !== email) return error('unauthorized')
-    // Match: proceed to INSERT.
   } else if (env.ALLOW_FIRST_CLAIM !== '1') {
-    // Neither BOOTSTRAP_EMAIL nor ALLOW_FIRST_CLAIM configured for empty table.
     console.error('admin: misconfigured')
     return error('unauthorized')
   }
-  // else: BOOTSTRAP_EMAIL undefined AND ALLOW_FIRST_CLAIM === '1' → open claim, proceed.
 
-  // 5. Bootstrap INSERT: exactly one prepare() call, atomic WHERE NOT EXISTS.
-  //    If two simultaneous first requests arrive, only one INSERT wins (D1/SQLite serialises writes).
   const now = new Date().toISOString()
   const result = await env.DB
     .prepare(
-      "INSERT INTO admin (email, created_at, created_by) SELECT ?, ?, 'bootstrap' WHERE NOT EXISTS (SELECT 1 FROM admin)",
+      "INSERT INTO admin (email, created_at, created_by) SELECT ?, ?, 'bootstrap'" +
+      ' WHERE NOT EXISTS (SELECT 1 FROM admin)',
     )
     .bind(email, now)
     .run()
 
   if (result.meta.changes === 1) {
-    // This caller inserted the first admin row.
     console.error('admin: bootstrap')
     return { email }
   }
 
-  // changes === 0: someone else won the race (admin table is now non-empty).
-  // Re-SELECT to check if the winner used this same email (same user, two parallel requests).
   const reCheck = await env.DB.prepare('SELECT 1 FROM admin WHERE email = ?').bind(email).first()
   if (reCheck) return { email }
-
-  // A different user won the first-admin slot; this caller is not an admin.
   return error('unauthorized')
 }

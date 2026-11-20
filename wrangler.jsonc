@@ -3,17 +3,24 @@
   "compatibility_date": "2026-11-01",
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
-  // Admin auth uses a typed email sent as X-Admin-Email on every /api/admin/* request.
-  // The email is checked against the D1 admin list; identity is not verified (accepted risk R1, see docs/runbooks/admin.md).
+  // Admin auth (Phase 1): Google sign-in via session cookie is the primary path.
+  // Legacy X-Admin-Email path (ADMIN_LEGACY_LOGIN="1") is kept for 20/11 admin routes
+  // during the Phase 1 transition. Remove the flag before Phase 2 production deploy
+  // once every admin has signed in with Google and the log shows no legacy use for 48 h.
   //
-  // First-admin bootstrap:
-  //   BOOTSTRAP_EMAIL (in "vars" or as a secret) lets only that exact address claim an EMPTY admin table.
+  // Phase 1 secrets (set via `wrangler secret put`):
+  //   NONCE_KEY    — 32+ byte random key for HMAC-signing sign-in nonces
+  //   SUB_HMAC_KEY — 32+ byte random key for HMAC-hashing Google subs in ban tombstones
+  //   IP_HMAC_KEY  — 32+ byte random key for HMAC-hashing IP addresses in sessions
+  //   ADMIN_TOKEN  — existing admin token (unchanged)
+  //
+  // First-admin bootstrap (email header, one-time):
+  //   BOOTSTRAP_EMAIL lets only that exact address claim an EMPTY admin table.
   //   It may stay set; it is inert once the table is non-empty.
-  //
   //   ALLOW_FIRST_CLAIM=1 lets ANY email claim the first admin slot (temporary only, delete after).
   //   Set only via `wrangler secret put`, never in "vars".
   //
-  // Local dev: add to .dev.vars (never commit). See docs/runbooks/admin.md.
+  // Local dev: add secrets to .dev.vars (never commit). See docs/runbooks/admin.md.
   //
   // The Worker runs only for /api/* (card and admin endpoints); every other path is a static asset from dist/.
   "main": "worker/index.ts",
@@ -29,28 +36,69 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "cham-yeu-thuong", "database_id": "9e58f935-fb6f-4c1f-be0b-21a9183ba483" }
   ],
-  // Only this address can claim the empty admin table (first-admin bootstrap). Not a secret; inert once an admin exists.
   "vars": {
-    "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com"
+    // First-admin bootstrap: only this address can claim the empty admin table. Inert once an admin exists.
+    "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com",
+    // Google OAuth client ID (replace with the real value from Google Cloud Console).
+    // Authorised JavaScript origins must include the production domain and https://localhost:5173 for local dev.
+    // GOOGLE_CLIENT_ID must end with .apps.googleusercontent.com
+    "GOOGLE_CLIENT_ID": "",
+    // Phase 1 transition: keep legacy X-Admin-Email login on 20/11 admin routes.
+    // Remove before Phase 2 production deploy (see docs/runbooks/admin.md).
+    "ADMIN_LEGACY_LOGIN": "1"
   },
+  // Secrets required for deploy (set via `wrangler secret put <NAME>`):
+  //   NONCE_KEY, SUB_HMAC_KEY, IP_HMAC_KEY
   // Per-IP rate limits (approximate, per Cloudflare location).
   // PUBLIC_IP_LIMIT (120/60 s): guards /api/wall, /api/templates, /api/wishes, /api/about.
-  //   120/min is generous; school NAT shares one IP, so set high enough to avoid false positives.
   // SUBMIT_IP_LIMIT (20/60 s): guards POST /api/cards (student card submissions).
-  //   20/min is tight for a school NAT on 20/11 — raise in .dev.vars for the event if needed.
-  //   See docs/runbooks/admin.md for how to raise.
   // CARD_IP_LIMIT (60/60 s): guards /api/qr/:token; blunts token scanners.
-  //   School NAT = many viewers on one IP; 60/60 is generous.
-  // ADMIN_FAIL_LIMIT (60/60 s): guards /api/admin/* (all requests); was 30/60, raised to 60/60 for upload sessions.
-  //   Upload workflows make many API calls (list, upload, attach, preview, publish).
-  //   Side effect (R1): rate limit is the only brake on guessing admin emails (risk accepted, see decisions.md).
-  //   Consequence: multiple admins behind one NAT share the 60/60 s budget; busy editing may hit the limit.
-  // IMAGE_IP_LIMIT (300/60 s): guards /api/image/:token (GET only); 300/60 allows fast card loads while blunting scanners.
+  // ADMIN_FAIL_LIMIT (60/60 s): guards /api/admin/* (all requests).
+  // IMAGE_IP_LIMIT (300/60 s): guards /api/image/:token (GET only).
+  // AUTH_LIMIT (300/60 s per IP): guards /api/auth/* failures (sign-in attempts).
+  //   Per Google sub limit (10/60 s) uses the same binding keyed by IP_HMAC(sub).
+  // USER_READ_LIMIT (120/60 s per user): guards GET /api/me and /api/me/gifts.
+  // USER_WRITE_LIMIT (10/60 s per user): guards PUT/DELETE /api/me, logout.
   "ratelimits": [
     { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "2004", "simple": { "limit": 120, "period": 60 } },
     { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "2005", "simple": { "limit": 20,  "period": 60 } },
     { "name": "CARD_IP_LIMIT",    "namespace_id": "2001", "simple": { "limit": 60,  "period": 60 } },
     { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "2002", "simple": { "limit": 60,  "period": 60 } },
-    { "name": "IMAGE_IP_LIMIT",   "namespace_id": "2003", "simple": { "limit": 300, "period": 60 } }
-  ]
+    { "name": "IMAGE_IP_LIMIT",   "namespace_id": "2003", "simple": { "limit": 300, "period": 60 } },
+    { "name": "AUTH_LIMIT",       "namespace_id": "2006", "simple": { "limit": 300, "period": 60 } },
+    { "name": "USER_READ_LIMIT",  "namespace_id": "2007", "simple": { "limit": 120, "period": 60 } },
+    { "name": "USER_WRITE_LIMIT", "namespace_id": "2008", "simple": { "limit": 10,  "period": 60 } }
+  ],
+  // Staging environment: separate Worker name and D1 database.
+  // All bindings and vars are non-inheritable and must be repeated here.
+  // ALLOW_FIRST_CLAIM is intentionally NOT set on staging (ADR-3).
+  // Replace PLACEHOLDER_D1_DATABASE_ID with the staging DB id from `wrangler d1 create cham-yeu-thuong-staging`.
+  "env": {
+    "staging": {
+      "name": "cham-yeu-thuong-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cham-yeu-thuong-staging",
+          "database_id": "PLACEHOLDER_STAGING_D1_DATABASE_ID"
+        }
+      ],
+      "vars": {
+        "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com",
+        // Replace with the staging OAuth client ID (add staging hostname as an authorised origin).
+        "GOOGLE_CLIENT_ID": "",
+        "ADMIN_LEGACY_LOGIN": "1"
+      },
+      "ratelimits": [
+        { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "3004", "simple": { "limit": 120, "period": 60 } },
+        { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "3005", "simple": { "limit": 20,  "period": 60 } },
+        { "name": "CARD_IP_LIMIT",    "namespace_id": "3001", "simple": { "limit": 60,  "period": 60 } },
+        { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "3002", "simple": { "limit": 60,  "period": 60 } },
+        { "name": "IMAGE_IP_LIMIT",   "namespace_id": "3003", "simple": { "limit": 300, "period": 60 } },
+        { "name": "AUTH_LIMIT",       "namespace_id": "3006", "simple": { "limit": 300, "period": 60 } },
+        { "name": "USER_READ_LIMIT",  "namespace_id": "3007", "simple": { "limit": 120, "period": 60 } },
+        { "name": "USER_WRITE_LIMIT", "namespace_id": "3008", "simple": { "limit": 10,  "period": 60 } }
+      ]
+    }
+  }
 }

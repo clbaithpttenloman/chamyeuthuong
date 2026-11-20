@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 // --- The module under test does not exist yet; import triggers red phase ---
 import { verifyGoogleCredential, isGoogleAuthoritative } from './google.ts'
+import type { JWTVerifyGetKey } from './google.ts'
 import { HttpError } from './http.ts'
 import {
   signIdToken,

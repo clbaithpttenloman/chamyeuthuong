@@ -2,8 +2,8 @@
  * scripts/check-headers.ts — post-build check for dist/_headers.
  *
  * Verifies that the built _headers file contains all required strict security
- * header lines and that no Google accounts origin appears (Google Sign-In was
- * removed; this rule guards against accidental re-introduction).
+ * header lines (including the Google GSI origins needed for the sign-in button)
+ * and that no non-GSI accounts.google.com origin appears.
  *
  * Run with: node scripts/check-headers.ts
  * Exits 1 if any required line is missing or any forbidden pattern is found.
@@ -18,8 +18,12 @@ const HEADERS_PATH = 'dist/_headers'
 /** Full set of lines that must appear verbatim in _headers. */
 const REQUIRED_LINES: readonly string[] = [
   // Global security headers on /*
-  "Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors 'none'",
-  'Referrer-Policy: no-referrer',
+  // Google GSI origins are required for the sign-in button (see docs/tech.md § Google sign-in).
+  "Content-Security-Policy: default-src 'self'; img-src 'self' data:; script-src 'self' https://accounts.google.com/gsi/client; frame-src https://accounts.google.com/gsi/; connect-src 'self' https://accounts.google.com/gsi/; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; base-uri 'none'; object-src 'none'; form-action 'self'; frame-ancestors 'none'",
+  // GSI loads cross-origin from accounts.google.com; Google recommends this policy, and
+  // no-referrer breaks the button's origin check. Paths (card tokens) still never leave
+  // the site: cross-origin requests get the origin only.
+  'Referrer-Policy: strict-origin-when-cross-origin',
   'X-Content-Type-Options: nosniff',
   'X-Frame-Options: DENY',
   // Site-wide noindex (plan § Amendments: single X-Robots-Tag: noindex on /*)
@@ -37,7 +41,6 @@ export function checkHeaders(content: string): string[] {
 
   // 1. All required lines must appear exactly once (counted, not just present).
   for (const line of REQUIRED_LINES) {
-    // Count non-overlapping occurrences of `line` in `content`.
     let count = 0
     let start = 0
     while ((start = content.indexOf(line, start)) !== -1) {
@@ -52,18 +55,24 @@ export function checkHeaders(content: string): string[] {
   }
 
   // 1b. Count every occurrence of "X-Robots-Tag" (any value) — only one is allowed.
-  //     This catches lines like "X-Robots-Tag: index" that differ from the required value.
   const allRobotsTagCount = (content.match(/X-Robots-Tag/gi) ?? []).length
   if (allRobotsTagCount > 1) {
     errors.push(`duplicate (${allRobotsTagCount}×): X-Robots-Tag appears more than once (all values combined)`)
   }
 
-  // 2. Any accounts.google.com origin is forbidden — Google Sign-In was removed
-  //    and this rule prevents accidental re-introduction.
-  if (/accounts\.google\.com/.test(content)) {
+  // 1c. Exactly one Referrer-Policy of any value (a second, e.g. no-referrer, would override).
+  const referrerCount = (content.match(/Referrer-Policy/gi) ?? []).length
+  if (referrerCount > 1) {
+    errors.push(`duplicate (${referrerCount}×): Referrer-Policy appears more than once (all values combined)`)
+  }
+
+  // 2. Any accounts.google.com origin WITHOUT the /gsi/ path is forbidden.
+  //    The GSI paths (accounts.google.com/gsi/...) are required (checked above);
+  //    any broader google.com origin (bare domain or non-/gsi/ path) is not allowed.
+  if (/accounts\.google\.com(?!\/gsi\/)/.test(content)) {
     errors.push(
-      `forbidden: accounts.google.com found in headers — ` +
-        `Google Sign-In was removed (restore via tag sso-google-signin if needed)`,
+      `forbidden: accounts.google.com found without /gsi/ path — ` +
+        `only accounts.google.com/gsi/* origins are permitted (see docs/tech.md)`,
     )
   }
 
