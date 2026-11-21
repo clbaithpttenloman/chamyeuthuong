@@ -214,6 +214,10 @@ export const SCHEMA: string[] = [
   created_at             TEXT    NOT NULL
 )`,
   `CREATE INDEX IF NOT EXISTS gift_rank ON gift(campaign_id, status, heart_count DESC, created_at)`,
+  // gift_user: speeds up per-user gift count and DELETE by user (create/delete quota checks).
+  `CREATE INDEX IF NOT EXISTS gift_user ON gift(user_id, campaign_id, status)`,
+  // gift_new: speeds up "sort=new" list scan (campaign_id + status + date, no full-table sort).
+  `CREATE INDEX IF NOT EXISTS gift_new ON gift(campaign_id, status, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS heart (
   gift_id    INTEGER NOT NULL REFERENCES gift(id) ON DELETE CASCADE,
   user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
@@ -234,6 +238,8 @@ export const SCHEMA: string[] = [
   sub_hmac   TEXT PRIMARY KEY,
   created_at TEXT NOT NULL
 )`,
+  // report_user: speeds up per-user report count (daily cap check) and DELETE by user.
+  `CREATE INDEX IF NOT EXISTS report_user ON report(user_id)`,
   // ---- Seeds: 12 example wishes + meta flag (run once, guarded by meta flag) ----
   ...SEEDS,
   // ---- About seed (INSERT OR IGNORE — idempotent) ----

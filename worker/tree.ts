@@ -33,6 +33,7 @@ type TreeEnv = {
   DB: D1
   TREE_READ_LIMIT?: Limiter
   PUBLIC_READ_LIMIT?: Limiter
+  LIST_READ_LIMIT?: Limiter
   ADMIN_FAIL_LIMIT?: Limiter
   GOOGLE_CLIENT_ID?: string
   NONCE_KEY?: string
@@ -67,14 +68,17 @@ type TreeEntry = { data: TreeData; expiresAt: number }
 
 type TreeStore = {
   hits: Map<string, TreeEntry>   // non-active slugs (FIFO, max 32)
-  miss404: Map<string, number>   // 404 slugs (TTL = 30 s, max 32)
+  miss404: Map<string, number>   // 404 slugs (TTL = 5 s, max 32)
   pinned?: { slug: string; entry: TreeEntry }  // active campaign (never evicted)
+  listHits: Map<string, { body: string; expiresAt: number }>  // gift list pages (FIFO, max 32)
 }
 
 // ── Per-isolate memo ──────────────────────────────────────────────────────────
 
 const MEMO_TTL = 5_000
-const MEMO_404_TTL = 30_000
+// 5 s draft/unknown 404 TTL prevents new campaigns from being shadowed for 30 s after
+// activation (security cycle 1 suggestion: "30 s delays activation").
+const MEMO_404_TTL = 5_000
 const MEMO_MAX = 32
 const MEMO_404_MAX = 32
 
@@ -82,7 +86,7 @@ const stores = new WeakMap<D1, TreeStore>()
 
 function getStore(db: D1): TreeStore {
   let s = stores.get(db)
-  if (!s) { s = { hits: new Map(), miss404: new Map() }; stores.set(db, s) }
+  if (!s) { s = { hits: new Map(), miss404: new Map(), listHits: new Map() }; stores.set(db, s) }
   return s
 }
 
@@ -135,6 +139,42 @@ function memoSet404(db: D1, slug: string): void {
     if (oldest !== undefined) store.miss404.delete(oldest)
   }
   store.miss404.set(slug, Date.now() + MEMO_404_TTL)
+}
+
+/** Compose a stable key for the gift-list memo from slug, sort, and page. */
+function listMemoKey(slug: string, sort: string, page: number): string {
+  return `${slug}|${sort}|${page}`
+}
+
+/** Returns the cached serialised body, null (404 hit), or 'miss'. */
+function listMemoGet(db: D1, slug: string, sort: string, page: number): string | null | 'miss' {
+  const store = getStore(db)
+  const now = Date.now()
+
+  // Reuse the shared 404 set (draft/unknown campaigns)
+  const exp404 = store.miss404.get(slug)
+  if (exp404 !== undefined) {
+    if (exp404 > now) return null
+    store.miss404.delete(slug)
+  }
+
+  const key = listMemoKey(slug, sort, page)
+  const hit = store.listHits.get(key)
+  if (hit) {
+    if (hit.expiresAt > now) return hit.body
+    store.listHits.delete(key)
+  }
+  return 'miss'
+}
+
+function listMemoSet(db: D1, slug: string, sort: string, page: number, body: string): void {
+  const store = getStore(db)
+  const key = listMemoKey(slug, sort, page)
+  if (store.listHits.size >= MEMO_MAX) {
+    const oldest = store.listHits.keys().next().value
+    if (oldest !== undefined) store.listHits.delete(oldest)
+  }
+  store.listHits.set(key, { body, expiresAt: Date.now() + MEMO_TTL })
 }
 
 // ── Gift row → public shape ───────────────────────────────────────────────────
@@ -288,14 +328,7 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
 
   if (!isValidSlug(slug)) return error('not_found')
 
-  // Rate limit
-  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
-  if (env.PUBLIC_READ_LIMIT) {
-    const rl = await env.PUBLIC_READ_LIMIT.limit({ key: ip })
-    if (!rl.success) return error('rate_limited')
-  }
-
-  // Page validation: must be a pure digit string (item 11), then 1–50 range.
+  // Page and sort validation BEFORE memo/limiter (item 11)
   const rawPage = url.searchParams.get('page')
   const page = rawPage !== null ? (/^\d+$/.test(rawPage) ? Number(rawPage) : NaN) : 1
   if (!Number.isInteger(page) || page < 1 || page > 50) {
@@ -306,7 +339,27 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
   }
 
   const sort = url.searchParams.get('sort') ?? 'hearts'
-  const offset = (page - 1) * 24
+
+  // Memo check BEFORE rate limit and DB (miss404 set shared with tree memo)
+  const cached = listMemoGet(db, slug, sort, page)
+  if (cached === null) return error('not_found')   // in 404 set
+  if (cached !== 'miss') {
+    // actual cached body — return directly
+    return new Response(cached, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=5',
+      },
+    })
+  }
+
+  // Rate limit on cache miss only (LIST_READ_LIMIT, 300/60 s per IP)
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
+  if (env.LIST_READ_LIMIT) {
+    const rl = await env.LIST_READ_LIMIT.limit({ key: ip })
+    if (!rl.success) return error('rate_limited')
+  }
 
   await ensureSchema(db)
 
@@ -317,9 +370,11 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
     .first<{ id: number; kind: string; status: string }>()
 
   if (!campaign || campaign.kind !== 'gift_tree' || campaign.status === 'draft') {
+    memoSet404(db, slug)
     return error('not_found')
   }
 
+  const offset = (page - 1) * 24
   const orderBy = sort === 'new'
     ? 'created_at DESC, id DESC'
     : 'heart_count DESC, created_at ASC, id ASC'
@@ -333,7 +388,10 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
     .bind(campaign.id, offset)
     .all<GiftRow>()
 
-  return new Response(JSON.stringify({ gifts: results.map(toPublicGiftFlat) }), {
+  const body = JSON.stringify({ gifts: results.map(toPublicGiftFlat) })
+  listMemoSet(db, slug, sort, page, body)
+
+  return new Response(body, {
     status: 200,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -391,10 +449,10 @@ async function handleGiftById(publicId: string, request: Request, env: TreeEnv):
   // A well-formed public id is exactly 16 lowercase alphanumeric characters.
   if (!isToken(publicId)) return error('not_found')
 
-  // Rate limit
+  // Rate limit (LIST_READ_LIMIT: 300/60 s per IP, charged on every request)
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
-  if (env.PUBLIC_READ_LIMIT) {
-    const rl = await env.PUBLIC_READ_LIMIT.limit({ key: ip })
+  if (env.LIST_READ_LIMIT) {
+    const rl = await env.LIST_READ_LIMIT.limit({ key: ip })
     if (!rl.success) return error('rate_limited')
   }
 

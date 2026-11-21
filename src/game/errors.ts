@@ -24,6 +24,10 @@ export const ERROR_MESSAGES: Record<string, string> = {
   limit_reached:     'Bạn đã tạo đủ số quà cho phép trong chiến dịch này.',
   daily_limit:       'Bạn đã tạo quá nhiều quà hôm nay — thử lại vào ngày mai.',
 
+  // ── Report errors ─────────────────────────────────────────────────────────
+  reports_exhausted: 'Bạn đã báo cáo quá nhiều hôm nay — thử lại vào ngày mai.',
+  owner_banned:      'Không thể khôi phục quà: tài khoản chủ sở hữu đang bị khoá.',
+
   // ── Generic HTTP errors ────────────────────────────────────────────────
   rate_limited:      'Quá nhiều yêu cầu. Vui lòng thử lại sau.',
   bad_request:       'Dữ liệu không hợp lệ. Vui lòng kiểm tra lại.',

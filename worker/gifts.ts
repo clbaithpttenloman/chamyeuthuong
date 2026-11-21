@@ -48,7 +48,7 @@ export type GiftsEnv = {
   HEART_LIMIT: Limiter
   REPORT_LIMIT: Limiter
   /** Owner delete and report rate limit: 10/60 s per user (plan API section). */
-  USER_WRITE_LIMIT?: Limiter
+  USER_WRITE_LIMIT: Limiter
 }
 
 // Known fields in the gift create body — unknown fields → 400 (ADR-8).
@@ -59,6 +59,9 @@ const GIFT_BODY_FIELDS = new Set([
 
 // Daily gift creation hard-cap (not from settings; create/delete loop guard per ADR-8).
 const DAILY_CREATE_LIMIT = 6
+
+// Daily report cap per user (Vietnam day, same bucket as hearts).
+const DAILY_REPORT_LIMIT = 10
 
 // ── Main router ───────────────────────────────────────────────────────────────
 
@@ -194,7 +197,7 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
   try { settings = JSON.parse(campaign.settings) } catch { /* use defaults */ }
   const giftsPerUser = typeof settings.gifts_per_user === 'number' ? settings.gifts_per_user : 3
 
-  // User banned check
+  // User banned check (pre-read; also re-checked inside the INSERT WHERE for race safety)
   const user = await env.DB
     .prepare('SELECT banned FROM app_user WHERE id = ?')
     .bind(userId)
@@ -223,7 +226,11 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
       ' font, ink, message, nickname, class_name, heart_count, report_count, status, created_at) ' +
       "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'visible', ? " +
       'WHERE ' +
-      '  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? AND status != \'deleted\') < ? ' +
+      '  NOT EXISTS (SELECT 1 FROM app_user WHERE id = ? AND banned = 1) ' +
+      '  AND EXISTS ( ' +
+      '    SELECT 1 FROM campaign WHERE id = ? AND status = \'active\' AND ? BETWEEN starts_at AND ends_at ' +
+      '  ) ' +
+      '  AND (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? AND status != \'deleted\') < ? ' +
       '  AND (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? ' +
       "       AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?) < ?",
     )
@@ -233,6 +240,10 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
       font as string, normalizedInk,
       validMessage, validNickname, validClassName,
       createdAt,
+      // banned check
+      userId,
+      // campaign open check
+      campaign.id, nowSecond(),
       // per-user count check
       userId, campaign.id, giftsPerUser,
       // daily count check
@@ -241,20 +252,29 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
     .run()
 
   if (result.meta.changes === 0) {
-    // Diagnose which limit was hit
-    const limitRow = await env.DB
+    // Diagnose which condition failed — in order: banned, campaign_closed, limit_reached, daily_limit
+    const diagRow = await env.DB
       .prepare(
         'SELECT ' +
+        '  (SELECT banned FROM app_user WHERE id = ?) AS banned, ' +
+        '  (SELECT status FROM campaign WHERE id = ?) AS camp_status, ' +
+        '  (SELECT starts_at FROM campaign WHERE id = ?) AS starts_at, ' +
+        '  (SELECT ends_at FROM campaign WHERE id = ?) AS ends_at, ' +
         "  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? AND status != 'deleted') AS per_user, " +
-        "  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? " +
+        '  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? ' +
         "   AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?) AS daily",
       )
-      .bind(userId, campaign.id, userId, campaign.id, day)
-      .first<{ per_user: number; daily: number }>()
+      .bind(userId, campaign.id, campaign.id, campaign.id, userId, campaign.id, userId, campaign.id, day)
+      .first<{ banned: number; camp_status: string; starts_at: string; ends_at: string; per_user: number; daily: number }>()
 
-    // Diagnosis order: per-user limit first, then daily limit
-    if ((limitRow?.per_user ?? 0) >= giftsPerUser) return json({ error: 'limit_reached' }, 409)
-    if ((limitRow?.daily ?? 0) >= DAILY_CREATE_LIMIT) return json({ error: 'daily_limit' }, 429)
+    if (diagRow?.banned) return json({ error: 'banned' }, 403)
+    const campStillOpen = diagRow && isEffectivelyOpen(
+      { status: diagRow.camp_status as 'draft' | 'active' | 'closed', starts_at: diagRow.starts_at, ends_at: diagRow.ends_at },
+      new Date(),
+    )
+    if (!campStillOpen) return json({ error: 'campaign_closed' }, 409)
+    if ((diagRow?.per_user ?? 0) >= giftsPerUser) return json({ error: 'limit_reached' }, 409)
+    if ((diagRow?.daily ?? 0) >= DAILY_CREATE_LIMIT) return json({ error: 'daily_limit' }, 429)
     // Fallback (shouldn't happen in practice — race between diagnosis and re-check)
     return json({ error: 'limit_reached' }, 409)
   }
@@ -274,19 +294,17 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
   if (!session) return error('unauthorized')
   const userId = session.userId
 
-  // USER_WRITE_LIMIT for owner delete (plan API section; item 6)
-  if (env.USER_WRITE_LIMIT) {
-    const { success } = await env.USER_WRITE_LIMIT.limit({ key: String(userId) })
-    if (!success) return json({ error: 'rate_limited' }, 429)
-  }
+  // USER_WRITE_LIMIT for owner delete — key format `u:<id>` matches me.ts (plan API section)
+  const { success } = await env.USER_WRITE_LIMIT.limit({ key: `u:${userId}` })
+  if (!success) return json({ error: 'rate_limited' }, 429)
 
-  // Load gift + campaign_id (need campaign for the closed-campaign check)
+  // Load gift (need campaign_id and status)
   const gift = await env.DB
     .prepare('SELECT id, user_id, status, campaign_id FROM gift WHERE public_id = ?')
     .bind(publicId)
     .first<{ id: number; user_id: number; status: string; campaign_id: number }>()
 
-  // 404 for not found or already deleted (deleted is treated as not found)
+  // 404 for not found or already deleted
   if (!gift || gift.status === 'deleted') return error('not_found')
 
   // 404 for someone else's gift (don't reveal existence)
@@ -297,21 +315,50 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
     return json({ error: 'pending_review' }, 409)
   }
 
-  // 409 campaign_closed: owner may not delete after the campaign ends (FR-28: frozen leaderboard).
-  // Only moderation may change the final order.
-  const campaignRow = await env.DB
-    .prepare('SELECT status, starts_at, ends_at FROM campaign WHERE id = ?')
-    .bind(gift.campaign_id)
-    .first<{ status: string; starts_at: string; ends_at: string }>()
-  if (!campaignRow || !isEffectivelyOpen({ status: campaignRow.status as 'draft' | 'active' | 'closed', starts_at: campaignRow.starts_at, ends_at: campaignRow.ends_at }, new Date())) {
-    return json({ error: 'campaign_closed' }, 409)
-  }
+  const nowDt = nowSecond()
 
-  // Update status to deleted (only if visible — the check above already guarantees this)
-  await env.DB
-    .prepare("UPDATE gift SET status = 'deleted' WHERE id = ? AND user_id = ? AND status = 'visible'")
-    .bind(gift.id, userId)
+  // Single conditional UPDATE: campaign-open AND not-banned conditions inside the write
+  // so a concurrent campaign-close or ban between the read and the UPDATE is handled.
+  // On 0 changes: diagnose which condition failed.
+  // owner delete blanks message/nickname/class_name (data minimisation); heart_count/report_count kept.
+  // Note: message/nickname CHECK requires length >= 1, so store a single space (satisfies check;
+  // trim() = '' from any reader — the gift is deleted and not served publicly).
+  const result = await env.DB
+    .prepare(
+      "UPDATE gift SET status = 'deleted', message = ' ', nickname = ' ', class_name = '' " +
+      'WHERE id = ? AND user_id = ? AND status = \'visible\' ' +
+      '  AND EXISTS ( ' +
+      '    SELECT 1 FROM campaign c ' +
+      '    WHERE c.id = ? AND c.status = \'active\' AND ? BETWEEN c.starts_at AND c.ends_at ' +
+      '  ) ' +
+      '  AND NOT EXISTS ( ' +
+      '    SELECT 1 FROM app_user u WHERE u.id = ? AND u.banned = 1 ' +
+      '  )',
+    )
+    .bind(gift.id, userId, gift.campaign_id, nowDt, userId)
     .run()
+
+  if (result.meta.changes === 0) {
+    // Diagnose: check banned, campaign open, gift status (the pre-checks above ruled out
+    // not-found, pending_review, wrong-user, so only banned/campaign_closed remain).
+    const diag = await env.DB
+      .prepare(
+        'SELECT u.banned, c.status AS camp_status, c.starts_at, c.ends_at ' +
+        'FROM app_user u ' +
+        'JOIN campaign c ON c.id = ? ' +
+        'WHERE u.id = ?',
+      )
+      .bind(gift.campaign_id, userId)
+      .first<{ banned: number; camp_status: string; starts_at: string; ends_at: string }>()
+    if (diag?.banned) return json({ error: 'banned' }, 403)
+    const campOpen = diag && isEffectivelyOpen(
+      { status: diag.camp_status as 'draft' | 'active' | 'closed', starts_at: diag.starts_at, ends_at: diag.ends_at },
+      new Date(),
+    )
+    if (!campOpen) return json({ error: 'campaign_closed' }, 409)
+    // Fallback (gift status changed concurrently — e.g. hidden by moderation)
+    return json({ error: 'pending_review' }, 409)
+  }
 
   return json({ ok: true })
 }
@@ -496,12 +543,15 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
   const threshold = typeof settings.report_threshold === 'number' ? settings.report_threshold : 3
 
   const nowDt = nowSecond()
+  const day = vietnamDay()
 
   // Single conditional INSERT (item 5): checks gift still visible and campaign still open,
   // so a concurrent gift-delete or campaign-close between the read and the INSERT is handled.
   // INSERT OR IGNORE guards the PK so a concurrent duplicate report doesn't double-insert.
+  // Also checks per-user daily report cap (DAILY_REPORT_LIMIT) inside the WHERE so it's atomic.
   const batch = await env.DB.batch([
     // 1. Conditional INSERT: only if gift still visible + campaign still open + not yet reported
+    //    + reporter's daily count < DAILY_REPORT_LIMIT.
     env.DB.prepare(
       'INSERT OR IGNORE INTO report (gift_id, user_id, reason, acknowledged, created_at) ' +
       'SELECT g.id, ?, ?, 0, ? ' +
@@ -509,9 +559,12 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
       'JOIN campaign c ON c.id = g.campaign_id ' +
       "WHERE g.id = ? AND g.status = 'visible' " +
       "  AND c.status = 'active' AND ? BETWEEN c.starts_at AND c.ends_at " +
-      '  AND NOT EXISTS (SELECT 1 FROM report WHERE gift_id = g.id AND user_id = ?)',
-    ).bind(userId, reason, nowDt, state.gift_id, nowDt, userId),
-    // 2. Recount: only non-banned, unacknowledged reports.
+      '  AND NOT EXISTS (SELECT 1 FROM report WHERE gift_id = g.id AND user_id = ?) ' +
+      '  AND (SELECT COUNT(*) FROM report WHERE user_id = ? ' +
+      "       AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?) < ?",
+    ).bind(userId, reason, nowDt, state.gift_id, nowDt, userId, userId, day, DAILY_REPORT_LIMIT),
+    // 2. Recount: only non-banned, unacknowledged reports from accounts aged >= 24 h at
+    //    the time of the report (new-account exclusion, security cycle 1).
     //    Guard: status != 'deleted' so a race where the gift was deleted between the
     //    preliminary read and this batch does not reset the report_count on a deleted gift.
     env.DB.prepare(
@@ -519,6 +572,7 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
       '  SELECT COUNT(*) FROM report r ' +
       '  JOIN app_user u ON u.id = r.user_id ' +
       "  WHERE r.gift_id = ? AND r.acknowledged = 0 AND u.banned = 0" +
+      '  AND (strftime(\'%s\', r.created_at) - strftime(\'%s\', u.created_at)) >= 86400' +
       ") WHERE id = ? AND status != 'deleted'",
     ).bind(state.gift_id, state.gift_id),
     // 3. Auto-hide if threshold reached (same batch, atomic)
@@ -535,13 +589,15 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
       .prepare(
         'SELECT g.id, g.status AS gift_status, ' +
         '       c.status AS camp_status, c.starts_at, c.ends_at, ' +
-        '       (SELECT COUNT(*) FROM report r WHERE r.gift_id = g.id AND r.user_id = ?) AS already_rep ' +
+        '       (SELECT COUNT(*) FROM report r WHERE r.gift_id = g.id AND r.user_id = ?) AS already_rep, ' +
+        '       (SELECT COUNT(*) FROM report r WHERE r.user_id = ? ' +
+        "        AND substr(datetime(r.created_at, '+7 hours'), 1, 10) = ?) AS day_reports " +
         'FROM gift g ' +
         'JOIN campaign c ON c.id = g.campaign_id ' +
         'WHERE g.id = ?',
       )
-      .bind(userId, state.gift_id)
-      .first<{ id: number; gift_status: string; camp_status: string; starts_at: string; ends_at: string; already_rep: number }>()
+      .bind(userId, userId, day, state.gift_id)
+      .first<{ id: number; gift_status: string; camp_status: string; starts_at: string; ends_at: string; already_rep: number; day_reports: number }>()
 
     if (!diag || diag.gift_status !== 'visible') return json({ error: 'gift_not_found' }, 404)
 
@@ -550,7 +606,9 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
       new Date(),
     )
     if (!campStillOpen) return json({ error: 'campaign_closed' }, 409)
+    // already_reported is diagnosed before reports_exhausted (security cycle 1 order)
     if (diag.already_rep > 0) return json({ error: 'already_reported' }, 409)
+    if (diag.day_reports >= DAILY_REPORT_LIMIT) return json({ error: 'reports_exhausted' }, 429)
 
     // Fallback (shouldn't happen in practice)
     return json({ error: 'gift_not_found' }, 404)

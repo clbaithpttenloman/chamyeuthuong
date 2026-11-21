@@ -4,8 +4,8 @@
  * Before fix: messageFor(new Error('oops')) returns 'oops' (raw e.message).
  * After fix:  messageFor(new Error('oops')) returns 'Lỗi kết nối, vui lòng thử lại.'
  */
-import { describe, it, expect } from 'vitest'
-import { ApiError, messageFor } from './api'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { ApiError, messageFor, logout } from './api'
 
 describe('messageFor', () => {
   it('400 → Dữ liệu không hợp lệ', () => {
@@ -56,5 +56,29 @@ describe('messageFor', () => {
 
   it('null → Lỗi kết nối', () => {
     expect(messageFor(null)).toBe('Lỗi kết nối, vui lòng thử lại.')
+  })
+})
+
+// Security review (frontend): a rejected logout must not look like a successful one.
+describe('logout — checks the response status', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+  const respond = (status: number, body: unknown) =>
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })))
+
+  it('resolves on 200', async () => {
+    respond(200, { ok: true })
+    await expect(logout()).resolves.toBeUndefined()
+  })
+  it('throws ApiError on 403 (CSRF rejection) and 500', async () => {
+    respond(403, { error: 'forbidden' })
+    await expect(logout()).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    respond(500, { error: 'server_error' })
+    await expect(logout()).rejects.toMatchObject({ status: 500 })
+  })
+  it('sends X-Requested-With', async () => {
+    const f = vi.fn(async () => new Response('{"ok":true}', { status: 200 }))
+    vi.stubGlobal('fetch', f)
+    await logout()
+    expect((f.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toMatchObject({ 'X-Requested-With': 'fetch' })
   })
 })

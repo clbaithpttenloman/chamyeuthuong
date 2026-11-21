@@ -36,6 +36,7 @@ import { requireAdmin } from './auth.ts'
 import { ensureSchema } from './schema.ts'
 import { json, error, readJson } from './http.ts'
 import { hmacSha256Hex } from './session.ts'
+import { readSession } from './session.ts'
 import type { D1 } from './types.ts'
 
 type Limiter = { limit(opts: { key: string }): Promise<{ success: boolean }> }
@@ -56,6 +57,11 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
   // Google session only — no opts.legacy (new admin routes require Google, ADR-3)
   const admin = await requireAdmin(request, env)
   if (admin instanceof Response) return admin
+
+  // Resolve the admin's own app_user.id from the session (needed for self-ban check).
+  // requireAdmin already validated the session, so this read must succeed.
+  const adminSession = await readSession(request, env.DB)
+  const adminUserId = adminSession?.userId
 
   const { pathname } = new URL(request.url)
 
@@ -130,6 +136,29 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       }
     }
 
+    // Count reports from accounts < 24 h old at the time of the report (security cycle 1).
+    // Counts only — no reporter identities.
+    const newAccountCounts = new Map<number, number>()
+    for (const g of rows) newAccountCounts.set(g.id, 0)
+    if (rows.length > 0) {
+      const ids = rows.map((g) => g.id)
+      for (let i = 0; i < ids.length; i += 90) {
+        const chunk = ids.slice(i, i + 90)
+        const { results: naRows } = await env.DB
+          .prepare(
+            'SELECT r.gift_id, COUNT(*) AS n FROM report r ' +
+            'JOIN app_user u ON u.id = r.user_id ' +
+            'WHERE r.acknowledged = 0 ' +
+            '  AND (strftime(\'%s\', r.created_at) - strftime(\'%s\', u.created_at)) < 86400 ' +
+            `  AND r.gift_id IN (${chunk.map(() => '?').join(',')}) ` +
+            'GROUP BY r.gift_id',
+          )
+          .bind(...chunk)
+          .all<{ gift_id: number; n: number }>()
+        for (const x of naRows) newAccountCounts.set(x.gift_id, x.n)
+      }
+    }
+
     // Reporter identity is NEVER included (ADR-8).
     // X-Truncated: 1 is set when the result was capped at 200 rows (the response shape is a
     // bare array and must not change, so we signal truncation via a header — cycle-2 suggestion).
@@ -151,6 +180,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       ink: g.ink,
       backgroundTemplateId: g.background_template_id,
       reportReasons: reasons.get(g.id),
+      reportsFromNewAccounts: newAccountCounts.get(g.id) ?? 0,
     }))
     const resp = json(payload)
     if (rows.length === 200) resp.headers.set('X-Truncated', '1')
@@ -193,6 +223,16 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
     }
 
     if (status === 'visible') {
+      // Refuse restoring a gift whose owner is currently banned (security cycle 1).
+      // Restoring a banned user's gift would publish content that moderation is overseeing.
+      const ownerBanned = await env.DB
+        .prepare(
+          'SELECT u.banned FROM gift g JOIN app_user u ON u.id = g.user_id WHERE g.id = ? LIMIT 1',
+        )
+        .bind(giftId)
+        .first<{ banned: number }>()
+      if (ownerBanned?.banned) return json({ error: 'owner_banned' }, 409)
+
       // Restore: acknowledge all existing reports, reset report_count to 0, set status = visible,
       // clear status_before_ban (item 3: prevent stale restore on later unban).
       // Refuse deleted gifts (ADR-8: cannot resurrect deleted gifts) and unknown ids.
@@ -243,12 +283,9 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
     }
 
     if (banned) {
-      // Admin cannot ban themselves (compare admin's app_user.id via email).
-      const adminUser = await env.DB
-        .prepare('SELECT id FROM app_user WHERE lower(email) = lower(?)')
-        .bind(admin.email)
-        .first<{ id: number }>()
-      if (adminUser && adminUser.id === targetUserId) {
+      // Admin cannot ban themselves — compare target with the session user id directly
+      // (session userId is unambiguous; email lookup is non-unique across app_user rows).
+      if (adminUserId !== undefined && adminUserId === targetUserId) {
         return json({ error: 'forbidden' }, 403)
       }
 
@@ -283,6 +320,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
           '  SELECT COUNT(*) FROM report r ' +
           '  JOIN app_user u ON u.id = r.user_id ' +
           '  WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND u.banned = 0' +
+          '  AND (strftime(\'%s\', r.created_at) - strftime(\'%s\', u.created_at)) >= 86400' +
           ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
         ).bind(targetUserId),
       ])
@@ -322,6 +360,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
           '  SELECT COUNT(*) FROM report r ' +
           '  JOIN app_user u ON u.id = r.user_id ' +
           '  WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND u.banned = 0' +
+          '  AND (strftime(\'%s\', r.created_at) - strftime(\'%s\', u.created_at)) >= 86400' +
           ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
         ).bind(targetUserId),
         // Remove tombstone (item 1): same batch so the unban is atomic with tombstone removal.

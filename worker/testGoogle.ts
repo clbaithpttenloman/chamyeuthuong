@@ -309,11 +309,11 @@ export async function pinAdminSub(db: D1, email: string, sub: string): Promise<v
  */
 export async function seedUser(
   db: D1,
-  opts: { sub?: string; email?: string; nickname?: string; banned?: boolean } = {},
+  opts: { sub?: string; email?: string; nickname?: string; banned?: boolean; createdAt?: string } = {},
 ): Promise<number> {
   const sub = opts.sub ?? TEST_SUB
   const email = opts.email ?? TEST_EMAIL
-  const now = new Date().toISOString()
+  const now = opts.createdAt ?? new Date().toISOString()
   await db
     .prepare(
       'INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -370,9 +370,11 @@ export type MeTestEnv = {
   AUTH_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_FAIL_LIMIT: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_LEGACY_LOGIN?: string
+  /** Phase 2: required for sign-in and ban tombstones. */
+  SUB_HMAC_KEY?: string
 }
 
-export function meEnv(opts: { db?: D1; nonceKey?: string; legacyLogin?: string } = {}): MeTestEnv {
+export function meEnv(opts: { db?: D1; nonceKey?: string; legacyLogin?: string; subHmacKey?: string } = {}): MeTestEnv {
   return {
     DB: opts.db ?? testDb().db,
     GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
@@ -380,6 +382,8 @@ export function meEnv(opts: { db?: D1; nonceKey?: string; legacyLogin?: string }
     AUTH_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
     ADMIN_LEGACY_LOGIN: opts.legacyLogin,
+    // Always provide SUB_HMAC_KEY in tests unless explicitly testing the missing-key path.
+    SUB_HMAC_KEY: 'subHmacKey' in opts ? opts.subHmacKey : 'test-sub-hmac-key-32bytes-padded',
   }
 }
 

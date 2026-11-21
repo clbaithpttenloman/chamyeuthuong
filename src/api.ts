@@ -281,8 +281,10 @@ export async function signInWithGoogle(credential: string): Promise<MeUser> {
 }
 
 /** POST /api/auth/logout — revoke current session cookie (best-effort). */
+/** POST /api/auth/logout. Throws ApiError when the server does not confirm, so the UI never
+ *  shows "signed out" while the session cookie is still valid (shared computers). */
 export async function logout(): Promise<void> {
-  await sessionFetch('/api/auth/logout', { method: 'POST' })
+  await sessionExpectOk(await sessionFetch('/api/auth/logout', { method: 'POST' }))
 }
 
 /** GET /api/me — returns current signed-in user (or null) and isAdmin flag. */

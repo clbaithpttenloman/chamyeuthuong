@@ -236,6 +236,13 @@ export async function handleAuth(
       return failResp('unauthorized', 401, [nonceClear])
     }
 
+    // Phase 2: fail closed when SUB_HMAC_KEY is not configured.
+    // Without the key, ban tombstones cannot be checked → ban evasion is possible.
+    if (!env.SUB_HMAC_KEY) {
+      console.error('auth: misconfigured')
+      return failResp('misconfigured', 503, [nonceClear])
+    }
+
     // Rate limit on IP (AUTH_LIMIT counts failures only — charged below on failure)
 
     // Read and validate nonce cookie
@@ -281,9 +288,8 @@ export async function handleAuth(
     // Phase 2: check banned_identity tombstone (ban evasion prevention, ADR-8).
     // A banned user who deleted their account has a tombstone keyed by HMAC(SUB_HMAC_KEY, sub).
     // On next sign-in, recreate the account as banned so they cannot evade the ban.
-    // Skip silently when SUB_HMAC_KEY is absent (tombstones cannot exist without the key).
-    // Never log sub.
-    if (env.SUB_HMAC_KEY) {
+    // SUB_HMAC_KEY is required (checked above); never log sub.
+    {
       const subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, claims.sub)
       const tombstone = await env.DB
         .prepare('SELECT 1 FROM banned_identity WHERE sub_hmac = ?')
@@ -535,7 +541,7 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
     if (userRow.banned) {
       if (!env.SUB_HMAC_KEY) {
         console.error('auth: misconfigured')
-        return failResp('misconfigured', 500)
+        return failResp('misconfigured', 503)
       }
       subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, userRow.google_sub)
     }
@@ -560,8 +566,9 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       ...(subHmac !== null
         ? [
             env.DB.prepare(
-              'INSERT OR IGNORE INTO banned_identity (sub_hmac, created_at) VALUES (?, ?)',
-            ).bind(subHmac, new Date().toISOString()),
+              'INSERT OR IGNORE INTO banned_identity (sub_hmac, created_at) ' +
+              'SELECT ?, ? FROM app_user WHERE id = ? AND banned = 1',
+            ).bind(subHmac, new Date().toISOString(), session.userId),
           ]
         : []),
       env.DB.prepare('DELETE FROM gift WHERE user_id = ?').bind(session.userId),
@@ -574,12 +581,13 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       ).bind(session.userId, session.userId),
       env.DB.prepare('DELETE FROM heart WHERE user_id = ?').bind(session.userId),
       // Report recount: their reports will be deleted in the next step, so pre-delete recount
-      // by excluding their reports from the count. (item 4)
+      // by excluding their reports from the count. (item 4); also excludes new-account reporters.
       env.DB.prepare(
         'UPDATE gift SET report_count = (' +
         '  SELECT COUNT(*) FROM report r ' +
         '  JOIN app_user u ON u.id = r.user_id ' +
         '  WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND u.banned = 0 AND r.user_id != ?' +
+        '  AND (strftime(\'%s\', r.created_at) - strftime(\'%s\', u.created_at)) >= 86400' +
         ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
       ).bind(session.userId, session.userId),
       env.DB.prepare('DELETE FROM report WHERE user_id = ?').bind(session.userId),

@@ -799,6 +799,7 @@ describe('Fix Group 5a — Accept #7: AUTH_LIMIT counts failures only', () => {
       DB: db,
       GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
       NONCE_KEY: TEST_NONCE_KEY,
+      SUB_HMAC_KEY: 'test-sub-hmac-key-32bytes-padded',
       AUTH_LIMIT: {
         limit: async () => { authLimitCallCount++; return { success: true } }
       },
@@ -820,6 +821,7 @@ describe('Fix Group 5a — Accept #7: AUTH_LIMIT counts failures only', () => {
       DB: db,
       GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
       NONCE_KEY: TEST_NONCE_KEY,
+      SUB_HMAC_KEY: 'test-sub-hmac-key-32bytes-padded',
       AUTH_LIMIT: {
         limit: async () => { authLimitCallCount++; return { success: true } }
       },
@@ -840,6 +842,7 @@ describe('Fix Group 5a — Accept #7: AUTH_LIMIT counts failures only', () => {
       DB: db,
       GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
       NONCE_KEY: TEST_NONCE_KEY,
+      SUB_HMAC_KEY: 'test-sub-hmac-key-32bytes-padded',
       AUTH_LIMIT: { limit: async () => ({ success: true }) },
       AUTH_SUB_LIMIT: { limit: async () => ({ success: false }) },  // always blocked
       ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },

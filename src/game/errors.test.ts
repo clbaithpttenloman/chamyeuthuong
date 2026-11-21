@@ -35,6 +35,8 @@ const WORKER_CODES = [
   'hearts_exhausted',
   'already_reported',
   'pending_review',
+  'reports_exhausted',
+  'owner_banned',
   // worker/tree.ts (extra codes beyond gifts.ts)
   // bad_request, not_found, rate_limited — already listed above
   // worker/me.ts (extra codes beyond the above)

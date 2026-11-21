@@ -42,7 +42,7 @@
     // GOOGLE_CLIENT_ID must end with .apps.googleusercontent.com
     "GOOGLE_CLIENT_ID": "",
     // Phase 1 transition: keep legacy X-Admin-Email login on 20/11 admin routes.
-    // Remove before Phase 2 production deploy (see docs/runbooks/admin.md).
+    // Removing the typed-email login is a separate, later feature (not campaign-platform).
     "ADMIN_LEGACY_LOGIN": "1"
   },
   // Secrets required for deploy (set via `wrangler secret put <NAME>`):
@@ -74,7 +74,10 @@
     { "name": "GIFT_LIMIT",       "namespace_id": "2011", "simple": { "limit": 6,    "period": 60 } },
     { "name": "HEART_LIMIT",      "namespace_id": "2012", "simple": { "limit": 20,   "period": 60 } },
     { "name": "REPORT_LIMIT",     "namespace_id": "2013", "simple": { "limit": 10,   "period": 60 } },
-    { "name": "TREE_READ_LIMIT",  "namespace_id": "2014", "simple": { "limit": 3000, "period": 60 } }
+    { "name": "TREE_READ_LIMIT",  "namespace_id": "2014", "simple": { "limit": 3000, "period": 60 } },
+    // LIST_READ_LIMIT (300/60 s per IP): guards GET /api/campaigns/<slug>/gifts and
+    // GET /api/gifts/<publicId>; charged on cache misses only. Namespace 2015.
+    { "name": "LIST_READ_LIMIT",  "namespace_id": "2015", "simple": { "limit": 300,  "period": 60 } }
   ],
   // Staging environment: separate Worker name and D1 database.
   // All bindings and vars are non-inheritable and must be repeated here.
@@ -111,7 +114,8 @@
         { "name": "GIFT_LIMIT",       "namespace_id": "3011", "simple": { "limit": 6,    "period": 60 } },
         { "name": "HEART_LIMIT",      "namespace_id": "3012", "simple": { "limit": 20,   "period": 60 } },
         { "name": "REPORT_LIMIT",     "namespace_id": "3013", "simple": { "limit": 10,   "period": 60 } },
-        { "name": "TREE_READ_LIMIT",  "namespace_id": "3014", "simple": { "limit": 3000, "period": 60 } }
+        { "name": "TREE_READ_LIMIT",  "namespace_id": "3014", "simple": { "limit": 3000, "period": 60 } },
+        { "name": "LIST_READ_LIMIT",  "namespace_id": "3015", "simple": { "limit": 300,  "period": 60 } }
       ]
     }
   }

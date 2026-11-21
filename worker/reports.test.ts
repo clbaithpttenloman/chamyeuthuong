@@ -223,12 +223,14 @@ describe('POST /api/gifts/<publicId>/report — auto-hide on threshold (ADR-8, A
       publicId: 'autohidegift12345'.slice(0, 16),
     })
 
-    // Three distinct users report
+    // Three distinct users report (accounts aged > 24 h so they count toward auto-hide)
     const users: Array<{ id: number; token: string }> = []
+    const agedAt = new Date(Date.now() - 25 * 3600_000).toISOString()
     for (let i = 0; i < 3; i++) {
       const uid = await seedUser(db, {
         sub: `autohide-reporter-${i}`,
         email: `ahreporter${i}@gmail.com`,
+        createdAt: agedAt,
       })
       const tok = makeRawToken()
       await seedSession(db, uid, tok)
@@ -265,10 +267,12 @@ describe('POST /api/gifts/<publicId>/report — auto-hide on threshold (ADR-8, A
     const { publicId } = await seedGift(db, ownerId, campaignId, templateId, {
       publicId: 'rcountgift1234567'.slice(0, 16),
     })
+    const agedAt = new Date(Date.now() - 25 * 3600_000).toISOString()
     for (let i = 0; i < 3; i++) {
       const uid = await seedUser(db, {
         sub: `rcount-reporter-${i}`,
         email: `rcreporter${i}@gmail.com`,
+        createdAt: agedAt,
       })
       const tok = makeRawToken()
       await seedSession(db, uid, tok)
@@ -282,8 +286,11 @@ describe('POST /api/gifts/<publicId>/report — auto-hide on threshold (ADR-8, A
       .get(publicId) as { report_count: number } | undefined
     const actual = (sqlite
       .prepare(
-        'SELECT COUNT(*) AS c FROM report ' +
-        'WHERE gift_id = (SELECT id FROM gift WHERE public_id = ?) AND acknowledged = 0',
+        'SELECT COUNT(*) AS c FROM report r ' +
+        'JOIN app_user u ON u.id = r.user_id ' +
+        'WHERE r.gift_id = (SELECT id FROM gift WHERE public_id = ?) ' +
+        "AND r.acknowledged = 0 AND u.banned = 0 " +
+        "AND (strftime('%s', r.created_at) - strftime('%s', u.created_at)) >= 86400",
       )
       .get(publicId) as { c: number }).c
     expect(gift?.report_count).toBe(actual)
@@ -297,8 +304,9 @@ describe('POST /api/gifts/<publicId>/report — auto-hide on threshold (ADR-8, A
     const ownerT = await seedUser(db, { sub: 'thresh2-owner-001', email: 'thresh2owner@gmail.com' })
     const { publicId } = await seedGift(db, ownerT, 8, tmpl, { publicId: 'thresh2gift1234567'.slice(0, 16) })
 
-    const u1 = await seedUser(db, { sub: 'thresh2-r1', email: 'thresh2r1@gmail.com' })
-    const u2 = await seedUser(db, { sub: 'thresh2-r2', email: 'thresh2r2@gmail.com' })
+    const agedAt2 = new Date(Date.now() - 25 * 3600_000).toISOString()
+    const u1 = await seedUser(db, { sub: 'thresh2-r1', email: 'thresh2r1@gmail.com', createdAt: agedAt2 })
+    const u2 = await seedUser(db, { sub: 'thresh2-r2', email: 'thresh2r2@gmail.com', createdAt: agedAt2 })
     const t1 = makeRawToken()
     const t2 = makeRawToken()
     await seedSession(db, u1, t1)
@@ -331,11 +339,13 @@ describe('POST /api/gifts/<publicId>/report — reports from banned users not co
       publicId: 'bannedrepgift12345'.slice(0, 16),
     })
 
-    // 2 valid reporters
+    // 2 valid reporters (aged > 24h so their reports count)
+    const agedAt3 = new Date(Date.now() - 25 * 3600_000).toISOString()
     for (let i = 0; i < 2; i++) {
       const uid = await seedUser(db, {
         sub: `banned-valid-r-${i}`,
         email: `bannedvalid${i}@gmail.com`,
+        createdAt: agedAt3,
       })
       const tok = makeRawToken()
       await seedSession(db, uid, tok)
@@ -379,10 +389,11 @@ describe('POST /api/gifts/<publicId>/report — reports from banned users not co
     })
     const now = new Date().toISOString()
 
-    // Three reporters: r1, r2 (normal), r3 (will be banned)
-    const r1Id = await seedUser(db, { sub: 'rcb-r1-new', email: 'rcb-r1-new@gmail.com' })
-    const r2Id = await seedUser(db, { sub: 'rcb-r2-new', email: 'rcb-r2-new@gmail.com' })
-    const r3Id = await seedUser(db, { sub: 'rcb-r3-new', email: 'rcb-r3-new@gmail.com' })
+    const agedAt4 = new Date(Date.now() - 25 * 3600_000).toISOString()
+    // Three reporters: r1, r2 (normal), r3 (will be banned) — all aged > 24h so they count
+    const r1Id = await seedUser(db, { sub: 'rcb-r1-new', email: 'rcb-r1-new@gmail.com', createdAt: agedAt4 })
+    const r2Id = await seedUser(db, { sub: 'rcb-r2-new', email: 'rcb-r2-new@gmail.com', createdAt: agedAt4 })
+    const r3Id = await seedUser(db, { sub: 'rcb-r3-new', email: 'rcb-r3-new@gmail.com', createdAt: agedAt4 })
 
     // Insert 3 reports directly (simulating 3 prior reports)
     sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, r1Id, 'spam', now)

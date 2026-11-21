@@ -68,4 +68,8 @@ export type Env = {
   REPORT_LIMIT?: RateLimit
   /** Rate limit for tree read cache misses: 3,000/60 s per IP, namespace 2014. */
   TREE_READ_LIMIT?: RateLimit
+  /** Rate limit for GET /api/campaigns/<slug>/gifts and GET /api/gifts/<publicId>:
+   *  300/60 s per IP, namespace 2015 prod / 3015 staging.
+   *  Charged on cache misses only. */
+  LIST_READ_LIMIT?: RateLimit
 }

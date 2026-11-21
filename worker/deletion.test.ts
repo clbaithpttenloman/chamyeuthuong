@@ -456,8 +456,9 @@ describe('DELETE /api/me — report_count recount on deletion (cycle-2)', () => 
       reportCount: 2,  // pre-set; will be recomputed by handler
     })
 
-    // A second reporter (not being deleted)
-    const otherReporterId = await seedUser(db, { sub: 'del-rcount-r2', email: 'delrcountr2@gmail.com' })
+    // A second reporter (not being deleted) — aged > 24h so their report counts
+    const agedAt5 = new Date(Date.now() - 25 * 3600_000).toISOString()
+    const otherReporterId = await seedUser(db, { sub: 'del-rcount-r2', email: 'delrcountr2@gmail.com', createdAt: agedAt5 })
 
     // Insert 2 unacknowledged reports: one from userId (the deleting user), one from otherReporterId
     const now = new Date().toISOString()
@@ -488,7 +489,8 @@ describe('DELETE /api/me — report_count recount on deletion (cycle-2)', () => 
       publicId: 'delrcountack12345',
       reportCount: 1,
     })
-    const otherReporterId = await seedUser(db, { sub: 'del-rcount-ack-r2', email: 'delrcountackr2@gmail.com' })
+    const agedAt6 = new Date(Date.now() - 25 * 3600_000).toISOString()
+    const otherReporterId = await seedUser(db, { sub: 'del-rcount-ack-r2', email: 'delrcountackr2@gmail.com', createdAt: agedAt6 })
     const now = new Date().toISOString()
     // userId files an acknowledged (admin-cleared) report
     sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,1,?)').run(giftId, userId, 'spam', now)

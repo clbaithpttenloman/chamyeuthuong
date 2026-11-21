@@ -110,12 +110,17 @@ type CampaignRow = {
 
 /**
  * Returns true iff the campaign is status=active AND `now` falls within [starts_at, ends_at]
- * (both endpoints inclusive, millisecond precision via Date comparison).
+ * (both endpoints inclusive, second precision — truncates sub-second parts so the check
+ * is consistent with the SQL BETWEEN using nowSecond() on both sides).
  */
 export function isEffectivelyOpen(campaign: CampaignRow, now: Date): boolean {
   if (campaign.status !== 'active') return false
-  const start = new Date(campaign.starts_at).getTime()
-  const end = new Date(campaign.ends_at).getTime()
-  const t = now.getTime()
+  // Truncate to second precision on both sides to avoid string-ordering edge where
+  // '...T23:59:59.999Z' compares greater than stored '...T23:59:59Z'. Also prevents
+  // the inverse edge where now > ends_at by sub-second when the last second is valid.
+  const toSecMs = (iso: string) => Math.floor(new Date(iso).getTime() / 1000) * 1000
+  const start = toSecMs(campaign.starts_at)
+  const end   = toSecMs(campaign.ends_at)
+  const t     = Math.floor(now.getTime() / 1000) * 1000
   return t >= start && t <= end
 }

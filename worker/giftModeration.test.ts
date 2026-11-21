@@ -703,7 +703,7 @@ describe('handleGiftModeration — ban/unban recompute report_count in-batch (it
       reportCount: 0,
     })
     rc4GiftId = gid
-    rc4ReporterId = await seedUser(rc4Db, { sub: 'rc4-reporter-001', email: 'rc4reporter@gmail.com' })
+    rc4ReporterId = await seedUser(rc4Db, { sub: 'rc4-reporter-001', email: 'rc4reporter@gmail.com', createdAt: new Date(Date.now() - 25 * 3600_000).toISOString() })
   })
 
   it('ban reduces report_count: reporter gets banned → their report no longer counts', async () => {
