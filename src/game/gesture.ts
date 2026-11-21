@@ -157,3 +157,24 @@ export function onPointerUp(state: GestureState): UpResult {
 export function clearClickSuppression(state: GestureState): GestureState {
   return { ...state, suppressClick: false }
 }
+
+/**
+ * Returns true when this click event should be suppressed as a pointer-drag artifact.
+ *
+ * Mouse and touch clicks have `detail >= 1` (number of times the button was pressed).
+ * Keyboard Enter/Space activations have `detail === 0`.
+ * We only suppress pointer-synthesised clicks (detail > 0) so that a gift button that
+ * receives keyboard focus AFTER a drag can still be activated with Enter/Space.
+ *
+ * Usage in Scene:
+ *   onClick={(e) => {
+ *     if (shouldSuppressClick(gestureRef.current, e.detail)) {
+ *       gestureRef.current = clearClickSuppression(gestureRef.current)
+ *       return
+ *     }
+ *     handleGiftClick(gift)
+ *   }}
+ */
+export function shouldSuppressClick(state: GestureState, detail: number): boolean {
+  return state.suppressClick && detail > 0
+}

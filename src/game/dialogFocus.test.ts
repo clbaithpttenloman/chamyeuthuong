@@ -4,7 +4,7 @@
  * No DOM / React / JSDOM required — uses fake element-like objects.
  */
 import { describe, it, expect } from 'vitest'
-import { tabNext } from './dialogFocus.ts'
+import { tabNext, dialogStackPush, dialogStackPop, dialogStackTop } from './dialogFocus.ts'
 
 // Minimal fake element: only identity matters for tabNext
 const el = (id: string) => ({ id } as unknown as Element)
@@ -121,5 +121,121 @@ describe('tabNext — invariants', () => {
         expect([a, c]).toContain(result)
       }
     }
+  })
+})
+
+// ── dialogStackPush ───────────────────────────────────────────────────────────
+
+describe('dialogStackPush', () => {
+  const a = Symbol('a')
+  const b = Symbol('b')
+
+  it('appends to empty stack', () => {
+    expect(dialogStackPush([], a)).toEqual([a])
+  })
+
+  it('appends to non-empty stack', () => {
+    expect(dialogStackPush([a], b)).toEqual([a, b])
+  })
+
+  it('original array is unchanged', () => {
+    const orig: symbol[] = []
+    dialogStackPush(orig, a)
+    expect(orig).toHaveLength(0)
+  })
+
+  it('top of returned stack is the pushed entry', () => {
+    const result = dialogStackPush([a], b)
+    expect(result[result.length - 1]).toBe(b)
+  })
+})
+
+// ── dialogStackPop ────────────────────────────────────────────────────────────
+
+describe('dialogStackPop', () => {
+  const a = Symbol('a')
+  const b = Symbol('b')
+  const c = Symbol('c')
+
+  it('removes the entry', () => {
+    expect(dialogStackPop([a, b], b)).toEqual([a])
+  })
+
+  it('returns same reference when entry not found', () => {
+    const stack: readonly symbol[] = [a]
+    expect(dialogStackPop(stack, b)).toBe(stack)
+  })
+
+  it('removes only the last occurrence', () => {
+    const result = dialogStackPop([a, b, a], a)
+    expect(result).toEqual([a, b])
+  })
+
+  it('removes from single-element stack', () => {
+    expect(dialogStackPop([a], a)).toEqual([])
+  })
+
+  it('no-op on empty stack', () => {
+    const stack: symbol[] = []
+    expect(dialogStackPop(stack, a)).toBe(stack)
+  })
+
+  it('original array is unchanged', () => {
+    const orig = [a, b, c]
+    dialogStackPop(orig, b)
+    expect(orig).toHaveLength(3)
+  })
+})
+
+// ── dialogStackTop ────────────────────────────────────────────────────────────
+
+describe('dialogStackTop', () => {
+  const a = Symbol('a')
+  const b = Symbol('b')
+
+  it('returns undefined for empty stack', () => {
+    expect(dialogStackTop([])).toBeUndefined()
+  })
+
+  it('returns the last entry', () => {
+    expect(dialogStackTop([a, b])).toBe(b)
+  })
+
+  it('returns the only entry for single-element stack', () => {
+    expect(dialogStackTop([a])).toBe(a)
+  })
+})
+
+// ── push/pop/top round-trip ───────────────────────────────────────────────────
+
+describe('dialogStack round-trip', () => {
+  const a = Symbol('a')
+  const b = Symbol('b')
+  const c = Symbol('c')
+
+  it('push, push, top → last pushed', () => {
+    let s: readonly symbol[] = []
+    s = dialogStackPush(s, a)
+    s = dialogStackPush(s, b)
+    expect(dialogStackTop(s)).toBe(b)
+  })
+
+  it('push, push, pop last → top is first', () => {
+    let s: readonly symbol[] = []
+    s = dialogStackPush(s, a)
+    s = dialogStackPush(s, b)
+    s = dialogStackPop(s, b)
+    expect(dialogStackTop(s)).toBe(a)
+  })
+
+  it('pop the topmost dialog (remove-on-unmount) leaves the one beneath', () => {
+    let s: readonly symbol[] = []
+    s = dialogStackPush(s, a)   // base dialog
+    s = dialogStackPush(s, b)   // sign-in dialog on top
+    s = dialogStackPush(s, c)   // another layer
+    s = dialogStackPop(s, c)    // c closes
+    s = dialogStackPop(s, b)    // b closes
+    expect(dialogStackTop(s)).toBe(a)
+    expect(s).toHaveLength(1)
   })
 })

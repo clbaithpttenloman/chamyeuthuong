@@ -42,7 +42,7 @@ describe('initialPagingState', () => {
 // ── tab action ────────────────────────────────────────────────────────────────
 
 describe('pagingReducer — tab action', () => {
-  it('resets items, page, error, loading, rid', () => {
+  it('resets items, page, error, loading, rid when switching to a different tab', () => {
     const before: S = {
       tab: 'hearts',
       page: 3,
@@ -62,11 +62,16 @@ describe('pagingReducer — tab action', () => {
     expect(after.rid).toBe(0)
   })
 
-  it('switching to same tab also resets', () => {
-    const before: S = { ...fresh(), page: 4, items: ['a'], rid: 2 }
+  it('same tab → referential no-op (state unchanged)', () => {
+    const before: S = { ...fresh('hearts'), page: 2, items: ['a'], rid: 1 }
     const after = pagingReducer(before, { type: 'tab', tab: 'hearts' })
-    expect(after.page).toBe(1)
-    expect(after.items).toHaveLength(0)
+    expect(after).toBe(before)
+  })
+
+  it('same tab on "new" is also a no-op', () => {
+    const before: S = { ...fresh('new'), page: 3, items: ['x', 'y'], rid: 5 }
+    const after = pagingReducer(before, { type: 'tab', tab: 'new' })
+    expect(after).toBe(before)
   })
 })
 

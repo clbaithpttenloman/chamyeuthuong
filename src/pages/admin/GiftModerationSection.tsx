@@ -66,6 +66,18 @@ export default function GiftModerationSection({
   const [error, setError] = useState<string | null>(null)
   const [needsGoogle, setNeedsGoogle] = useState(false)
 
+  // Hold the callback in a ref so loadGifts stays stable (no re-fetch on count change).
+  const onReportedCountChangeRef = useRef(onReportedCountChange)
+  useEffect(() => { onReportedCountChangeRef.current = onReportedCountChange })
+
+  // Report the reported-gift count to Admin.tsx whenever gifts change while on that tab.
+  // Using an effect (not inside a setGifts updater) avoids render-phase setState.
+  useEffect(() => {
+    if (tab === 'reported') {
+      onReportedCountChangeRef.current?.(gifts.length)
+    }
+  }, [tab, gifts])
+
   // Campaign map: campaignId → name (loaded once).
   const [campaignNames, setCampaignNames] = useState<Map<number, string>>(new Map())
   const campaignsLoaded = useRef(false)
@@ -108,9 +120,7 @@ export default function GiftModerationSection({
       // Stale-response guard: discard if a newer request was started
       if (rid !== currentRidRef.current) return
       setGifts(data)
-      if (filter === 'reported' && onReportedCountChange) {
-        onReportedCountChange(data.length)
-      }
+      // Count is reported by the [tab, gifts] effect below — not here.
     } catch (e) {
       if (rid !== currentRidRef.current) return
       if (e instanceof ApiError && e.status === 401) {
@@ -125,7 +135,7 @@ export default function GiftModerationSection({
     } finally {
       if (rid === currentRidRef.current) setLoading(false)
     }
-  }, [onAccessError, onReportedCountChange])
+  }, [onAccessError])
 
   useEffect(() => {
     void loadGifts(tab)
@@ -153,14 +163,8 @@ export default function GiftModerationSection({
     setError(null)
     try {
       await updateAdminGiftStatus(gift.id, statusMap[action])
-      // Remove from list immediately; use functional update for accurate count
-      setGifts((prev) => {
-        const next = prev.filter((g) => g.id !== gift.id)
-        if (tab === 'reported' && onReportedCountChange) {
-          onReportedCountChange(next.length)
-        }
-        return next
-      })
+      // Remove from list immediately; count is reported by the [tab, gifts] effect.
+      setGifts((prev) => prev.filter((g) => g.id !== gift.id))
     } catch (e) {
       buttonRef.current?.focus()
       if (!onAccessError(e)) {
@@ -170,7 +174,7 @@ export default function GiftModerationSection({
         ))
       }
     }
-  }, [tab, onAccessError, onReportedCountChange])
+  }, [onAccessError])
 
   const handleUserAction = useCallback(async (
     gift: AdminGiftItem,

@@ -11,6 +11,7 @@ import {
   onPointerMove,
   onPointerUp,
   clearClickSuppression,
+  shouldSuppressClick,
 } from './gesture.ts'
 
 // ── createGestureState ────────────────────────────────────────────────────────
@@ -245,5 +246,31 @@ describe('full gesture scenarios', () => {
     s = onPointerDown(s, 200, 2)
     expect(s.suppressClick).toBe(false)
     expect(s.isDrag).toBe(false)
+  })
+})
+
+// ── shouldSuppressClick ───────────────────────────────────────────────────────
+
+describe('shouldSuppressClick', () => {
+  it('suppresses mouse/touch clicks (detail >= 1) after a drag', () => {
+    const s = { ...createGestureState(), suppressClick: true }
+    expect(shouldSuppressClick(s, 1)).toBe(true)
+    expect(shouldSuppressClick(s, 2)).toBe(true)
+  })
+
+  it('does NOT suppress keyboard Enter/Space activations (detail === 0)', () => {
+    const s = { ...createGestureState(), suppressClick: true }
+    expect(shouldSuppressClick(s, 0)).toBe(false)
+  })
+
+  it('returns false when suppressClick is false regardless of detail', () => {
+    const s = createGestureState()   // suppressClick: false
+    expect(shouldSuppressClick(s, 1)).toBe(false)
+    expect(shouldSuppressClick(s, 0)).toBe(false)
+  })
+
+  it('detail=0 is never suppressed even without a prior drag', () => {
+    const s = createGestureState()
+    expect(shouldSuppressClick(s, 0)).toBe(false)
   })
 })

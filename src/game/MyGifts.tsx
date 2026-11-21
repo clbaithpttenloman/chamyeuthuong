@@ -47,6 +47,8 @@ export interface MyGiftsProps {
   onSignOut: () => void
   onOpenGift: (publicId: string) => void
   onGiftDeleted: (publicId: string) => void
+  /** Called with an error message when account deletion succeeds but logout fails. */
+  onLogoutError?: (message: string) => void
   returnFocusRef?: React.RefObject<HTMLElement | null>
 }
 
@@ -56,6 +58,7 @@ export default function MyGifts({
   onSignOut,
   onOpenGift,
   onGiftDeleted,
+  onLogoutError,
   returnFocusRef,
 }: MyGiftsProps): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -64,6 +67,11 @@ export default function MyGifts({
   // onClose ref so the focus-trap effect runs once
   const onCloseRef = useRef(onClose)
   useEffect(() => { onCloseRef.current = onClose })
+
+  // onLogoutError ref — prop may be an inline function; hold in a ref so
+  // handleDeleteAccount stays stable without it in its dep array.
+  const onLogoutErrorRef = useRef(onLogoutError)
+  useEffect(() => { onLogoutErrorRef.current = onLogoutError })
 
   // Focus trap + Esc (runs once on mount); returns pushLayer / popLayer for confirms
   const { pushLayer, popLayer } = useDialog({ dialogRef, onCloseRef, returnFocusRef })
@@ -146,6 +154,9 @@ export default function MyGifts({
         setGifts((prev) => prev.filter((g) => g.publicId !== publicId))
         setConfirmDeleteGift(null)
         onGiftDeleted(publicId)
+        // After the confirm unmounts, focus the dialog itself (opener is gone from DOM).
+        // rAF ensures focus moves after the render that removes the row.
+        requestAnimationFrame(() => dialogRef.current?.focus())
       } catch (err) {
         const code = err instanceof ApiError ? err.code : 'unknown'
         setDeleteGiftError(errorMessage(code))
@@ -183,9 +194,10 @@ export default function MyGifts({
     try {
       await logout()
     } catch (err) {
-      // Logout failure is non-fatal: we already deleted the account
+      // Logout failure is non-fatal: we already deleted the account.
+      // Surface the message in NoelPage (not here, since onClose() is about to unmount us).
       const code = err instanceof ApiError ? err.code : 'unknown'
-      setLogoutError(errorMessage(code))
+      onLogoutErrorRef.current?.(errorMessage(code))
     }
     setDeletingAccount(false)
     onSignOut()

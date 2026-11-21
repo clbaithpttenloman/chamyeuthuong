@@ -186,6 +186,11 @@ export default function Admin() {
     return false
   }, [])
 
+  /** Stable callback for GiftModerationSection so loadGifts is not re-fired on count changes. */
+  const handleReportedCountChange = useCallback((count: number) => {
+    setGiftReviewCount(count)
+  }, [])
+
   // Load teachers for the legacy email path
   useEffect(() => {
     if (!adminEmail || legacyVerified) return
@@ -316,7 +321,7 @@ export default function Admin() {
         )}
         {section === 'giftModeration' && (
           <GiftModerationSection
-            onReportedCountChange={(count) => setGiftReviewCount(count)}
+            onReportedCountChange={handleReportedCountChange}
             onAccessError={handleAccessError}
           />
         )}        {section === 'templates' && (

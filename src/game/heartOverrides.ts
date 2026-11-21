@@ -66,18 +66,23 @@ export function addOverride(
  * Reconciles the override map against a fresh tree response.
  *
  * Rules:
- *  - If the gift is absent from the tree → drop the override (gift deleted/hidden).
+ *  - If the gift is absent from the tree and NOT pinned → drop the override.
+ *  - If the gift is absent but its publicId is in `pinnedIds` → keep the override.
+ *    (Use this for the currently-open solo gift so its optimistic count survives polls.)
  *  - If `newServerAsOf > override.serverAsOf` AND `serverCount >= override.count`
  *    → server has confirmed → release the override.
  *  - Otherwise → keep the override.
  *
  * Returns the same map object (referential equality) when nothing changed,
  * allowing React's bailout on `prev === next`.
+ *
+ * @param pinnedIds  Optional set of publicIds to retain even when absent from the tree.
  */
 export function reconcileOverrides(
   overrides: OverrideMap,
   treeGifts: ReadonlyArray<{ publicId: string; heartCount: number }>,
   newServerAsOf: number,
+  pinnedIds?: ReadonlySet<string>,
 ): OverrideMap {
   if (overrides.size === 0) return overrides
 
@@ -88,8 +93,12 @@ export function reconcileOverrides(
   for (const [pid, local] of overrides) {
     const serverCount = giftMap.get(pid)
     if (serverCount === undefined) {
-      // Gift absent from tree — drop override
-      changed = true
+      // Gift absent from tree — keep if pinned (e.g. current solo gift), otherwise drop
+      if (pinnedIds?.has(pid)) {
+        next.set(pid, local)
+      } else {
+        changed = true
+      }
       continue
     }
     // Release when server has a strictly later asOf and confirmed the count

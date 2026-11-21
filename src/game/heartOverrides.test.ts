@@ -189,3 +189,45 @@ describe('reconcileOverrides — hold-then-release progression', () => {
     expect(m.has('a')).toBe(false)
   })
 })
+
+// ── reconcileOverrides — pinnedIds (absent from tree but pinned) ──────────────
+
+describe('reconcileOverrides — pinnedIds', () => {
+  it('keeps override for id absent from tree when pinned (solo gift)', () => {
+    const m = addOverride(empty, 'solo', 5, 1000)
+    const gifts = [{ publicId: 'other', heartCount: 2 }]
+    const result = reconcileOverrides(m, gifts, 2000, new Set(['solo']))
+    expect(result.has('solo')).toBe(true)
+    expect(result.get('solo')?.count).toBe(5)
+  })
+
+  it('still drops override for absent id NOT in pinnedIds', () => {
+    const m = addOverride(empty, 'gone', 5, 1000)
+    const gifts = [{ publicId: 'other', heartCount: 2 }]
+    const result = reconcileOverrides(m, gifts, 2000, new Set(['other']))
+    expect(result.has('gone')).toBe(false)
+  })
+
+  it('pinned id that later appears in tree is still released when server confirms', () => {
+    const m = addOverride(empty, 'solo', 5, 1000)
+    // Gift now in tree, server asOf advanced, count confirmed
+    const gifts = [{ publicId: 'solo', heartCount: 5 }]
+    const result = reconcileOverrides(m, gifts, 2000, new Set(['solo']))
+    expect(result.has('solo')).toBe(false)
+  })
+
+  it('no pinnedIds (undefined) drops absent id — unchanged backward compat', () => {
+    const m = addOverride(empty, 'gone', 5, 1000)
+    const result = reconcileOverrides(m, [], 2000)
+    expect(result.has('gone')).toBe(false)
+  })
+
+  it('referential equality preserved when pinned entry is kept unchanged', () => {
+    const m = addOverride(empty, 'solo', 5, 500)
+    const gifts = [{ publicId: 'other', heartCount: 2 }]
+    // asOf 300 < local.serverAsOf 500 → no release; solo is pinned → kept
+    // Nothing changes → same reference
+    const result = reconcileOverrides(m, gifts, 300, new Set(['solo']))
+    expect(result).toBe(m)
+  })
+})

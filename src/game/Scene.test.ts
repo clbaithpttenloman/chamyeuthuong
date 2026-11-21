@@ -4,7 +4,7 @@
  * No DOM / React required.
  */
 import { describe, it, expect } from 'vitest'
-import { ornamentTransform, type TreeRect } from './Scene.tsx'
+import { ornamentTransform, shouldSnap, type TreeRect } from './Scene.tsx'
 import { TREE_GEOMETRY } from './defaultTheme.ts'
 
 const treeRect: TreeRect = { x: 50, y: 10, w: 300, h: 400 }
@@ -129,5 +129,30 @@ describe('ornamentTransform — phi rotates the slot', () => {
     expect(r0.tx).toBeCloseTo(r2.tx, 5)
     expect(r0.ty).toBeCloseTo(r2.ty, 5)
     expect(r0.depth).toBeCloseTo(r2.depth, 10)
+  })
+})
+
+// ─── shouldSnap ──────────────────────────────────────────────────────────────
+
+describe('shouldSnap', () => {
+  it('returns true when focusPublicId is set, not yet snapped, and slot map has the gift', () => {
+    expect(shouldSnap({ focusPublicId: 'abc', snapped: false, slotMapHas: true })).toBe(true)
+  })
+
+  it('returns false when already snapped', () => {
+    expect(shouldSnap({ focusPublicId: 'abc', snapped: true, slotMapHas: true })).toBe(false)
+  })
+
+  it('returns false when focusPublicId is undefined (no share link)', () => {
+    expect(shouldSnap({ focusPublicId: undefined, snapped: false, slotMapHas: true })).toBe(false)
+  })
+
+  it('returns false when slot map does not have the gift yet (tree not loaded)', () => {
+    expect(shouldSnap({ focusPublicId: 'abc', snapped: false, slotMapHas: false })).toBe(false)
+  })
+
+  it('returns false for all falsy combinations', () => {
+    expect(shouldSnap({ focusPublicId: undefined, snapped: true, slotMapHas: false })).toBe(false)
+    expect(shouldSnap({ focusPublicId: '', snapped: false, slotMapHas: true })).toBe(false)
   })
 })

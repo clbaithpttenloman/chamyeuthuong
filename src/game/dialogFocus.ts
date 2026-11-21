@@ -81,3 +81,35 @@ export function tabNext(
   }
   return null
 }
+
+// ── Module-level dialog stack (pure operations) ───────────────────────────────
+//
+// A module-level stack of active dialog IDs is kept in useDialog.ts (mutable).
+// The functions below operate on immutable arrays so they are testable without DOM.
+//
+// push/pop/top together ensure only the topmost dialog handles Esc and Tab;
+// remove-on-unmount is the React useEffect cleanup that calls pop.
+
+/**
+ * Returns a new stack with `entry` appended. Pure.
+ */
+export function dialogStackPush<T>(stack: readonly T[], entry: T): T[] {
+  return [...stack, entry]
+}
+
+/**
+ * Returns a new stack with the last occurrence of `entry` removed.
+ * Returns the same array reference when `entry` is not found. Pure.
+ */
+export function dialogStackPop<T>(stack: readonly T[], entry: T): readonly T[] {
+  const i = [...stack].lastIndexOf(entry)
+  if (i === -1) return stack
+  return [...stack.slice(0, i), ...stack.slice(i + 1)]
+}
+
+/**
+ * Returns the topmost entry (last element), or `undefined` for an empty stack. Pure.
+ */
+export function dialogStackTop<T>(stack: readonly T[]): T | undefined {
+  return stack[stack.length - 1]
+}

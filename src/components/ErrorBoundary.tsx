@@ -41,7 +41,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <button
             type="button"
             className="btn-primary-link"
-            onClick={() => this.setState({ hasError: false })}
+            onClick={() => window.location.reload()}
           >
             Tải lại
           </button>

@@ -39,6 +39,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import type React from 'react'
 import { Scene, type TreeGift } from './Scene.tsx'
 import { focusGiftButton } from './focusReturn.ts'
 import { nextPollDelay } from './poll.ts'
@@ -51,6 +52,7 @@ import {
 import { msUntilVietnamMidnight, reconcileHeartRejection } from './meRefresh.ts'
 import { createPoller, type Poller } from './poller.ts'
 import { useDialog } from './useDialog.ts'
+import ErrorBoundary from '../components/ErrorBoundary.tsx'
 import {
   getNoelTree,
   getMeForCampaign,
@@ -222,6 +224,9 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   const [soloGift, setSoloGift] = useState<NoelGift | null>(null)
   // Track which ID was last fetched so we don't refetch on every poll
   const soloFetchedForRef = useRef<string | null>(null)
+  // Ref kept in sync with soloGift for use inside setLocalOverrides updater
+  const soloGiftRef = useRef<NoelGift | null>(null)
+  soloGiftRef.current = soloGift
 
   // Sign-in dialog
   const [signInVisible, setSignInVisible] = useState(false)
@@ -239,6 +244,9 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
 
   // Logout error message
   const [logoutError, setLogoutError] = useState<string | null>(null)
+
+  // Error shown after account deletion when the logout call fails (shown after MyGifts closes)
+  const [postSignoutError, setPostSignoutError] = useState<string | null>(null)
 
   // Poller ref so pollNow() can be called from anywhere
   const pollerRef = useRef<Poller | null>(null)
@@ -275,12 +283,24 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   }, [refreshMe])
 
   // ── Refresh me at Vietnam midnight (heartsLeft resets at 00:00 ICT) ──────
+  // Self-rescheduling: after each midnight fires, arm the next one.
   useEffect(() => {
-    const ms = msUntilVietnamMidnight(Date.now())
-    const timer = setTimeout(() => {
-      refreshMe().catch(() => {})
-    }, ms)
-    return () => clearTimeout(timer)
+    let timerId: ReturnType<typeof setTimeout>
+    let alive = true
+
+    function arm(): void {
+      timerId = setTimeout(async () => {
+        if (!alive) return
+        await refreshMe().catch(() => {})
+        if (alive) arm()  // re-arm for the next midnight
+      }, msUntilVietnamMidnight(Date.now()))
+    }
+
+    arm()
+    return () => {
+      alive = false
+      clearTimeout(timerId)
+    }
   }, [refreshMe])
 
   // ── Load my gifts ─────────────────────────────────────────────────────────
@@ -310,8 +330,13 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
         serverAsOfRef.current = newAsOf
         // Update campaignOpen from each tree response
         setCampaignOpen(data.open)
-        // Reconcile overrides: drop for absent gifts or confirmed by server
-        setLocalOverrides((prev) => reconcileOverrides(prev, data.gifts, newAsOf))
+        // Reconcile overrides: drop for absent gifts or confirmed by server.
+        // Pin the solo gift's override so it's not dropped when it's absent from the tree.
+        setLocalOverrides((prev) => {
+          const sg = soloGiftRef.current
+          const pinned = sg ? new Set([sg.publicId]) : undefined
+          return reconcileOverrides(prev, data.gifts, newAsOf, pinned)
+        })
         setTreeData(data)
       },
       onError: () => { /* use defaults; next poll will retry */ },
@@ -577,6 +602,8 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   const createGiftBtnRef = useRef<HTMLButtonElement | null>(null)
   const leaderboardBtnRef = useRef<HTMLButtonElement | null>(null)
   const allGiftsBtnRef = useRef<HTMLButtonElement | null>(null)
+  // myGiftsBtnRef points to the ALWAYS-MOUNTED user-menu trigger button (not the menu item,
+  // which is only in the DOM while the dropdown is open and would be gone when MyGifts unmounts).
   const myGiftsBtnRef = useRef<HTMLButtonElement | null>(null)
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -600,6 +627,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
             <div className="noel-page-user-menu" ref={userMenuRef}>
               <button
                 type="button"
+                ref={myGiftsBtnRef}
                 className="noel-page-user-btn"
                 aria-expanded={userMenuOpen}
                 aria-haspopup="true"
@@ -617,7 +645,6 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
                   <button
                     type="button"
                     role="menuitem"
-                    ref={myGiftsBtnRef as React.RefObject<HTMLButtonElement>}
                     className="noel-user-menu-item"
                     onClick={() => {
                       setShowMyGifts(true)
@@ -707,95 +734,116 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
 
       {/* ── Gift Sheet */}
       {openGift && (
-        <Suspense fallback={null}>
-          <GiftSheet
-            gift={openGift}
-            allGifts={allGiftsForSheet as Parameters<typeof GiftSheet>[0]['allGifts']}
-            slug={slug}
-            campaignName={campaignName}
-            campaignOpen={campaignOpen}
-            user={user}
-            heartsLeft={heartsLeft}
-            heartedPublicIds={heartedIds}
-            myPublicIds={myPublicIds}
-            onNavigate={handleNavigate}
-            onClose={handleClose}
-            onHeart={handleHeart}
-            onReport={handleReport}
-            onSignIn={handleSignIn}
-            templates={templates}
-          />
-        </Suspense>
+        <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được hộp quà. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
+          <Suspense fallback={null}>
+            <GiftSheet
+              gift={openGift}
+              allGifts={allGiftsForSheet as Parameters<typeof GiftSheet>[0]['allGifts']}
+              slug={slug}
+              campaignName={campaignName}
+              campaignOpen={campaignOpen}
+              user={user}
+              heartsLeft={heartsLeft}
+              heartedPublicIds={heartedIds}
+              myPublicIds={myPublicIds}
+              onNavigate={handleNavigate}
+              onClose={handleClose}
+              onHeart={handleHeart}
+              onReport={handleReport}
+              onSignIn={handleSignIn}
+              templates={templates}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* ── Sign-in dialog (focus-managed via useDialog) */}
       {signInVisible && (
-        <SignInDialog
-          onClose={handleCloseSignIn}
-          onSignedIn={handleSignedIn}
-          returnFocusRef={signinReturnRef as React.RefObject<HTMLElement | null>}
-        />
+        <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được đăng nhập. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
+          <SignInDialog
+            onClose={handleCloseSignIn}
+            onSignedIn={handleSignedIn}
+            returnFocusRef={signinReturnRef as React.RefObject<HTMLElement | null>}
+          />
+        </ErrorBoundary>
       )}
 
       {/* ── Create Gift dialog */}
       {showCreateGift && (
-        <Suspense fallback={null}>
-          <CreateGift
-            slug={slug}
-            campaignName={campaignName}
-            campaignOpen={campaignOpen}
-            user={user}
-            myGiftCount={myGiftCount}
-            giftsPerUser={giftsPerUser}
-            templates={templates}
-            templatesLoadError={templatesLoadError}
-            onRetryTemplates={loadTemplates}
-            isInApp={isInApp}
-            onSignIn={handleSignIn}
-            onSuccess={handleGiftCreated}
-            onUserUpdated={handleUserUpdated}
-            onClose={handleCloseCreateGift}
-            returnFocusRef={createGiftBtnRef}
-          />
-        </Suspense>
+        <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
+          <Suspense fallback={null}>
+            <CreateGift
+              slug={slug}
+              campaignName={campaignName}
+              campaignOpen={campaignOpen}
+              user={user}
+              myGiftCount={myGiftCount}
+              giftsPerUser={giftsPerUser}
+              templates={templates}
+              templatesLoadError={templatesLoadError}
+              onRetryTemplates={loadTemplates}
+              isInApp={isInApp}
+              onSignIn={handleSignIn}
+              onSuccess={handleGiftCreated}
+              onUserUpdated={handleUserUpdated}
+              onClose={handleCloseCreateGift}
+              returnFocusRef={createGiftBtnRef}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* ── Leaderboard dialog */}
       {showLeaderboard && (
-        <Suspense fallback={null}>
-          <Leaderboard
-            gifts={mergedGifts}
-            onClose={handleCloseLeaderboard}
-            onOpenGift={handleOpenExternalGift}
-            returnFocusRef={leaderboardBtnRef}
-          />
-        </Suspense>
+        <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
+          <Suspense fallback={null}>
+            <Leaderboard
+              gifts={mergedGifts}
+              onClose={handleCloseLeaderboard}
+              onOpenGift={handleOpenExternalGift}
+              returnFocusRef={leaderboardBtnRef}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* ── All Gifts dialog */}
       {showAllGifts && (
-        <Suspense fallback={null}>
-          <AllGifts
-            slug={slug}
-            onClose={handleCloseAllGifts}
-            onOpenGift={handleOpenExternalGift}
-            returnFocusRef={allGiftsBtnRef}
-          />
-        </Suspense>
+        <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
+          <Suspense fallback={null}>
+            <AllGifts
+              slug={slug}
+              onClose={handleCloseAllGifts}
+              onOpenGift={handleOpenExternalGift}
+              returnFocusRef={allGiftsBtnRef}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* ── My Gifts dialog */}
       {showMyGifts && (
-        <Suspense fallback={null}>
-          <MyGifts
-            slug={slug}
-            onClose={handleCloseMyGifts}
-            onSignOut={handleSignOut}
-            onOpenGift={handleOpenExternalGift}
-            onGiftDeleted={handleGiftDeleted}
-            returnFocusRef={myGiftsBtnRef}
-          />
-        </Suspense>
+        <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
+          <Suspense fallback={null}>
+            <MyGifts
+              slug={slug}
+              onClose={handleCloseMyGifts}
+              onSignOut={handleSignOut}
+              onOpenGift={handleOpenExternalGift}
+              onGiftDeleted={handleGiftDeleted}
+              onLogoutError={(msg) => setPostSignoutError(msg)}
+              returnFocusRef={myGiftsBtnRef}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {/* ── Post-signout error (shown after account deletion with failed logout) */}
+      {postSignoutError && (
+        <div role="alert" className="noel-page-post-signout-error" style={{ position: 'fixed', bottom: '5rem', left: '50%', transform: 'translateX(-50%)', background: '#fef2f2', border: '1px solid #ef4444', borderRadius: '0.5rem', padding: '0.75rem 1rem', zIndex: 60, maxWidth: '90vw', textAlign: 'center' }}>
+          <span>{postSignoutError}</span>
+          <button type="button" aria-label="Đóng thông báo" style={{ marginLeft: '0.75rem', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1rem' }} onClick={() => setPostSignoutError(null)}>✕</button>
+        </div>
       )}
     </div>
   )

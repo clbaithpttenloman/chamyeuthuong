@@ -60,9 +60,11 @@ export default function AllGifts({
   useDialog({ dialogRef, onCloseRef, returnFocusRef })
 
   // ── Paging state ─────────────────────────────────────────────────────
-  const [state, dispatch] = useReducer(pagingReducer<NoelGiftFlat>, undefined, () =>
-    initialPagingState<NoelGiftFlat>('hearts'),
-  )
+  // Start with loading:true to prevent a flash of "empty" before the first fetch lands.
+  const [state, dispatch] = useReducer(pagingReducer<NoelGiftFlat>, undefined, () => ({
+    ...initialPagingState<NoelGiftFlat>('hearts'),
+    loading: true,
+  }))
   const ridRef = useRef(0)
 
   // Fetch a specific page; uses ridRef for stale-response guard

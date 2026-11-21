@@ -83,7 +83,9 @@ export function initialPagingState<T>(tab: 'hearts' | 'new' = 'hearts'): PagingS
 export function pagingReducer<T>(state: PagingState<T>, action: PagingAction<T>): PagingState<T> {
   switch (action.type) {
     case 'tab':
-      // Reset everything; new tab starts at page 1.
+      // Same tab → no-op (referential equality lets React bail out).
+      if (action.tab === state.tab) return state
+      // Different tab: reset everything; new tab starts at page 1.
       return initialPagingState<T>(action.tab)
 
     case 'start':

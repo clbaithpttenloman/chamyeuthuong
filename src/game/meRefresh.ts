@@ -17,6 +17,27 @@
  * @param now  Current timestamp in epoch ms (use Date.now() in production).
  * @returns    Milliseconds until the next 17:00:00 UTC, always > 0.
  */
+/**
+ * Returns an array of `n` successive Vietnam midnight delays from `now`.
+ *
+ * delays[0] = ms until the first midnight from `now`.
+ * delays[1] = ms until the second midnight (always ~24 h).
+ * Useful for self-rescheduling timers.
+ *
+ * @param now  Current epoch ms.
+ * @param n    Number of delays to compute.
+ */
+export function nextMidnightDelays(now: number, n: number): number[] {
+  const delays: number[] = []
+  let t = now
+  for (let i = 0; i < n; i++) {
+    const ms = msUntilVietnamMidnight(t)
+    delays.push(ms)
+    t += ms
+  }
+  return delays
+}
+
 export function msUntilVietnamMidnight(now: number): number {
   const d = new Date(now)
   // Find the next occurrence of 17:00:00 UTC

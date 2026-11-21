@@ -79,6 +79,7 @@ import {
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  shouldSuppressClick,
   clearClickSuppression,
   type GestureState,
 } from './gesture.ts'
@@ -112,6 +113,23 @@ export interface TreeRect {
   y: number  // px from scene top
   w: number  // px
   h: number  // px
+}
+
+/**
+ * Returns true when the share-link snap to `focusPublicId` should be attempted.
+ * The snap is a one-shot operation: once it succeeds (`snapped=true`) it never re-fires.
+ * It fires as soon as the target gift's slot is available in the slot map.
+ */
+export function shouldSnap({
+  focusPublicId,
+  snapped,
+  slotMapHas,
+}: {
+  focusPublicId: string | undefined
+  snapped: boolean
+  slotMapHas: boolean
+}): boolean {
+  return !snapped && !!focusPublicId && slotMapHas
 }
 
 /**
@@ -202,6 +220,8 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   // slotByPublicId in their dep arrays — prevents intro re-spin and re-snap on
   // every poll cycle when gifts change.
   const slotByPublicIdRef = useRef(new Map<string, Slot>())
+  // Tracks whether the focusPublicId snap has already fired (one-shot).
+  const snappedRef = useRef(false)
   useEffect(() => {
     const m = new Map<string, Slot>()
     for (const g of treeGifts) {
@@ -209,7 +229,17 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       if (s) m.set(g.publicId, s)
     }
     slotByPublicIdRef.current = m
-  }, [treeGifts, slots])
+    // Retry snap: the gift may arrive in the tree AFTER mount (share-link visits).
+    // shouldSnap is pure and guards against double-snap via snappedRef.
+    if (shouldSnap({ focusPublicId, snapped: snappedRef.current, slotMapHas: !!focusPublicId && m.has(focusPublicId) })) {
+      const slot = m.get(focusPublicId!)
+      if (slot) {
+        snappedRef.current = true
+        spinRef.current.state.velocity = 0
+        spinRef.current.state.phi = spinRef.current.targetFor(slot.theta)
+      }
+    }
+  }, [treeGifts, slots, focusPublicId])
 
   // ── Layout: tree rect + star + boxes + ornament sizes ─────────────────────
 
@@ -348,11 +378,16 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   // ── focusPublicId: rotate to front ONCE on mount ───────────────────────
   // Dep: [focusPublicId] only — slotByPublicIdRef read via ref so slot-map
   // updates (from polls) don't re-trigger the snap.
+  // If the gift is not in the slot map yet (tree hasn't loaded), the slot-map
+  // effect above retries on each poll until it succeeds (snappedRef guards
+  // against double-snap between this effect and the slot-map effect).
 
   useEffect(() => {
     if (!focusPublicId) return
     const slot = slotByPublicIdRef.current.get(focusPublicId)
     if (!slot) return
+    if (snappedRef.current) return
+    snappedRef.current = true
     const spin = spinRef.current
     spin.state.velocity = 0
     spin.state.phi = spin.targetFor(slot.theta)
@@ -406,9 +441,9 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
 
   // ── Gift activation (click / Enter) ───────────────────────────────────
 
-  const handleGiftClick = useCallback((gift: TreeGift) => {
-    // Suppress click that follows a drag (pointer-capture synthesises a click)
-    if (gestureRef.current.suppressClick) {
+  const handleGiftClick = useCallback((gift: TreeGift, detail: number) => {
+    // Suppress click that follows a drag — but NOT keyboard Enter/Space (detail=0)
+    if (shouldSuppressClick(gestureRef.current, detail)) {
       gestureRef.current = clearClickSuppression(gestureRef.current)
       return
     }
@@ -508,7 +543,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             data-public-id={gift.publicId}
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
             data-rank={String(gift.rank)}
-            onClick={() => handleGiftClick(gift)}
+            onClick={(e) => handleGiftClick(gift, e.detail)}
             onFocus={() => handleOrnamentFocus(gift)}
           >
             <img
@@ -559,8 +594,8 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             className="noel-box-btn"
             data-public-id={gift.publicId}
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
-            onClick={() => {
-              if (gestureRef.current.suppressClick) {
+            onClick={(e) => {
+              if (shouldSuppressClick(gestureRef.current, e.detail)) {
                 gestureRef.current = clearClickSuppression(gestureRef.current)
                 return
               }

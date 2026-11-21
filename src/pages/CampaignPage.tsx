@@ -28,6 +28,7 @@ export default function CampaignPage() {
   const [notFound, setNotFound] = useState(false)
   const [networkError, setNetworkError] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [retryCount, setRetryCount] = useState(0)
 
   useEffect(() => {
     if (!slug) return
@@ -51,7 +52,7 @@ export default function CampaignPage() {
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [slug])
+  }, [slug, retryCount])
 
   if (loading) {
     return (
@@ -61,18 +62,27 @@ export default function CampaignPage() {
     )
   }
 
-  if (notFound || !campaign || !slug) {
+  // Check network error before not-found so a transient failure shows a retry option
+  // rather than a misleading "not found" message.
+  if (networkError) {
     return (
       <section className="wall-hero">
-        <p>Không tìm thấy chiến dịch.</p>
+        <p>Không kết nối được. Thử lại.</p>
+        <button
+          type="button"
+          className="btn-primary-link"
+          onClick={() => setRetryCount((c) => c + 1)}
+        >
+          Thử lại
+        </button>
       </section>
     )
   }
 
-  if (networkError) {
+  if (notFound || !campaign || !slug) {
     return (
       <section className="wall-hero">
-        <p>Lỗi kết nối, vui lòng thử lại.</p>
+        <p>Không tìm thấy chiến dịch.</p>
       </section>
     )
   }

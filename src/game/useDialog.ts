@@ -29,7 +29,13 @@
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type React from 'react'
-import { getFocusable, tabNext, type DialogLayer } from './dialogFocus.ts'
+import { getFocusable, tabNext, dialogStackPush, dialogStackPop, dialogStackTop, type DialogLayer } from './dialogFocus.ts'
+
+// ── Module-level dialog stack ─────────────────────────────────────────────────
+// Tracks all currently-mounted dialogs by their unique id symbol.
+// Only the topmost dialog handles keyboard events (Esc / Tab).
+// Operations: push on mount, pop on unmount (remove-on-unmount lifecycle).
+let _dialogStack: readonly symbol[] = []
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -68,6 +74,19 @@ interface StackEntry extends DialogLayer {
 export function useDialog({ dialogRef, onCloseRef, returnFocusRef }: UseDialogOpts): UseDialogResult {
   const layerStack = useRef<StackEntry[]>([])
 
+  // Each dialog instance gets a unique id for the global stack.
+  const myIdRef = useRef<symbol>(Symbol('dialog'))
+
+  // Register this dialog in the global stack on mount; remove on unmount.
+  // (This is the "remove-on-unmount" lifecycle from the pure stack design.)
+  useEffect(() => {
+    const id = myIdRef.current
+    _dialogStack = dialogStackPush(_dialogStack, id)
+    return () => {
+      _dialogStack = dialogStackPop(_dialogStack, id) as symbol[]
+    }
+  }, [])
+
   // Focus dialog on open; return focus on unmount.
   // Uses a separate effect so the cleanup (focus return) is decoupled from the
   // keydown handler (which must run only once, on mount).
@@ -83,6 +102,10 @@ export function useDialog({ dialogRef, onCloseRef, returnFocusRef }: UseDialogOp
   // Install keydown trap ONCE on mount.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Only the topmost dialog handles keyboard events.
+      // This prevents Esc in the sign-in dialog from also closing the GiftSheet beneath it.
+      if (dialogStackTop(_dialogStack) !== myIdRef.current) return
+
       if (e.key === 'Escape') {
         e.preventDefault()
         const top = layerStack.current[layerStack.current.length - 1]

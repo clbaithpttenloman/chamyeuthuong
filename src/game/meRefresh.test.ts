@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { msUntilVietnamMidnight, reconcileHeartRejection } from './meRefresh.ts'
+import { msUntilVietnamMidnight, nextMidnightDelays, reconcileHeartRejection } from './meRefresh.ts'
 
 // ── msUntilVietnamMidnight ────────────────────────────────────────────────────
 
@@ -140,5 +140,43 @@ describe('reconcileHeartRejection — unknown codes', () => {
   it('handles empty string code gracefully', () => {
     const result = reconcileHeartRejection('', 'z', BASE.heartedIds, BASE.heartsLeft, BASE.campaignOpen)
     expect(result.needsRefreshMe).toBe(false)
+  })
+})
+
+// ── nextMidnightDelays ────────────────────────────────────────────────────────
+
+describe('nextMidnightDelays', () => {
+  it('returns n elements', () => {
+    const now = Date.UTC(2024, 11, 20, 12, 0, 0)
+    expect(nextMidnightDelays(now, 3)).toHaveLength(3)
+  })
+
+  it('first delay equals msUntilVietnamMidnight(now)', () => {
+    const now = Date.UTC(2024, 11, 20, 12, 0, 0)
+    const [d0] = nextMidnightDelays(now, 1)
+    expect(d0).toBe(msUntilVietnamMidnight(now))
+  })
+
+  it('second delay is exactly 24 hours (consecutive midnights are always 24 h apart)', () => {
+    const now = Date.UTC(2024, 11, 20, 12, 0, 0)
+    const [, d1] = nextMidnightDelays(now, 2)
+    expect(d1).toBe(24 * 3_600_000)
+  })
+
+  it('returns [] for n=0', () => {
+    expect(nextMidnightDelays(Date.UTC(2024, 11, 20, 12, 0, 0), 0)).toEqual([])
+  })
+
+  it('all delays are positive', () => {
+    const now = Date.UTC(2024, 11, 20, 12, 0, 0)
+    for (const d of nextMidnightDelays(now, 5)) {
+      expect(d).toBeGreaterThan(0)
+    }
+  })
+
+  it('third delay is also 24 hours', () => {
+    const now = Date.UTC(2024, 11, 20, 12, 0, 0)
+    const [, , d2] = nextMidnightDelays(now, 3)
+    expect(d2).toBe(24 * 3_600_000)
   })
 })
