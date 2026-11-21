@@ -9,7 +9,7 @@
   //
   // Phase 1 secrets (set via `wrangler secret put`):
   //   NONCE_KEY    — 32+ byte random key for HMAC-signing sign-in nonces (required)
-  //   SUB_HMAC_KEY — reserved for Phase 2 ban tombstones (not read yet)
+  //   SUB_HMAC_KEY — required (account deletion + ban tombstones)
   //   IP_HMAC_KEY  — reserved for Phase 2 abuse handling (not read yet)
   //
   // First-admin bootstrap (email header, one-time):
@@ -46,7 +46,7 @@
     "ADMIN_LEGACY_LOGIN": "1"
   },
   // Secrets required for deploy (set via `wrangler secret put <NAME>`):
-  //   NONCE_KEY, SUB_HMAC_KEY, IP_HMAC_KEY
+  //   NONCE_KEY, SUB_HMAC_KEY (required Phase 2: account deletion + ban tombstones), IP_HMAC_KEY
   // Per-IP rate limits (approximate, per Cloudflare location).
   // PUBLIC_IP_LIMIT (120/60 s): guards /api/wall, /api/templates, /api/wishes, /api/about.
   // SUBMIT_IP_LIMIT (20/60 s): guards POST /api/cards (student card submissions).

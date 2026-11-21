@@ -30,6 +30,7 @@ import {
   issueNonce,
   checkNonce,
   getCookieValue,
+  hmacSha256Hex,
 } from './session.ts'
 import { ensureSchema } from './schema.ts'
 import type { D1 } from './types.ts'
@@ -52,6 +53,11 @@ type MeEnv = {
   /** GET /api/auth/nonce: 3,000/60 s per IP (PUBLIC_READ_LIMIT namespace). */
   PUBLIC_READ_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_LEGACY_LOGIN?: string
+  /**
+   * Phase 2 (required): HMAC key for ban tombstones in banned_identity.
+   * Missing key fails closed for banned users (DELETE /api/me returns non-200).
+   */
+  SUB_HMAC_KEY?: string
 }
 
 /** Security headers for all /api/auth/* and /api/me responses (no CORS). */
@@ -272,6 +278,26 @@ export async function handleAuth(
     // Upsert user
     const userRow = await upsertUser(env.DB, claims.sub, claims.email, claims.hd)
 
+    // Phase 2: check banned_identity tombstone (ban evasion prevention, ADR-8).
+    // A banned user who deleted their account has a tombstone keyed by HMAC(SUB_HMAC_KEY, sub).
+    // On next sign-in, recreate the account as banned so they cannot evade the ban.
+    // Skip silently when SUB_HMAC_KEY is absent (tombstones cannot exist without the key).
+    // Never log sub.
+    if (env.SUB_HMAC_KEY) {
+      const subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, claims.sub)
+      const tombstone = await env.DB
+        .prepare('SELECT 1 FROM banned_identity WHERE sub_hmac = ?')
+        .bind(subHmac)
+        .first<{ result: number }>()
+      if (tombstone) {
+        await env.DB
+          .prepare('UPDATE app_user SET banned = 1 WHERE google_sub = ?')
+          .bind(claims.sub)
+          .run()
+        userRow.banned = 1
+      }
+    }
+
     // Session fixation: revoke presented session before issuing new one
     await revokeSession(request, env.DB)
 
@@ -479,16 +505,80 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
   }
 
   if (request.method === 'DELETE') {
-    // Security item 3: account deletion. Deletes all sessions + user row in one batch.
+    // Phase 2: full account deletion (ADR-8, FR-13).
+    // Refused while any gift is hidden (pending_review); writes a tombstone for banned users.
     if (!csrfGuard(request)) return failResp('forbidden', 403)
     const session = await readSession(request, env.DB)
     if (!session) return failResp('unauthorized', 401)
     if (!(await withinUserLimit(env.USER_WRITE_LIMIT, request, session.userId))) return failResp('rate_limited', 429)
-    // Delete sessions and user row explicitly in the same batch (do not rely on CASCADE state).
-    await env.DB.batch([
+
+    // Load user (need google_sub for tombstone, banned for key-required check).
+    const userRow = await env.DB
+      .prepare('SELECT google_sub, banned FROM app_user WHERE id = ?')
+      .bind(session.userId)
+      .first<{ google_sub: string; banned: number }>()
+    if (!userRow) return failResp('unauthorized', 401)
+
+    // Refused while any own gift is hidden (evidence cannot be removed — ADR-8, AC-14).
+    const pendingRow = await env.DB
+      .prepare(
+        "SELECT 1 FROM gift WHERE user_id = ? AND status IN ('hidden_auto','hidden_admin') LIMIT 1",
+      )
+      .bind(session.userId)
+      .first()
+    if (pendingRow) return failResp('pending_review', 409)
+
+    // Tombstone for banned users (fail closed if SUB_HMAC_KEY is missing — security: a banned
+    // user must not silently escape the ban because the key was removed by mistake).
+    // Never log sub.
+    let subHmac: string | null = null
+    if (userRow.banned) {
+      if (!env.SUB_HMAC_KEY) {
+        console.error('auth: misconfigured')
+        return failResp('misconfigured', 500)
+      }
+      subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, userRow.google_sub)
+    }
+
+    // Pre-fetch gift IDs this user hearted (need IDs before deleting hearts, for recount).
+    const { results: heartRows } = await env.DB
+      .prepare('SELECT DISTINCT gift_id FROM heart WHERE user_id = ?')
+      .bind(session.userId)
+      .all<{ gift_id: number }>()
+    const heartedGiftIds = heartRows.map((r) => r.gift_id)
+
+    // One D1 batch for the entire deletion (ADR-8: "delete the user's gifts, hearts and reports,
+    // recount affected gifts, revoke sessions"):
+    //   1. Write tombstone if banned.
+    //   2. Delete own gift rows (gift.user_id FK has no CASCADE, so rows must be deleted before the user).
+    //      Cascade on heart.gift_id and report.gift_id removes hearts/reports on own gifts.
+    //   3. Delete hearts the user gave to other gifts (not cascade-deleted in step 2).
+    //   4. Recount heart_count for every gift they had hearted (after hearts are deleted in step 3).
+    //   5. Delete reports the user filed on others' gifts (not cascade-deleted in step 2).
+    //   6. Delete sessions (also covered by app_user CASCADE, but explicit for clarity).
+    //   7. Delete the user row (remaining session/heart/report rows on this user_id are
+    //      cascade-deleted by the FKs on those tables, but all should be gone by now).
+    const stmts = [
+      ...(subHmac !== null
+        ? [
+            env.DB.prepare(
+              'INSERT OR IGNORE INTO banned_identity (sub_hmac, created_at) VALUES (?, ?)',
+            ).bind(subHmac, new Date().toISOString()),
+          ]
+        : []),
+      env.DB.prepare('DELETE FROM gift WHERE user_id = ?').bind(session.userId),
+      env.DB.prepare('DELETE FROM heart WHERE user_id = ?').bind(session.userId),
+      ...heartedGiftIds.map((giftId) =>
+        env.DB.prepare(
+          'UPDATE gift SET heart_count = (SELECT COUNT(*) FROM heart WHERE gift_id = ?) WHERE id = ?',
+        ).bind(giftId, giftId),
+      ),
+      env.DB.prepare('DELETE FROM report WHERE user_id = ?').bind(session.userId),
       env.DB.prepare('DELETE FROM session WHERE user_id = ?').bind(session.userId),
       env.DB.prepare('DELETE FROM app_user WHERE id = ?').bind(session.userId),
-    ])
+    ]
+    await env.DB.batch(stmts)
+
     const cleared = clearCookie(SESSION_COOKIE)
     return resp({ ok: true }, 200, [cleared])
   }

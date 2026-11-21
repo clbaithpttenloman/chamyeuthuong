@@ -128,7 +128,7 @@ The sign-in flow uses three secrets to prevent replay and CSRF attacks:
 | Secret | Purpose | Length | Phase 1 Use |
 |--------|---------|--------|-----------|
 | `NONCE_KEY` | Signs nonces for sign-in requests (5 min timeout per nonce) | ≥ 32 bytes | Used for `/api/auth/nonce` and POST validation |
-| `SUB_HMAC_KEY` | Hashes Google subs in ban tombstones (never rotated during a campaign) | ≥ 32 bytes | Reserved; used in Phase 2 |
+| `SUB_HMAC_KEY` | Hashes Google subs in ban tombstones (never rotated during a campaign) | ≥ 32 bytes | Required in Phase 2: account deletion + ban tombstones |
 | `IP_HMAC_KEY` | Will hash IPs for abuse handling | ≥ 32 bytes | Reserved; used in Phase 2 |
 
 ### Generate Secrets (Non-Interactive)
@@ -160,7 +160,7 @@ IP_HMAC_KEY=abcdefedcba0123456789abcdefedcba0123456789abcdefedcba0123456789
 - **Missing `GOOGLE_CLIENT_ID`**: sign-in returns 401 `unauthorized`, logs `auth: misconfigured`
 - **Missing `NONCE_KEY`**: sign-in returns 401 `unauthorized`, logs `auth: misconfigured`
 - **Missing `NONCE_KEY` on `GET /api/auth/nonce`**: 503, so the button cannot load.
-- **`SUB_HMAC_KEY`, `IP_HMAC_KEY`**: not read in Phase 1; setting them now is harmless and saves a step in Phase 2.
+- **`SUB_HMAC_KEY`**: required in Phase 2. Missing key fails closed for banned users attempting to delete their account (returns 500, deletion refused). Normal (non-banned) deletions proceed without it. `IP_HMAC_KEY` is not read yet.
 
 Only `NONCE_KEY` (secret) and `GOOGLE_CLIENT_ID` (var) are required for Phase 1. Local dev works with `.dev.vars` placeholders.
 
@@ -271,7 +271,7 @@ No ongoing action needed. Sessions are 14 days; signed-in users stay logged in.
 
 - [ ] Google Cloud OAuth client created with correct JavaScript origins
 - [ ] `GOOGLE_CLIENT_ID` set in `wrangler.jsonc` (prod, staging)
-- [ ] `NONCE_KEY` secret set (`SUB_HMAC_KEY`, `IP_HMAC_KEY` optional until Phase 2)
+- [ ] `NONCE_KEY` secret set; `SUB_HMAC_KEY` required for Phase 2 (account deletion + ban tombstones); `IP_HMAC_KEY` optional until Phase 3
 - [ ] CSP headers in `public/_headers` verified (grep for `gsi/`)
 - [ ] Test flow: `/admin` → "Đăng nhập bằng Google" → choose account → signed in (the button is only on `/admin` in Phase 1)
 - [ ] Test admin: admin email → sign in → admin dashboard loads

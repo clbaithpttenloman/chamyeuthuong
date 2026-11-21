@@ -52,7 +52,8 @@ export type Env = {
   GOOGLE_CLIENT_ID?: string
   /** Secret for HMAC-signing nonces (32+ bytes). Set via `wrangler secret put NONCE_KEY`. */
   NONCE_KEY?: string
-  /** Secret for HMAC-hashing Google subs in ban tombstones. Set via `wrangler secret put SUB_HMAC_KEY`. */
+  /** Secret for HMAC-hashing Google subs in ban tombstones. Set via `wrangler secret put SUB_HMAC_KEY`.
+   *  Required in Phase 2: account deletion + ban tombstones. Missing key fails closed for banned users. */
   SUB_HMAC_KEY?: string
   /** Secret for HMAC-hashing IP addresses. Set via `wrangler secret put IP_HMAC_KEY`. */
   IP_HMAC_KEY?: string

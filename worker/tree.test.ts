@@ -43,7 +43,7 @@
  *          heart_count, report_count, status, status_before_ban, created_at
  *   heart: gift_id, user_id, day, created_at  (PK: gift_id, user_id)
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 // --- Module under test does not exist yet; import triggers red phase ---
 import { handleTree } from './tree.ts'
 import { testDb, type D1 } from './testDb.ts'
@@ -689,8 +689,16 @@ describe('GET /api/campaigns/<slug>/tree — byte-identical body regardless of s
     const anonReq = treeReq('noel')
     const signedReq = treeReq('noel', '', `${SESSION_COOKIE_NAME}=${rawToken}`)
 
-    const r1 = await handleTree(anonReq, makeTreeEnv(db1))
-    const r2 = await handleTree(signedReq, makeTreeEnv(db2))
+    // Freeze Date so both reads stamp the same asOf: this test is about the cookie, not timing.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-12-12T03:00:00.000Z'))
+    let r1: Response, r2: Response
+    try {
+      r1 = await handleTree(anonReq, makeTreeEnv(db1))
+      r2 = await handleTree(signedReq, makeTreeEnv(db2))
+    } finally {
+      vi.useRealTimers()
+    }
 
     const body1 = await r1.text()
     const body2 = await r2.text()

@@ -45,7 +45,7 @@ async function sha256Hex(raw: string): Promise<string> {
 }
 
 /** Compute HMAC-SHA256 hex over a message using a string key. */
-async function hmacSha256Hex(keyStr: string, message: string): Promise<string> {
+export async function hmacSha256Hex(keyStr: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(keyStr),
