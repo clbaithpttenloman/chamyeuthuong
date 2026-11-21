@@ -37,7 +37,10 @@ function submitEnv(db: D1) {
 
 const VALID_TOKEN = 'tok1234567890abc'
 
-/** Insert campaign 1 (slug 20-11, teacher_cards) with configurable status and dates. */
+/** Insert campaign 1 (slug 20-11, teacher_cards) with configurable status and dates.
+ * Uses INSERT OR REPLACE so it works even after testDb() pre-inserted campaign 1
+ * (Fix Group 5a Accept #1: fresh DBs now always get campaign 1).
+ */
 async function seedCampaign(
   db: D1,
   opts: {
@@ -65,7 +68,7 @@ async function seedCampaign(
   } = opts
   await db
     .prepare(
-      'INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ' +
+      'INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ' +
         "VALUES (?, ?, ?, ?, ?, ?, '{}', '{}', ?, ?, ?, datetime('now'), 'test')",
     )
     .bind(id, slug, kind, name, tagline, content, startsAt, endsAt, status)
@@ -118,7 +121,10 @@ beforeEach(() => {
 // ---- GET /api/campaigns/active ----
 
 describe('handleCampaigns — GET /api/campaigns/active', () => {
-  it('no active campaign → 404 { error: "not_found" }', async () => {
+  it('no campaigns at all → 404 { error: "not_found" }', async () => {
+    // testDb() now includes campaign 1 as active (Fix Group 5a Accept #1: fresh DBs get campaign 1).
+    // Delete it to test the true "no campaigns" edge case (FR-3 fallback also needs no closed campaign).
+    await db.prepare('DELETE FROM campaign').run()
     const r = await handleCampaigns(
       new Request('https://x/api/campaigns/active'),
       campaignsEnv(db),
@@ -438,7 +444,9 @@ describe('POST /api/cards — 409 campaign_closed when campaign 1 is not effecti
   })
 
   it('no campaign 1 in DB → 409 campaign_closed (treats missing as closed)', async () => {
-    // Campaign table exists but no campaign 1 row
+    // testDb() has campaign 1 active. Delete it to simulate "campaign table exists but no campaign 1 row".
+    // (Fix Group 5a Accept #1: adjust tests that assumed no campaign on fresh DB)
+    await db.prepare('DELETE FROM campaign WHERE id = 1').run()
     const { tmplId } = await seedTeacherAndTemplate(db)
     const r = await handleSubmit(
       submitReq({ teacherToken: VALID_TOKEN, templateId: tmplId, message: 'Chúc thầy' }),
@@ -486,7 +494,7 @@ describe('handleAdminCampaigns — POST accepts snake_case body the editor sends
         settings: '{}',
         starts_at: '2026-12-01T00:00:00Z',
         ends_at: '2026-12-31T23:59:59Z',
-        status: 'draft',
+        // No status field: POST always creates as draft (Fix Group 5a Accept #3)
       }),
       campaignsEnv(db),
       'admin@test.com',
@@ -844,14 +852,15 @@ describe('handleAdminCampaigns — /close endpoint', () => {
 
 describe('handleAdminCampaigns — GET /api/admin/campaigns/<id> returns full row', () => {
   it('returns content, settings, theme_colors fields', async () => {
+    // Use id=2 to avoid conflict with campaign 1 that testDb() inserts (Fix Group 5a Accept #1)
     await db
       .prepare(
-        'INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ' +
-        "VALUES (1, '20-11', 'teacher_cards', 'Test', '', '{\"k\":\"v\"}', '{\"primary\":\"#abc\"}', '{\"x\":1}', '2026-01-01T00:00:00Z', '2026-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
+        'INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ' +
+        "VALUES (2, 'admin-preview', 'teacher_cards', 'Test', '', '{\"k\":\"v\"}', '{\"primary\":\"#abc\"}', '{\"x\":1}', '2026-01-01T00:00:00Z', '2026-12-31T23:59:59Z', 'draft', datetime('now'), 'test')",
       )
       .run()
     const r = await handleAdminCampaigns(
-      new Request('https://x/api/admin/campaigns/1', { method: 'GET' }),
+      new Request('https://x/api/admin/campaigns/2', { method: 'GET' }),
       campaignsEnv(db),
       'admin@test.com',
     )
@@ -860,7 +869,7 @@ describe('handleAdminCampaigns — GET /api/admin/campaigns/<id> returns full ro
     expect(row.content).toBe('{"k":"v"}')
     expect(row.theme_colors).toBe('{"primary":"#abc"}')
     expect(row.settings).toBe('{"x":1}')
-    expect(row.slug).toBe('20-11')
+    expect(row.slug).toBe('admin-preview')
     expect(row.kind).toBe('teacher_cards')
   })
 })
@@ -892,7 +901,8 @@ describe('handleCampaigns — FR-3 fallback (no active → most recent closed)',
   })
 
   it('no campaigns at all → 404', async () => {
-    // DB is empty of campaigns (beforeEach creates a fresh db)
+    // testDb() has campaign 1 active (Fix Group 5a Accept #1). Delete it for the true empty case.
+    await db.prepare('DELETE FROM campaign').run()
     const r = await handleCampaigns(
       new Request('https://x/api/campaigns/active'),
       campaignsEnv(db),
@@ -938,5 +948,286 @@ describe('handleCampaigns — draft campaigns not public', () => {
       campaignsEnv(db),
     )
     expect(r.status).toBe(200)
+  })
+})
+
+// ===================================================================
+// Fix Group 5a — new failing tests
+// ===================================================================
+
+// ---- Accept #2: unknown id → 404 ----
+
+describe('Fix Group 5a — Accept #2: activate/close/PATCH/DELETE unknown id → 404', () => {
+  it('POST /activate on unknown id → 404 not_found', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/999/activate', { method: 'POST' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+
+  it('activate on unknown id leaves the current active campaign active', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/999/activate', { method: 'POST' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    // Campaign 1 must still be active — not closed by the failed activate
+    const row = await db.prepare('SELECT status FROM campaign WHERE id = 1').first<{ status: string }>()
+    expect(row?.status).toBe('active')
+  })
+
+  it('POST /close on unknown id → 404 not_found', async () => {
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/999/close', { method: 'POST' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+
+  it('PATCH on unknown id → 404 not_found', async () => {
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/999', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'New Name' }),
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+
+  it('DELETE on unknown id → 404 not_found', async () => {
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/999', { method: 'DELETE' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('not_found')
+  })
+})
+
+// ---- Accept #3: POST with status → 400 ----
+
+describe('Fix Group 5a — Accept #3: POST with status → 400', () => {
+  it('POST with status: "closed" → 400 bad_request (status disallowed on POST)', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        status: 'closed',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('POST with status: "draft" → 400 bad_request (status disallowed on POST)', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+        status: 'draft',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('POST without status creates campaign as draft', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(201)
+    const { id } = await r.json() as { id: number }
+    const row = await db.prepare('SELECT status FROM campaign WHERE id = ?').bind(id).first<{ status: string }>()
+    expect(row?.status).toBe('draft')
+  })
+})
+
+// ---- Accept #4: name/tagline validation ----
+
+describe('Fix Group 5a — Accept #4: name/tagline validation', () => {
+  it('POST with non-string name (number) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 123,
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('POST with name > 120 codepoints → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'N'.repeat(121),
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('POST with name ≤ 120 codepoints → not 400 (valid)', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'N'.repeat(120),
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).not.toBe(400)
+  })
+
+  it('POST with tagline > 200 codepoints → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'test-cam',
+        kind: 'teacher_cards',
+        name: 'Test',
+        tagline: 'T'.repeat(201),
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH with name > 120 codepoints → 400', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'draft' })
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', { name: 'N'.repeat(121) }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH with tagline > 200 codepoints → 400', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'draft' })
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', { tagline: 'T'.repeat(201) }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH with only ends_at before existing starts_at → 400', async () => {
+    await seedCampaign(db, {
+      id: 1, slug: '20-11', status: 'draft',
+      startsAt: '2026-06-01T00:00:00Z',
+      endsAt: '2026-12-31T00:00:00Z',
+    })
+    // Send only ends_at earlier than stored starts_at
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', {
+        ends_at: '2026-01-01T00:00:00Z',  // before stored starts_at 2026-06-01
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('PATCH with only starts_at after existing ends_at → 400', async () => {
+    await seedCampaign(db, {
+      id: 1, slug: '20-11', status: 'draft',
+      startsAt: '2026-01-01T00:00:00Z',
+      endsAt: '2026-06-01T00:00:00Z',
+    })
+    // Send only starts_at later than stored ends_at
+    const r = await handleAdminCampaigns(
+      adminPatch('https://x/api/admin/campaigns/1', {
+        starts_at: '2026-12-01T00:00:00Z',  // after stored ends_at 2026-06-01
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+})
+
+// ---- Accept #9: extra path segments and non-GET ----
+
+describe('Fix Group 5a — Accept #9: public campaign reads validation', () => {
+  it('GET /api/campaigns/active/extra → 404', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/active/extra'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(404)
+  })
+
+  it('GET /api/campaigns/20-11/extra → 404', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/20-11/extra'),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(404)
+  })
+
+  it('POST /api/campaigns/active → 405 method', async () => {
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/active', { method: 'POST' }),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(405)
+    expect((await r.json() as { error: string }).error).toBe('method')
+  })
+
+  it('POST /api/campaigns/20-11 → 405 method', async () => {
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    const r = await handleCampaigns(
+      new Request('https://x/api/campaigns/20-11', { method: 'POST' }),
+      campaignsEnv(db),
+    )
+    expect(r.status).toBe(405)
+    expect((await r.json() as { error: string }).error).toBe('method')
   })
 })

@@ -31,12 +31,16 @@ export type Env = {
   ADMIN_FAIL_LIMIT: RateLimit
   /** Rate limit for public image fetches: 300 req/60 s per IP, namespace 2003. */
   IMAGE_IP_LIMIT: RateLimit
-  /** Rate limit for auth endpoints (failures): 300 req/60 s per IP. */
+  /** Rate limit for auth endpoints (failures): 300 req/60 s per IP. Auth_LIMIT counts failures only on sign-in; counts all requests on nonce. */
   AUTH_LIMIT?: RateLimit
+  /** Per-sub rate limit on successful sign-ins: 10 req/60 s per sub, namespace 2009. */
+  AUTH_SUB_LIMIT?: RateLimit
   /** Rate limit for session reads (GET /api/me, /api/me/gifts): 120 req/60 s per user. */
   USER_READ_LIMIT?: RateLimit
   /** Rate limit for session writes (PUT /api/me, DELETE, logout): 10 req/60 s per user. */
   USER_WRITE_LIMIT?: RateLimit
+  /** Rate limit for public campaign reads (cache misses): 3,000 req/60 s per IP, namespace 2010. */
+  PUBLIC_READ_LIMIT?: RateLimit
   /** Set to a specific email to restrict who can claim the first-admin bootstrap. */
   BOOTSTRAP_EMAIL?: string
   /** Set to '1' (only when BOOTSTRAP_EMAIL is unset) to allow any user to claim the first admin slot. */

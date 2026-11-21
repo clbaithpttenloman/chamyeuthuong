@@ -12,8 +12,9 @@ import type { D1Stmt } from './types.ts'
 
 // Statements a fresh (unseeded) database prepares on its first ensureSchema: the SCHEMA batch,
 // one column probe per upgradable table (teacher_profile, student_card, admin), the campaign upgrade
-// (7 statements: INSERT campaign 1 + 3×ADD COLUMN + 3×CREATE INDEX), one re-probe after the
-// campaign upgrade, the role-CHECK probe, the seed-flag probe, and the seed batch.
+// (7 statements: INSERT campaign 1 + 3×ADD COLUMN in CAMPAIGN_UPGRADE_SQLS, then 3×CREATE INDEX
+// in CAMPAIGN_INDEX_SQLS), one re-probe after the campaign upgrade, the role-CHECK probe,
+// the seed-flag probe, and the seed batch.
 const FRESH_COLD_START = SCHEMA.length + 13 + SEED_STATEMENT_COUNT
 
 // ---- SCHEMA shape ----
@@ -1750,14 +1751,8 @@ describe('campaign table — partial unique index (at most one active)', () => {
   it('inserting a second active campaign fails', async () => {
     const { db, sqlite } = testDb({ schema: false })
     await ensureSchema(db)
-    // First active insert
-    sqlite
-      .prepare(
-        "INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
-          "VALUES ('c1', 'teacher_cards', 'N', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
-      )
-      .run()
-    // Second active insert must fail
+    // campaign 1 is already active after ensureSchema (fresh DB, no WHERE EXISTS guard).
+    // A second active insert must fail — proves the one_active partial-unique-index.
     expect(() => {
       sqlite
         .prepare(
@@ -1887,7 +1882,8 @@ describe('ensureSchema — campaign upgrade from deployed schema (61107f8: font/
       .get() as { content: string } | undefined
     expect(row).toBeDefined()
     expect(() => JSON.parse(row!.content)).not.toThrow()
-    expect(JSON.parse(row!.content)).toEqual(SITE_HOME)
+    // Nested shape: { home: { kicker, heading, body } } (Fix Group 5a Accept #1)
+    expect(JSON.parse(row!.content)).toEqual({ home: SITE_HOME })
   })
 
   it('campaign 1 is effectively open on 2026-11-20T12:00:00Z (starts_at ≤ now ≤ ends_at)', async () => {
@@ -2047,5 +2043,40 @@ describe('ensureSchema — admin.google_sub upgrade (pre-Phase-1 admin table)', 
     expect(sqlite.prepare('SELECT email, google_sub FROM admin').all()).toEqual([
       { email: 'a@gmail.com', google_sub: null },
     ])
+  })
+})
+
+// ===================================================================
+// Fix Group 5a — Accept #1: Campaign 1 content shape
+// ===================================================================
+
+describe('Fix Group 5a — Accept #1: campaign 1 content is nested {home:{…}}', () => {
+  it('campaign 1 content on upgraded DB is { home: {...} } nested, not flat', async () => {
+    const { db, sqlite } = deployedDb()
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT content FROM campaign WHERE id = 1')
+      .get() as { content: string } | undefined
+    expect(row).toBeDefined()
+    const parsed = JSON.parse(row!.content) as Record<string, unknown>
+    // Nested shape: { home: { kicker, heading, body } }
+    expect(parsed).toHaveProperty('home')
+    expect((parsed.home as Record<string, unknown>).kicker).toBe(SITE_HOME.kicker)
+    // Must NOT be flat (no kicker at top level)
+    expect(parsed).not.toHaveProperty('kicker')
+  })
+
+  it('fresh DB (no prior templates) gets campaign 1 with nested home content after ensureSchema', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const row = sqlite
+      .prepare('SELECT slug, status, content FROM campaign WHERE id = 1')
+      .get() as { slug: string; status: string; content: string } | undefined
+    // Fresh DB should now get campaign 1 (no WHERE EXISTS guard)
+    expect(row).toBeDefined()
+    expect(row?.slug).toBe('20-11')
+    expect(row?.status).toBe('active')
+    const parsed = JSON.parse(row!.content) as Record<string, unknown>
+    expect(parsed).toEqual({ home: SITE_HOME })
   })
 })

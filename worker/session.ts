@@ -169,9 +169,14 @@ export async function revokeSession(request: Request, db: D1): Promise<void> {
  * Returns { nonce, cookie } where cookie is the ready-to-use Set-Cookie string.
  */
 export async function issueNonce(
-  env: { NONCE_KEY: string },
+  env: { NONCE_KEY: string | undefined },
   now: Date = new Date(),
 ): Promise<{ nonce: string; cookie: string }> {
+  // Optional #10: guard against missing NONCE_KEY (misconfiguration).
+  if (!env.NONCE_KEY) {
+    console.error('auth: misconfigured')
+    throw new Error('NONCE_KEY not configured')
+  }
   const rand = Array.from(crypto.getRandomValues(new Uint8Array(16)))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')

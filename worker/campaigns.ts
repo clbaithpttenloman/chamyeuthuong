@@ -153,15 +153,29 @@ const SELECT_CAMPAIGN =
  */
 export async function handleCampaigns(
   request: Request,
-  env: { DB: D1 },
+  env: { DB: D1; PUBLIC_READ_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> } },
 ): Promise<Response> {
   const { pathname } = new URL(request.url)
   const db = env.DB
+
+  // Accept #9: only GET is allowed for public campaign reads
+  if (request.method !== 'GET') return error('method')
+
+  // Accept #9: only /api/campaigns/active or /api/campaigns/<slug> — no extra segments
+  const pathParts = pathname.split('/').filter(Boolean)
+  if (pathParts.length !== 3) return error('not_found')
 
   // Memo key is the pathname; query string is ignored.
   const hit = memoGet(db, pathname)
   if (hit === null) return error('not_found')
   if (hit !== 'miss') return campaignResponse(hit)
+
+  // Accept #7: rate limit cache misses per IP (PUBLIC_READ_LIMIT, 3000/60s)
+  if (env.PUBLIC_READ_LIMIT) {
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
+    const rl = await env.PUBLIC_READ_LIMIT.limit({ key: ip })
+    if (!rl.success) return error('rate_limited')
+  }
 
   await ensureSchema(db)
 
@@ -224,12 +238,17 @@ export async function handleCampaigns(
 /**
  * Closes any currently active campaign and activates the given one in a single D1 batch.
  * This maintains the partial-unique-index invariant: at most one active campaign at a time.
+ * Returns 'not_found' if the campaign does not exist (Accept #2 — leaves current active untouched).
  */
-export async function activateCampaign(db: D1, id: number): Promise<void> {
+export async function activateCampaign(db: D1, id: number): Promise<'ok' | 'not_found'> {
+  // Check the target campaign exists before touching the active campaign (Accept #2).
+  const existing = await db.prepare('SELECT id FROM campaign WHERE id = ?').bind(id).first<{ id: number }>()
+  if (!existing) return 'not_found'
   await db.batch([
     db.prepare("UPDATE campaign SET status = 'closed' WHERE status = 'active' AND id != ?").bind(id),
     db.prepare("UPDATE campaign SET status = 'active' WHERE id = ?").bind(id),
   ])
+  return 'ok'
 }
 
 // ---- Admin CRUD helpers ----
@@ -272,12 +291,33 @@ function isValidIso(s: unknown): s is string {
  * @param kind           - the campaign kind (from body for POST; from DB for PATCH)
  * @param body           - the parsed request body
  * @param isPatch        - true for PATCH (skips required-field checks for starts_at/ends_at)
+ * @param existingRow    - for PATCH: the stored starts_at/ends_at to compare a single changed date against
  */
 function validateCampaignBody(
   kind: CampaignKind,
   body: Record<string, unknown>,
   isPatch: boolean,
+  existingRow?: { starts_at: string; ends_at: string },
 ): Response | 'ok' {
+  // Accept #4: name must be a string, trimmed, ≤120 codepoints
+  if ('name' in body) {
+    if (typeof body.name !== 'string') return error('bad_request')
+    const trimmed = body.name.trim()
+    if ([...trimmed].length > 120) return error('bad_request')
+    body.name = trimmed
+  } else if (!isPatch) {
+    // POST: name is required (checked again in POST handler but guard here too)
+    return error('bad_request')
+  }
+
+  // Accept #4: tagline must be a string, trimmed, ≤200 codepoints (optional)
+  if ('tagline' in body) {
+    if (typeof body.tagline !== 'string') return error('bad_request')
+    const trimmed = body.tagline.trim()
+    if ([...trimmed].length > 200) return error('bad_request')
+    body.tagline = trimmed
+  }
+
   // content must be a JSON object when present
   if ('content' in body) {
     const c = parseJsonObj(body.content)
@@ -316,6 +356,18 @@ function validateCampaignBody(
     const start = new Date(body.starts_at as string).getTime()
     const end = new Date(body.ends_at as string).getTime()
     if (end <= start) return error('bad_request')
+  } else if (isPatch && existingRow) {
+    // Accept #4: PATCH with only one date — compare against the stored other date
+    if (hasStart && !hasEnd) {
+      const start = new Date(body.starts_at as string).getTime()
+      const storedEnd = new Date(existingRow.ends_at).getTime()
+      if (storedEnd <= start) return error('bad_request')
+    }
+    if (hasEnd && !hasStart) {
+      const storedStart = new Date(existingRow.starts_at).getTime()
+      const end = new Date(body.ends_at as string).getTime()
+      if (end <= storedStart) return error('bad_request')
+    }
   }
 
   return 'ok'
@@ -353,11 +405,13 @@ export async function handleAdminCampaigns(
       catch (e) { return error(e instanceof HttpError ? e.code : 'bad_request') }
 
       // snake_case keys (matching D1 columns and the editor's AdminCampaignInput)
-      const { slug, kind, name, tagline, starts_at, ends_at, status } = body
+      const { slug, kind, starts_at, ends_at } = body
+
+      // Accept #3: status is not allowed on POST — new campaigns are always draft
+      if ('status' in body) return error('bad_request')
 
       if (
         typeof slug !== 'string' || !isValidSlug(slug) ||
-        typeof name !== 'string' ||
         typeof starts_at !== 'string' ||
         typeof ends_at !== 'string'
       ) return error('bad_request')
@@ -365,6 +419,9 @@ export async function handleAdminCampaigns(
       // Validate kind against allowed values
       if (!CAMPAIGN_KINDS.includes(kind as CampaignKind)) return error('bad_request')
       const campaignKind = kind as CampaignKind
+
+      // name is required for POST — also validated inside validateCampaignBody
+      if (typeof body.name !== 'string') return error('bad_request')
 
       const bodyValidation = validateCampaignBody(campaignKind, body, false)
       if (bodyValidation !== 'ok') return bodyValidation
@@ -378,14 +435,14 @@ export async function handleAdminCampaigns(
           .bind(
             slug,
             campaignKind,
-            name ?? '',
-            typeof tagline === 'string' ? tagline : '',
+            typeof body.name === 'string' ? body.name : '',
+            typeof body.tagline === 'string' ? body.tagline : '',
             typeof body.content === 'string' ? body.content : '{}',
             typeof body.theme_colors === 'string' ? body.theme_colors : '{}',
             typeof body.settings === 'string' ? body.settings : '{}',
             starts_at,
             ends_at,
-            typeof status === 'string' ? status : 'draft',
+            'draft',  // Accept #3: always draft on creation
             now,
             email,
           )
@@ -409,13 +466,15 @@ export async function handleAdminCampaigns(
 
   if (sub === '/activate') {
     if (request.method !== 'POST') return error('method')
-    await activateCampaign(db, id)
+    const result = await activateCampaign(db, id)
+    if (result === 'not_found') return error('not_found')
     return json({ ok: true })
   }
 
   if (sub === '/close') {
     if (request.method !== 'POST') return error('method')
-    await db.prepare("UPDATE campaign SET status = 'closed' WHERE id = ?").bind(id).run()
+    const result = await db.prepare("UPDATE campaign SET status = 'closed' WHERE id = ?").bind(id).run()
+    if (!result.meta?.changes) return error('not_found')
     return json({ ok: true })
   }
 
@@ -438,19 +497,20 @@ export async function handleAdminCampaigns(
       if ('status' in body) return error('bad_request')
       if ('kind' in body) return error('bad_request')
 
-      // Fetch existing campaign kind (needed to validate settings)
+      // Accept #2: check campaign exists; also fetch existing dates for single-date validation
+      const existing = await db
+        .prepare('SELECT kind, starts_at, ends_at FROM campaign WHERE id = ?')
+        .bind(id)
+        .first<{ kind: string; starts_at: string; ends_at: string }>()
+      if (!existing) return error('not_found')
+
       let campaignKind: CampaignKind = 'teacher_cards'
-      if ('settings' in body) {
-        const existing = await db
-          .prepare('SELECT kind FROM campaign WHERE id = ?')
-          .bind(id)
-          .first<{ kind: string }>()
-        if (existing && CAMPAIGN_KINDS.includes(existing.kind as CampaignKind)) {
-          campaignKind = existing.kind as CampaignKind
-        }
+      if (CAMPAIGN_KINDS.includes(existing.kind as CampaignKind)) {
+        campaignKind = existing.kind as CampaignKind
       }
 
-      const bodyValidation = validateCampaignBody(campaignKind, body, true)
+      // Accept #4: pass existing row so single-date validation compares against stored dates
+      const bodyValidation = validateCampaignBody(campaignKind, body, true, existing)
       if (bodyValidation !== 'ok') return bodyValidation
 
       const fields: string[] = []
@@ -475,6 +535,9 @@ export async function handleAdminCampaigns(
     }
 
     if (request.method === 'DELETE') {
+      // Accept #2: check campaign exists first (return 404 for unknown ids)
+      const existing = await db.prepare('SELECT id FROM campaign WHERE id = ?').bind(id).first<{ id: number }>()
+      if (!existing) return error('not_found')
       // Refuse deletion if any legacy-table rows reference this campaign (FR-7).
       if (await campaignHasRows(db, id)) {
         return json({ error: 'campaign_has_rows' }, 409)

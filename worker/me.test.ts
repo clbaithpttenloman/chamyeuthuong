@@ -659,3 +659,305 @@ describe('logging discipline — email and sub never in logs', () => {
     }
   })
 })
+
+// ===================================================================
+// Fix Group 5a — new failing tests
+// ===================================================================
+
+// ---- Accept #5: resolveAdmin race (conditional pin) ----
+
+describe('Fix Group 5a — Accept #5: resolveAdmin pins only WHERE google_sub IS NULL', () => {
+  it('a second sub for the same admin email is refused after the sub is pinned', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = meEnv({ db })
+    await seedAdminEmail(db, TEST_EMAIL)
+
+    // First sign-in: pins TEST_SUB
+    const { nonceValue: n1 } = await makeNonce(TEST_NONCE_KEY)
+    const cred1 = await validToken({ nonce: n1, sub: TEST_SUB })
+    await handleAuth(makeSignInReq(cred1, n1), env, { keys: await localJwks() })
+
+    // Second sign-in with a DIFFERENT sub but same email
+    const { nonceValue: n2 } = await makeNonce(TEST_NONCE_KEY)
+    const differentSub = 'different-sub-99999'
+    const cred2 = await validToken({ nonce: n2, sub: differentSub, email: TEST_EMAIL, email_verified: true })
+    // Need to seed a second user with the different sub
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
+      .bind(differentSub, TEST_EMAIL, '', '', now, now).run()
+
+    const r = await handleAuth(makeSignInReq(cred2, n2), env, { keys: await localJwks() })
+    // Different sub must be refused with 200 isAdmin: false (not elevated)
+    // OR return 200 with isAdmin: false (the user gets a session but NOT admin access)
+    // After fix: resolveAdmin refuses a different sub
+    const body = await r.json() as { user?: { isAdmin?: boolean } }
+    expect(body.user?.isAdmin).toBe(false)
+  })
+
+  it('resolveAdmin: UPDATE only WHERE google_sub IS NULL (re-reads on 0 changes, refuses different sub)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    // Seed admin with a pinned sub
+    await seedAdminEmail(db, TEST_EMAIL)
+    // Manually pin a sub
+    const pinnedSub = 'pinned-sub-12345'
+    await db.prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ?')
+      .bind(pinnedSub, TEST_EMAIL).run()
+
+    // Try to sign in with a different sub — resolveAdmin should refuse
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const differentSub = 'different-sub-99999'
+    const cred = await validToken({ nonce: nonceValue, sub: differentSub, email: TEST_EMAIL, email_verified: true })
+    const now = new Date().toISOString()
+    await db.prepare('INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
+      .bind(differentSub, TEST_EMAIL, '', '', now, now).run()
+
+    const r = await handleAuth(makeSignInReq(cred, nonceValue), meEnv({ db }), { keys: await localJwks() })
+    const body = await r.json() as { user?: { isAdmin?: boolean } }
+    expect(body.user?.isAdmin).toBe(false)
+  })
+})
+
+// ---- Accept #6: missing or empty GOOGLE_CLIENT_ID → refuse ----
+
+describe('Fix Group 5a — Accept #6: missing/empty GOOGLE_CLIENT_ID → sign-in refused', () => {
+  it('empty GOOGLE_CLIENT_ID → 401 unauthorized (fail closed)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+
+    // env with empty GOOGLE_CLIENT_ID
+    const envNoId = {
+      DB: db,
+      GOOGLE_CLIENT_ID: '',  // empty string — misconfigured
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+
+    const r = await handleAuth(makeSignInReq(credential, nonceValue), envNoId, { keys: await localJwks() })
+    expect(r.status).toBe(401)
+  })
+
+  it('undefined GOOGLE_CLIENT_ID → 401 unauthorized (fail closed)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+
+    const envNoId = {
+      DB: db,
+      GOOGLE_CLIENT_ID: undefined as unknown as string,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+
+    const r = await handleAuth(makeSignInReq(credential, nonceValue), envNoId, { keys: await localJwks() })
+    expect(r.status).toBe(401)
+  })
+
+  it('missing GOOGLE_CLIENT_ID logs auth: misconfigured (not email/sub)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+
+    const envNoId = {
+      DB: db,
+      GOOGLE_CLIENT_ID: '',
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await handleAuth(makeSignInReq(credential, nonceValue), envNoId, { keys: await localJwks() })
+    // Read calls BEFORE mockRestore (mockRestore clears mock.calls in Vitest)
+    const logs = spy.mock.calls.map((a) => a.join(' '))
+    spy.mockRestore()
+
+    expect(logs.some((l) => l.includes('misconfigured'))).toBe(true)
+    // Must not log email or sub
+    for (const log of logs) {
+      expect(log).not.toContain(TEST_EMAIL)
+      expect(log).not.toContain(TEST_SUB)
+    }
+  })
+})
+
+// ---- Accept #7: rate limits ----
+
+describe('Fix Group 5a — Accept #7: AUTH_LIMIT counts failures only', () => {
+  it('AUTH_LIMIT is NOT charged on a successful sign-in', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    let authLimitCallCount = 0
+    const env = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: {
+        limit: async () => { authLimitCallCount++; return { success: true } }
+      },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+    const r = await handleAuth(makeSignInReq(credential, nonceValue), env, { keys: await localJwks() })
+    expect(r.status).toBe(200)
+    // AUTH_LIMIT must NOT be charged on success
+    expect(authLimitCallCount).toBe(0)
+  })
+
+  it('AUTH_LIMIT IS charged when sign-in fails (bad token)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    let authLimitCallCount = 0
+    const env = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: {
+        limit: async () => { authLimitCallCount++; return { success: true } }
+      },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    // Invalid credential (badly formatted JWT)
+    const r = await handleAuth(makeSignInReq('bad-credential', nonceValue), env, { keys: await localJwks() })
+    expect(r.status).toBe(401)
+    // AUTH_LIMIT should be charged on failure
+    expect(authLimitCallCount).toBe(1)
+  })
+
+  it('AUTH_SUB_LIMIT is charged on successful sign-in and blocks when exceeded', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      AUTH_SUB_LIMIT: { limit: async () => ({ success: false }) },  // always blocked
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    } as Parameters<typeof handleAuth>[1]
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+    const r = await handleAuth(makeSignInReq(credential, nonceValue), env, { keys: await localJwks() })
+    // AUTH_SUB_LIMIT exceeded → 429
+    expect(r.status).toBe(429)
+  })
+
+  it('GET /api/auth/nonce is rate-limited per IP via AUTH_LIMIT', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: false }) },  // always blocked
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const req = new Request('https://x/api/auth/nonce', { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
+    const r = await handleAuth(req, env)
+    // Nonce endpoint should be rate-limited
+    expect(r.status).toBe(429)
+  })
+})
+
+// ---- Accept #8: nickname/class validation using shared/text.ts ----
+
+describe('Fix Group 5a — Accept #8: nickname/class validation (shared/text.ts)', () => {
+  async function putProfile(db: Parameters<typeof handleMe>[1]['DB'], rawToken: string, nickname: string, className = '11A') {
+    const req = new Request('https://x/api/me', {
+      method: 'PUT',
+      headers: {
+        'CF-Connecting-IP': '1.2.3.4',
+        'X-Requested-With': 'fetch',
+        'Content-Type': 'application/json',
+        Cookie: `${SESSION_COOKIE_NAME}=${rawToken}`,
+      },
+      body: JSON.stringify({ nickname, className }),
+    })
+    return handleMe(req, { DB: db, GOOGLE_CLIENT_ID: TEST_CLIENT_ID, NONCE_KEY: TEST_NONCE_KEY, AUTH_LIMIT: { limit: async () => ({ success: true }) }, ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) } })
+  }
+
+  it('whitespace-only nickname → 400', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    const r = await putProfile(db, rawToken, '   ')
+    expect(r.status).toBe(400)
+  })
+
+  it('nickname with control character (\\x01) → 400', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    const r = await putProfile(db, rawToken, 'Valid\x01Name')
+    expect(r.status).toBe(400)
+  })
+
+  it('nickname with bidi char (U+202E right-to-left override) → 400', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    const r = await putProfile(db, rawToken, 'Valid\u202EName')
+    expect(r.status).toBe(400)
+  })
+
+  it('nickname with lone surrogate → 400', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    // Lone high surrogate (not followed by low surrogate)
+    const r = await putProfile(db, rawToken, 'Valid\uD800Name')
+    expect(r.status).toBe(400)
+  })
+
+  it('nickname is NFC-normalized and trimmed (spaces trimmed, then validated)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    // Leading/trailing spaces with valid content
+    const r = await putProfile(db, rawToken, '  Nguyễn Văn A  ')
+    expect(r.status).toBe(200)
+    // The stored nickname should be trimmed
+    const user = sqlite.prepare('SELECT nickname FROM app_user WHERE id = ?').get(userId) as { nickname: string }
+    expect(user.nickname).toBe('Nguyễn Văn A')
+  })
+
+  it('className with control character → 400', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    const r = await putProfile(db, rawToken, 'Valid', '12A\x00')
+    expect(r.status).toBe(400)
+  })
+
+  it('nickname codepoint length > 30 (multibyte) → 400 (not UTF-16 length)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    // 31 emoji: each is 2 UTF-16 code units but 1 codepoint — length check must use codepoints
+    const r = await putProfile(db, rawToken, '😀'.repeat(31))
+    expect(r.status).toBe(400)
+  })
+})

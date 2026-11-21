@@ -55,19 +55,23 @@
   // CARD_IP_LIMIT (60/60 s): guards /api/qr/:token; blunts token scanners.
   // ADMIN_FAIL_LIMIT (60/60 s): guards /api/admin/* (all requests).
   // IMAGE_IP_LIMIT (300/60 s): guards /api/image/:token (GET only).
-  // AUTH_LIMIT (300/60 s per IP): guards /api/auth/* failures (sign-in attempts).
-  //   Per Google sub limit (10/60 s) uses the same binding keyed by IP_HMAC(sub).
+  // AUTH_LIMIT (300/60 s per IP): guards /api/auth/nonce (all) and /api/auth/google FAILURES only.
+  //   On successful sign-in, AUTH_LIMIT is NOT charged — only failure attempts count.
+  // AUTH_SUB_LIMIT (10/60 s per sub): guards /api/auth/google successful sign-ins; namespace 2009.
   // USER_READ_LIMIT (120/60 s per user): guards GET /api/me and /api/me/gifts.
   // USER_WRITE_LIMIT (10/60 s per user): guards PUT/DELETE /api/me, logout.
+  // PUBLIC_READ_LIMIT (3000/60 s per IP): guards public /api/campaigns/* cache misses; namespace 2010.
   "ratelimits": [
-    { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "2004", "simple": { "limit": 120, "period": 60 } },
-    { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "2005", "simple": { "limit": 20,  "period": 60 } },
-    { "name": "CARD_IP_LIMIT",    "namespace_id": "2001", "simple": { "limit": 60,  "period": 60 } },
-    { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "2002", "simple": { "limit": 60,  "period": 60 } },
-    { "name": "IMAGE_IP_LIMIT",   "namespace_id": "2003", "simple": { "limit": 300, "period": 60 } },
-    { "name": "AUTH_LIMIT",       "namespace_id": "2006", "simple": { "limit": 300, "period": 60 } },
-    { "name": "USER_READ_LIMIT",  "namespace_id": "2007", "simple": { "limit": 120, "period": 60 } },
-    { "name": "USER_WRITE_LIMIT", "namespace_id": "2008", "simple": { "limit": 10,  "period": 60 } }
+    { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "2004", "simple": { "limit": 120,  "period": 60 } },
+    { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "2005", "simple": { "limit": 20,   "period": 60 } },
+    { "name": "CARD_IP_LIMIT",    "namespace_id": "2001", "simple": { "limit": 60,   "period": 60 } },
+    { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "2002", "simple": { "limit": 60,   "period": 60 } },
+    { "name": "IMAGE_IP_LIMIT",   "namespace_id": "2003", "simple": { "limit": 300,  "period": 60 } },
+    { "name": "AUTH_LIMIT",       "namespace_id": "2006", "simple": { "limit": 300,  "period": 60 } },
+    { "name": "AUTH_SUB_LIMIT",   "namespace_id": "2009", "simple": { "limit": 10,   "period": 60 } },
+    { "name": "USER_READ_LIMIT",  "namespace_id": "2007", "simple": { "limit": 120,  "period": 60 } },
+    { "name": "USER_WRITE_LIMIT", "namespace_id": "2008", "simple": { "limit": 10,   "period": 60 } },
+    { "name": "PUBLIC_READ_LIMIT","namespace_id": "2010", "simple": { "limit": 3000, "period": 60 } }
   ],
   // Staging environment: separate Worker name and D1 database.
   // All bindings and vars are non-inheritable and must be repeated here.
@@ -90,14 +94,16 @@
         "ADMIN_LEGACY_LOGIN": "1"
       },
       "ratelimits": [
-        { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "3004", "simple": { "limit": 120, "period": 60 } },
-        { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "3005", "simple": { "limit": 20,  "period": 60 } },
-        { "name": "CARD_IP_LIMIT",    "namespace_id": "3001", "simple": { "limit": 60,  "period": 60 } },
-        { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "3002", "simple": { "limit": 60,  "period": 60 } },
-        { "name": "IMAGE_IP_LIMIT",   "namespace_id": "3003", "simple": { "limit": 300, "period": 60 } },
-        { "name": "AUTH_LIMIT",       "namespace_id": "3006", "simple": { "limit": 300, "period": 60 } },
-        { "name": "USER_READ_LIMIT",  "namespace_id": "3007", "simple": { "limit": 120, "period": 60 } },
-        { "name": "USER_WRITE_LIMIT", "namespace_id": "3008", "simple": { "limit": 10,  "period": 60 } }
+        { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "3004", "simple": { "limit": 120,  "period": 60 } },
+        { "name": "SUBMIT_IP_LIMIT",  "namespace_id": "3005", "simple": { "limit": 20,   "period": 60 } },
+        { "name": "CARD_IP_LIMIT",    "namespace_id": "3001", "simple": { "limit": 60,   "period": 60 } },
+        { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "3002", "simple": { "limit": 60,   "period": 60 } },
+        { "name": "IMAGE_IP_LIMIT",   "namespace_id": "3003", "simple": { "limit": 300,  "period": 60 } },
+        { "name": "AUTH_LIMIT",       "namespace_id": "3006", "simple": { "limit": 300,  "period": 60 } },
+        { "name": "AUTH_SUB_LIMIT",   "namespace_id": "3009", "simple": { "limit": 10,   "period": 60 } },
+        { "name": "USER_READ_LIMIT",  "namespace_id": "3007", "simple": { "limit": 120,  "period": 60 } },
+        { "name": "USER_WRITE_LIMIT", "namespace_id": "3008", "simple": { "limit": 10,   "period": 60 } },
+        { "name": "PUBLIC_READ_LIMIT","namespace_id": "3010", "simple": { "limit": 3000, "period": 60 } }
       ]
     }
   }

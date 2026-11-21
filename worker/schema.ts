@@ -25,24 +25,34 @@ const ROLE_COLUMN =
 // campaign 1 is inserted before every ADD COLUMN so the DEFAULT 1 is always valid.
 const CAMPAIGN_ID_COLUMN = 'INTEGER NOT NULL DEFAULT 1'
 
-// Content for campaign 1 (20/11) is derived from src/content/site.json .home.
-const CAMPAIGN_1_CONTENT = JSON.stringify((SITE_CONTENT as { home: unknown }).home).replace(/'/g, "''")
+// Content for campaign 1 (20/11) is derived from src/content/site.json .home,
+// wrapped in the { home: {...} } shape that Home and the editor both expect.
+const CAMPAIGN_1_CONTENT = JSON.stringify({ home: (SITE_CONTENT as { home: unknown }).home }).replace(/'/g, "''")
 
-/** SQL for the campaign upgrade: conditional INSERT for campaign 1 then per-table ADD COLUMN + index.
- *  The INSERT uses WHERE EXISTS (SELECT 1 FROM template) so a fresh empty DB does not
- *  get an active campaign (which would break the partial-unique-index tests).
+/** SQL for the campaign upgrade: INSERT campaign 1 (always, so fresh DBs get it too) then
+ *  per-table ADD COLUMN. INSERT OR IGNORE is safe for concurrent runs (idempotent).
+ *  The WHERE EXISTS guard was removed so staging/local get campaign 1 without manual steps
+ *  (Fix Group 5a Accept #1). Tests that previously relied on "no campaign on fresh DB" were
+ *  adjusted — see the Fix Group 5a report.
  *  Exported so testDb() can apply them directly to represent a fully-upgraded live DB baseline.
  */
 export const CAMPAIGN_UPGRADE_SQLS: string[] = [
-  // Insert campaign 1 only when old data exists (ADR-2). INSERT OR IGNORE is safe for concurrent runs.
+  // INSERT always (no WHERE EXISTS guard) — fresh DBs get campaign 1 as the default active campaign.
   `INSERT OR IGNORE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) ` +
-    `SELECT 1, '20-11', 'teacher_cards', 'Ngày 20/11', 'Tri ân thầy cô', '${CAMPAIGN_1_CONTENT}', '{}', '{}', '2026-01-01T00:00:00Z', '2026-12-31T23:59:59Z', 'active', datetime('now'), 'upgrade' ` +
-    `WHERE EXISTS (SELECT 1 FROM template)`,
+    `VALUES (1, '20-11', 'teacher_cards', 'Ngày 20/11', 'Tri ân thầy cô', '${CAMPAIGN_1_CONTENT}', '{}', '{}', '2026-01-01T00:00:00Z', '2026-12-31T23:59:59Z', 'active', datetime('now'), 'upgrade')`,
   'ALTER TABLE template ADD COLUMN campaign_id ' + CAMPAIGN_ID_COLUMN,
-  'CREATE INDEX IF NOT EXISTS idx_template_campaign_id ON template(campaign_id)',
   'ALTER TABLE wish ADD COLUMN campaign_id ' + CAMPAIGN_ID_COLUMN,
-  'CREATE INDEX IF NOT EXISTS idx_wish_campaign_id ON wish(campaign_id)',
   'ALTER TABLE student_card ADD COLUMN campaign_id ' + CAMPAIGN_ID_COLUMN,
+]
+
+/** Campaign_id indexes created unconditionally at the end of the campaign runFn (optional #10).
+ *  Separated from CAMPAIGN_UPGRADE_SQLS so they always run, even if the ADD COLUMN crashed and
+ *  recovered; IF NOT EXISTS is always safe.
+ *  Exported so testDb() can apply them alongside CAMPAIGN_UPGRADE_SQLS.
+ */
+export const CAMPAIGN_INDEX_SQLS: string[] = [
+  'CREATE INDEX IF NOT EXISTS idx_template_campaign_id ON template(campaign_id)',
+  'CREATE INDEX IF NOT EXISTS idx_wish_campaign_id ON wish(campaign_id)',
   'CREATE INDEX IF NOT EXISTS idx_student_card_campaign_id ON student_card(campaign_id)',
 ]
 
@@ -256,11 +266,17 @@ const UPGRADES: {
           const msg = e instanceof Error ? e.message : String(e)
           // ALTER TABLE … ADD COLUMN fails with "duplicate column name: campaign_id" if the
           // column was already added by a concurrent isolate or a prior partial upgrade.
-          // CREATE INDEX … IF NOT EXISTS never throws on a duplicate; INSERT OR IGNORE never
-          // fails on a PK conflict. Any other error is a real failure that must propagate.
+          // INSERT OR IGNORE never fails on a PK conflict.
+          // Any other error is a real failure that must propagate.
           if (msg.includes('duplicate column name')) return
           throw e
         })
+      }
+      // Create indexes unconditionally at the end of runFn (optional #10).
+      // IF NOT EXISTS is always safe; this ensures indexes exist even after a crash
+      // between ALTER TABLE and CREATE INDEX.
+      for (const sql of CAMPAIGN_INDEX_SQLS) {
+        await db.batch([db.prepare(sql)])
       }
     },
   },  {
@@ -334,6 +350,7 @@ const ROLE_REBUILD_SQL: string[] = [
 export const UPGRADE_SQL: string[] = [
   ...TABLES.map(columnsSql),
   ...UPGRADES.flatMap((u) => u.sql),
+  ...CAMPAIGN_INDEX_SQLS,
   ROLE_CHECK_PROBE_SQL, ...ROLE_REBUILD_SQL,
   SEED_PROBE_SQL, SEED_IMAGE_SQL, SEED_TEMPLATE_SQL, SEED_LINK_SQL, SEED_FLAG_SQL,
 ]

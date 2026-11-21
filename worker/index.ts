@@ -44,7 +44,7 @@ export default {
       if (pathname === '/api/me') return await handleMe(request, env as never)
       if (pathname === '/api/cards') return await handleSubmit(request, env)
       if (pathname.startsWith('/api/qr/')) return await handleQr(request, env)
-      // Campaign public endpoints (no auth; memoised per isolate)
+      // Campaign public endpoints (no auth; memoised per isolate; rate limited on cache misses)
       if (pathname === '/api/campaigns/active' || pathname.startsWith('/api/campaigns/')) {
         return await handleCampaigns(request, env)
       }

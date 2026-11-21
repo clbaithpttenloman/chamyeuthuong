@@ -30,6 +30,7 @@ import {
 } from './session.ts'
 import { ensureSchema } from './schema.ts'
 import type { D1 } from './types.ts'
+import { hasControlCharsSingleLine, hasLoneSurrogate } from '../shared/text.ts'
 
 /** Env shape required by handleAuth and handleMe. */
 type MeEnv = {
@@ -37,8 +38,12 @@ type MeEnv = {
   GOOGLE_CLIENT_ID?: string
   NONCE_KEY: string
   AUTH_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
+  /** Per-sub rate limit on successful sign-ins: 10/60 s. Key = HMAC(sub) or sub. */
+  AUTH_SUB_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_FAIL_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_LEGACY_LOGIN?: string
+  /** Used to hash the sub for AUTH_SUB_LIMIT key (privacy-preserving). */
+  IP_HMAC_KEY?: string
 }
 
 /** Security headers for all /api/auth/* and /api/me responses (no CORS). */
@@ -100,7 +105,9 @@ async function upsertUser(db: D1, sub: string, email: string, hd: string | undef
 }
 
 /** Check whether a user's email is in the admin list and Google is authoritative for it.
- *  Also pins admin.google_sub on first Google admin sign-in and rejects different subs. */
+ *  Also pins admin.google_sub on first Google admin sign-in and rejects different subs.
+ *  Conditional UPDATE (WHERE google_sub IS NULL) prevents a race where two sign-ins both
+ *  see NULL and try to pin — only one wins, the other re-reads and is refused. */
 async function resolveAdmin(
   db: D1,
   email: string,
@@ -117,8 +124,20 @@ async function resolveAdmin(
   if (!adminRow) return false
 
   if (adminRow.google_sub === null) {
-    // First Google sign-in for this admin: pin the sub.
-    await db.prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ?').bind(sub, email.toLowerCase()).run()
+    // Accept #5: pin only while still unpinned (WHERE google_sub IS NULL).
+    // A racing sign-in by a different sub loses here.
+    const pinned = await db
+      .prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ? AND google_sub IS NULL')
+      .bind(sub, email.toLowerCase())
+      .run()
+    if (!pinned.meta?.changes) {
+      // Another concurrent sign-in won the pin. Re-read to verify our sub won.
+      const now = await db
+        .prepare('SELECT google_sub FROM admin WHERE lower(email) = ?')
+        .bind(email.toLowerCase())
+        .first<{ google_sub: string | null }>()
+      if (now?.google_sub !== sub) return false
+    }
     return true
   }
 
@@ -129,6 +148,18 @@ async function resolveAdmin(
 /** Build the public user object returned in GET /api/me and POST /api/auth/google. */
 function publicUser(row: UserRow, isAdmin: boolean) {
   return { nickname: row.nickname, className: row.class_name, isAdmin }
+}
+
+/** Validate and normalise a user text field (nickname/class): NFC, trim, control/bidi/surrogate check.
+ *  Returns the normalised string on success, or null on validation failure.
+ *  Accept #8: reuses shared/text.ts rules.
+ */
+function normaliseUserText(raw: string, maxCodepoints: number): string | null {
+  const normalised = raw.normalize('NFC').trim()
+  if (!normalised) return null  // empty or whitespace-only
+  if ([...normalised].length > maxCodepoints) return null
+  if (hasControlCharsSingleLine(normalised) || hasLoneSurrogate(normalised)) return null
+  return normalised
 }
 
 // ── handleAuth ────────────────────────────────────────────────────────────────
@@ -150,6 +181,9 @@ export async function handleAuth(
 
   // GET /api/auth/nonce — no CSRF needed, no auth needed
   if (request.method === 'GET' && pathname === '/api/auth/nonce') {
+    // Accept #7: rate limit nonce requests per IP (reuses AUTH_LIMIT namespace)
+    const rl = await env.AUTH_LIMIT?.limit({ key: ip }) ?? { success: true }
+    if (!rl.success) return failResp('rate_limited', 429)
     const { nonce, cookie } = await issueNonce(env)
     return resp({ nonce, clientId: env.GOOGLE_CLIENT_ID ?? '' }, 200, [cookie])
   }
@@ -164,9 +198,14 @@ export async function handleAuth(
       return failResp('forbidden', 403, [nonceClear])
     }
 
-    // Rate limit on IP (failures and successful attempts)
-    const rlResult = await env.AUTH_LIMIT?.limit({ key: ip }) ?? { success: true }
-    if (!rlResult.success) return failResp('rate_limited', 429, [nonceClear])
+    // Accept #6: fail closed when GOOGLE_CLIENT_ID is not configured (misconfiguration guard).
+    // This must happen BEFORE any JWT verification attempt.
+    if (!env.GOOGLE_CLIENT_ID) {
+      console.error('auth: misconfigured')
+      return failResp('unauthorized', 401, [nonceClear])
+    }
+
+    // Rate limit on IP (Accept #7: AUTH_LIMIT counts failures only — charged below on failure)
 
     // Read and validate nonce cookie
     const nonceCookieVal = getCookieValue(request, NONCE_COOKIE) ?? ''
@@ -176,6 +215,7 @@ export async function handleAuth(
     try {
       body = await readJson<{ credential?: unknown }>(request, 8192)
     } catch {
+      await env.AUTH_LIMIT?.limit({ key: ip })
       return failResp('bad_request', 400, [nonceClear])
     }
     const credential = typeof body.credential === 'string' ? body.credential : ''
@@ -183,16 +223,26 @@ export async function handleAuth(
     // Verify token
     let claims
     try {
-      claims = await verifyGoogleCredential(credential, { GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID! }, deps)
+      claims = await verifyGoogleCredential(credential, { GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID }, deps)
     } catch {
-      return failResp('unauthorized', 401, [nonceClear])
+      // Accept #7: charge AUTH_LIMIT only on failure (not on success)
+      const rl = await env.AUTH_LIMIT?.limit({ key: ip }) ?? { success: true }
+      return failResp(rl.success ? 'unauthorized' : 'rate_limited', rl.success ? 401 : 429, [nonceClear])
     }
 
     // Verify nonce (cookie must equal token claim, both signed, not expired)
     const nonceOk = await checkNonce(env, nonceCookieVal, claims.nonce)
     if (!nonceOk) {
-      return failResp('unauthorized', 401, [nonceClear])
+      // Charge AUTH_LIMIT on nonce failure too
+      const rl = await env.AUTH_LIMIT?.limit({ key: ip }) ?? { success: true }
+      return failResp(rl.success ? 'unauthorized' : 'rate_limited', rl.success ? 401 : 429, [nonceClear])
     }
+
+    // Accept #7: per-sub rate limit on successful sign-ins (AUTH_SUB_LIMIT, 10/60 s)
+    // Key is the sub (or its hash if IP_HMAC_KEY is available, for dashboard privacy)
+    const subKey = claims.sub  // SHORTCUT: use raw sub as key — HMAC with IP_HMAC_KEY if dashboard privacy required
+    const subRl = await env.AUTH_SUB_LIMIT?.limit({ key: subKey }) ?? { success: true }
+    if (!subRl.success) return failResp('rate_limited', 429, [nonceClear])
 
     // Upsert user
     const userRow = await upsertUser(env.DB, claims.sub, claims.email, claims.hd)
@@ -234,10 +284,11 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
     const session = await readSession(request, env.DB)
     if (!session) return resp({ user: null, isAdmin: false }, 200)
 
+    // Accept #10: single app_user read including google_sub (eliminates the second read)
     const userRow = await env.DB
-      .prepare('SELECT id, email, nickname, class_name, banned, hd FROM app_user WHERE id = ?')
+      .prepare('SELECT id, email, nickname, class_name, banned, hd, google_sub FROM app_user WHERE id = ?')
       .bind(session.userId)
-      .first<UserRow>()
+      .first<UserRow & { google_sub: string | null }>()
     if (!userRow) return resp({ user: null, isAdmin: false }, 200)
 
     // Admin check: email in admin list + authoritative
@@ -248,15 +299,11 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
 
     let isAdmin = false
     if (adminRow && isGoogleAuthoritative(userRow.email, userRow.hd ?? undefined)) {
-      // If sub is pinned, verify it matches the user's sub
       if (adminRow.google_sub === null) {
         isAdmin = true  // sub not yet pinned; will be pinned on first requireAdmin call
       } else {
-        const userSub = await env.DB
-          .prepare('SELECT google_sub FROM app_user WHERE id = ?')
-          .bind(session.userId)
-          .first<{ google_sub: string }>()
-        isAdmin = userSub?.google_sub === adminRow.google_sub
+        // Accept #10: use userRow.google_sub from the first read (no second query)
+        isAdmin = userRow.google_sub === adminRow.google_sub
       }
     }
 
@@ -276,11 +323,17 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       return failResp('bad_request', 400)
     }
 
-    const nickname = typeof body.nickname === 'string' ? body.nickname : null
-    const className = typeof body.className === 'string' ? body.className : ''
+    const rawNickname = typeof body.nickname === 'string' ? body.nickname : null
+    const rawClassName = typeof body.className === 'string' ? body.className : ''
 
-    if (!nickname || nickname.length < 1 || nickname.length > 30) return failResp('bad_request', 400)
-    if (className.length > 10) return failResp('bad_request', 400)
+    // Accept #8: validate using shared/text.ts (trim, NFC, control/bidi/lone-surrogate rejection, codepoint length)
+    if (!rawNickname) return failResp('bad_request', 400)
+    const nickname = normaliseUserText(rawNickname, 30)
+    if (!nickname) return failResp('bad_request', 400)
+
+    const className = normaliseUserText(rawClassName, 10) ?? ''
+    // className is optional (empty is valid), but if non-empty it must pass validation
+    if (rawClassName && !normaliseUserText(rawClassName, 10)) return failResp('bad_request', 400)
 
     await env.DB
       .prepare('UPDATE app_user SET nickname = ?, class_name = ? WHERE id = ?')

@@ -87,10 +87,14 @@ beforeEach(async () => {
   ;({ db } = testDb())
   vi.mocked(newToken).mockReturnValue('newcard00000001a')
   // Campaign 1 (slug '20-11') must be effectively open for all submit tests.
-  // The campaigns.test.ts campaign_closed tests override this with their own seed.
+  // Fix Group 5a Accept #1: fresh DBs now get campaign 1 via CAMPAIGN_UPGRADE_SQLS
+  // (the WHERE EXISTS guard was removed). The schema-seeded campaign 1 uses narrow
+  // production dates, so we need our test-open dates (2000–2099) and status=active.
+  // INSERT OR REPLACE replaces the schema-seeded row with the test's version;
+  // idempotent if campaign 1 is already absent (e.g. { schema: false }).
   await db
     .prepare(
-      "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+      "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
         "VALUES (1, '20-11', 'teacher_cards', 'Ngày 20/11', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
     )
     .run()
@@ -503,7 +507,7 @@ describe('POST /api/cards — more invisible and malformed characters (security 
     // Campaign 1 must be open for submit to reach validation (not campaign_closed).
     await db
       .prepare(
-        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
           "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
       )
       .run()
@@ -552,7 +556,7 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     // Campaign 1 must be open.
     await freshDb
       .prepare(
-        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
           "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
       )
       .run()
@@ -577,7 +581,7 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     // Campaign 1 must be open.
     await freshDb
       .prepare(
-        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
           "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
       )
       .run()
@@ -603,7 +607,7 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     // Campaign 1 must be open so the check doesn't return 409 before reaching teacher lookup.
     await freshDb
       .prepare(
-        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
           "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
       )
       .run()
@@ -645,7 +649,7 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     // Campaign 1 must be open so the check doesn't return 409 before reaching teacher lookup.
     await freshDb
       .prepare(
-        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
           "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
       )
       .run()
@@ -736,7 +740,7 @@ describe('POST /api/cards — teacherId / teacherToken', () => {
     // Campaign 1 must be open so the check doesn't return 409 before reaching teacher lookup.
     await freshDb
       .prepare(
-        "INSERT INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
           "VALUES (1, '20-11', 'teacher_cards', '', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'active', datetime('now'), 'test')",
       )
       .run()
