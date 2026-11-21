@@ -33,6 +33,7 @@ import {
   type ReactNode,
 } from 'react'
 import { Scene, type TreeGift } from './Scene.tsx'
+import { focusGiftButton } from './focusReturn.ts'
 import { nextPollDelay, mergeHeart, type HeartState } from './poll.ts'
 import {
   getNoelTree,
@@ -145,6 +146,8 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
 
   // Open gift ID (null = sheet closed)
   const [openGiftId, setOpenGiftId] = useState<string | null>(focusPublicId ?? null)
+  const openGiftIdRef = useRef<string | null>(null)
+  openGiftIdRef.current = openGiftId
 
   // Solo gift: for gifts opened from AllGifts/Leaderboard that aren't in the tree
   const [soloGift, setSoloGift] = useState<NoelGift | null>(null)
@@ -282,8 +285,11 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   }, [])
 
   const handleClose = useCallback(() => {
+    const shown = openGiftIdRef.current
     setOpenGiftId(null)
     setSoloGift(null)
+    // After the dialog unmounts, put keyboard focus back on that gift (or the "Tất cả quà" button).
+    requestAnimationFrame(() => focusGiftButton(document, shown, allGiftsBtnRef.current))
   }, [])
 
   const handleNavigate = useCallback((publicId: string) => {

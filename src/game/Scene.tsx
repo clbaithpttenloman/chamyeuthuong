@@ -464,6 +464,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             key={gift.publicId}
             ref={makeOrnRef(gift)}
             className="noel-orn-btn"
+            data-public-id={gift.publicId}
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
             data-rank={String(gift.rank)}
             onClick={() => handleGiftClick(gift)}
@@ -514,6 +515,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             key={gift.publicId}
             ref={makeBoxRef(gift, i)}
             className="noel-box-btn"
+            data-public-id={gift.publicId}
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
             onClick={() => onOpen(gift.publicId)}
           >
