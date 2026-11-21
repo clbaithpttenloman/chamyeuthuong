@@ -207,3 +207,45 @@ describe('validateGiftText — className failures', () => {
     if (r.ok) expect(r.value.className).toBe('')
   })
 })
+
+// ── Fix: non-string fields must return { ok: false, field } ──────────────────
+// Review Cycle 2 Warning [worker/gifts.ts:166]:
+// Non-string values (null, number, object) for any field must return { ok: false, field }
+// rather than throwing a TypeError (which would surface as a 500 in the worker).
+
+describe('validateGiftText — non-string inputs return { ok: false, field } (cycle-2 fix)', () => {
+  it('message: null → { ok: false, field: message }', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = validateGiftText({ message: null as any, nickname: 'Nick', className: '' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.field).toBe('message')
+  })
+
+  it('nickname: 5 → { ok: false, field: nickname }', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = validateGiftText({ message: 'Hello', nickname: 5 as any, className: '' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.field).toBe('nickname')
+  })
+
+  it('className: null → { ok: false, field: className }', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = validateGiftText({ message: 'Hello', nickname: 'Nick', className: null as any })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.field).toBe('className')
+  })
+
+  it('className: 123 → { ok: false, field: className }', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = validateGiftText({ message: 'Hello', nickname: 'Nick', className: 123 as any })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.field).toBe('className')
+  })
+
+  it('className: {} → { ok: false, field: className }', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = validateGiftText({ message: 'Hello', nickname: 'Nick', className: {} as any })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.field).toBe('className')
+  })
+})

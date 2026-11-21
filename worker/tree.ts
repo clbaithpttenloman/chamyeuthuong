@@ -271,6 +271,7 @@ async function handleTreeEndpoint(slug: string, request: Request, env: TreeEnv):
     { status: campaign.status as 'draft' | 'active' | 'closed', starts_at: campaign.starts_at, ends_at: campaign.ends_at },
     new Date(),
   )
+  // Note: `open` can lag a campaign close by up to ~10 s (5 s memo TTL + max-age: 5).
   const gifts = giftRows.map((row, i) => toPublicGift(row, i + 1, treeSlots))
 
   const data: TreeData = { asOf, open, gifts, totals: { visible: totalVisible } }

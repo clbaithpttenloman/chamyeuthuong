@@ -454,3 +454,103 @@ describe('POST /api/gifts/<publicId>/report — REPORT_LIMIT', () => {
     expect((await r.json() as { error: string }).error).toBe('rate_limited')
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Cycle-2 fix: report batch race condition
+// Review finding [worker/gifts.ts report batch]: 0-change conditional insert
+// still returns { ok: true }; race branch untested.
+// When the conditional INSERT changes 0 rows, the handler must run the report
+// diagnosis (gift_not_found 404, campaign_closed 409) instead of returning
+// { ok: true }. The recount/auto-hide statements must not change anything in
+// that case (guarded by status check).
+// ═════════════════════════════════════════════════════════════════════════════
+
+import type { D1 as D1Type } from './testDb.ts'
+
+/**
+ * Wraps a D1 binding so a callback fires before the Nth batch call.
+ * Use callNumber=2 to fire AFTER the schema DDL batch (call #1 from ensureSchema)
+ * but BEFORE the INSERT batch (call #2 from handleReport).
+ * testDb() pre-applies all upgrades and seeds, so ensureSchema makes exactly one
+ * batch call (the SCHEMA DDL batch); no upgrade/seed batches fire.
+ */
+function withBatchInterceptorOnCall(db: D1Type, callNumber: number, before: () => void): D1Type {
+  let count = 0
+  return {
+    prepare: (sql) => db.prepare(sql),
+    batch: async (stmts) => {
+      count++
+      if (count === callNumber) before()
+      return db.batch(stmts)
+    },
+  }
+}
+
+describe('POST /api/gifts/<publicId>/report — race: 0-change INSERT runs diagnosis (cycle-2)', () => {
+  it('race: gift deleted after preliminary read → 404 gift_not_found (not { ok: true })', async () => {
+    const { publicId } = await seedGift(db, ownerId, campaignId, templateId, {
+      publicId: 'racedeleted123456',
+    })
+
+    // Interceptor fires on batch call #2:
+    //   Call #1 = ensureSchema schema DDL batch  (before the preliminary read)
+    //   Call #2 = handleReport INSERT batch       (preliminary read has already returned 'visible')
+    const racyDb = withBatchInterceptorOnCall(db, 2, () => {
+      sqlite.prepare("UPDATE gift SET status = 'deleted' WHERE public_id = ?").run(publicId)
+    })
+    const racyEnv = { ...giftsEnv(db), DB: racyDb }
+
+    const r = await handleGifts(
+      sessionReq(reporterToken, `/api/gifts/${publicId}/report`, 'POST', { reason: 'spam' }),
+      racyEnv,
+    )
+    expect(r.status).toBe(404)
+    expect((await r.json() as { error: string }).error).toBe('gift_not_found')
+  })
+
+  it('race: campaign closed after preliminary read → 409 campaign_closed (not { ok: true })', async () => {
+    const { publicId } = await seedGift(db, ownerId, campaignId, templateId, {
+      publicId: 'raceclosed1234567',
+    })
+
+    const racyDb = withBatchInterceptorOnCall(db, 2, () => {
+      sqlite.prepare("UPDATE campaign SET status = 'closed' WHERE id = ?").run(campaignId)
+    })
+    const racyEnv = { ...giftsEnv(db), DB: racyDb }
+
+    const r = await handleGifts(
+      sessionReq(reporterToken, `/api/gifts/${publicId}/report`, 'POST', { reason: 'spam' }),
+      racyEnv,
+    )
+    expect(r.status).toBe(409)
+    expect((await r.json() as { error: string }).error).toBe('campaign_closed')
+  })
+
+  it('race: recount/auto-hide do not modify the deleted gift (report_count stays 2, status stays deleted)', async () => {
+    const { publicId } = await seedGift(db, ownerId, campaignId, templateId, {
+      publicId: 'racenoop12345678',
+      reportCount: 0,
+    })
+    // Pre-seed a report_count of 2 (below threshold 3) so we can verify it isn't touched.
+    sqlite.prepare('UPDATE gift SET report_count = 2 WHERE public_id = ?').run(publicId)
+
+    const racyDb = withBatchInterceptorOnCall(db, 2, () => {
+      sqlite.prepare("UPDATE gift SET status = 'deleted' WHERE public_id = ?").run(publicId)
+    })
+    const racyEnv = { ...giftsEnv(db), DB: racyDb }
+
+    await handleGifts(
+      sessionReq(reporterToken, `/api/gifts/${publicId}/report`, 'POST', { reason: 'spam' }),
+      racyEnv,
+    )
+
+    // The deleted gift must retain status = 'deleted' (auto-hide did not trigger)
+    // and report_count = 2 (the recount must not update deleted gifts).
+    const gift = sqlite
+      .prepare('SELECT status, report_count FROM gift WHERE public_id = ?')
+      .get(publicId) as { status: string; report_count: number } | undefined
+    expect(gift?.status).toBe('deleted')
+    // After the fix, the recount is gated so it does not update deleted gifts.
+    expect(gift?.report_count).toBe(2)
+  })
+})

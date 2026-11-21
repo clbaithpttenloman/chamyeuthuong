@@ -34,7 +34,9 @@ export const MAX_GIFT_CLASSNAME = MAX_FROM_CLASS  // 10
 /** Normalized, validated gift text fields. */
 export type ValidatedGiftText = { message: string; nickname: string; className: string }
 
-type GiftTextInput = { message: string; nickname: string; className: string }
+// Accept unknown so the worker can pass raw body fields and get a typed { ok: false, field }
+// rather than a TypeError when a non-string arrives (e.g. null, 123, {}).
+type GiftTextInput = { message: unknown; nickname: unknown; className: unknown }
 
 /** Returned by validateGiftText on success. */
 export type GiftTextOk = { ok: true; value: ValidatedGiftText }
@@ -64,6 +66,13 @@ export type GiftTextResult = GiftTextOk | GiftTextFail
  * Returns { ok: false, field } naming the first field that fails.
  */
 export function validateGiftText(input: GiftTextInput): GiftTextResult {
+  // ── Non-string guard: reject null/number/object before calling .normalize() ───
+  // A body field that arrives as JSON null, number, or object must return { ok: false, field }
+  // rather than throwing a TypeError (which would surface as a 500 in the worker).
+  if (typeof input.message !== 'string') return { ok: false, field: 'message' }
+  if (typeof input.nickname !== 'string') return { ok: false, field: 'nickname' }
+  if (typeof input.className !== 'string') return { ok: false, field: 'className' }
+
   // ── message ───────────────────────────────────────────────────────────────
   const message = input.message.normalize('NFC').trim()
   if (!message) return { ok: false, field: 'message' }

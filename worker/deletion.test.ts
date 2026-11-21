@@ -438,3 +438,73 @@ describe('DELETE /api/me — sign-in with tombstoned sub recreates user banned',
     expect(newUser?.banned).toBe(0)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Cycle-2 fix: report_count recount on account deletion
+// Review finding [worker/me.ts account deletion]: report_count recount untested.
+// A gift with 2 unacknowledged reports, one from the deleting user, should end
+// with report_count = 1 (the deleting user's report is excluded from the recount
+// before it is deleted). An acknowledged report must not be counted.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('DELETE /api/me — report_count recount on deletion (cycle-2)', () => {
+  it('gift with 2 unacknowledged reports, 1 from the deleting user → report_count = 1', async () => {
+    // Another user owns the gift
+    const otherId = await seedUser(db, { sub: 'del-rcount-owner', email: 'delrcountowner@gmail.com' })
+    const { id: giftId } = await seedGift(db, otherId, campaignId, templateId, {
+      publicId: 'delrcount1234567',
+      reportCount: 2,  // pre-set; will be recomputed by handler
+    })
+
+    // A second reporter (not being deleted)
+    const otherReporterId = await seedUser(db, { sub: 'del-rcount-r2', email: 'delrcountr2@gmail.com' })
+
+    // Insert 2 unacknowledged reports: one from userId (the deleting user), one from otherReporterId
+    const now = new Date().toISOString()
+    sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, userId, 'spam', now)
+    sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, otherReporterId, 'other', now)
+
+    await handleMe(
+      sessionReq(rawToken, '/api/me', 'DELETE'),
+      deletionEnv(db),
+    )
+
+    // report_count should be 1 (only otherReporterId's unacknowledged report remains)
+    const gift = sqlite
+      .prepare('SELECT report_count FROM gift WHERE id = ?')
+      .get(giftId) as { report_count: number } | undefined
+    expect(gift?.report_count).toBe(1)
+
+    // The deleting user's report should be gone
+    const repCount = (sqlite
+      .prepare('SELECT COUNT(*) AS c FROM report WHERE user_id = ?')
+      .get(userId) as { c: number }).c
+    expect(repCount).toBe(0)
+  })
+
+  it('acknowledged report from deleting user is not counted in report_count', async () => {
+    const otherId = await seedUser(db, { sub: 'del-rcount-ack-owner', email: 'delrcountackowner@gmail.com' })
+    const { id: giftId } = await seedGift(db, otherId, campaignId, templateId, {
+      publicId: 'delrcountack12345',
+      reportCount: 1,
+    })
+    const otherReporterId = await seedUser(db, { sub: 'del-rcount-ack-r2', email: 'delrcountackr2@gmail.com' })
+    const now = new Date().toISOString()
+    // userId files an acknowledged (admin-cleared) report
+    sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,1,?)').run(giftId, userId, 'spam', now)
+    // Another reporter files an unacknowledged report
+    sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, otherReporterId, 'other', now)
+
+    await handleMe(
+      sessionReq(rawToken, '/api/me', 'DELETE'),
+      deletionEnv(db),
+    )
+
+    // The acknowledged report from userId is excluded; only otherReporterId's report remains
+    const gift = sqlite
+      .prepare('SELECT report_count FROM gift WHERE id = ?')
+      .get(giftId) as { report_count: number } | undefined
+    // otherReporterId's unacknowledged, non-banned report = 1
+    expect(gift?.report_count).toBe(1)
+  })
+})

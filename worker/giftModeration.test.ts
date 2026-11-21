@@ -539,8 +539,13 @@ describe('handleGiftModeration — unban removes banned_identity tombstone (item
       gSessionReq(adminToken, `/api/admin/users/${targetUserId}`, 'PATCH', { banned: false }),
       giftModerationEnv(tombstoneDb, { subHmacKey: undefined }),
     )
-    // Should fail (can't safely clear tombstone without the key)
-    expect(unbannedResp.status).not.toBe(200)
+    // Cycle-2 suggestion: must be exactly 500 (misconfigured), not just non-200
+    expect(unbannedResp.status).toBe(500)
+    // Cycle-2 suggestion: app_user.banned must still be 1 (unban did not proceed)
+    const bannedCheck = tombstoneSqlite
+      .prepare('SELECT banned FROM app_user WHERE id = ?')
+      .get(targetUserId) as { banned: number } | undefined
+    expect(bannedCheck?.banned).toBe(1)
   })
 })
 

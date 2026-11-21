@@ -729,3 +729,59 @@ describe('POST /api/campaigns/<slug>/gifts — text rule uses shared/gift.ts (it
     expect(r.status).toBe(400)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Cycle-2 fix: non-string gift fields → 400, never 500
+// Review finding [worker/gifts.ts:166]: null/number/object values for
+// className, nickname, message must return 400 bad_request, not TypeError 500.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/campaigns/<slug>/gifts — non-string text fields → 400 bad_request (cycle-2)', () => {
+  it('className: null → 400 bad_request (not TypeError 500)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        className: null,
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('className: 123 → 400 bad_request (not TypeError 500)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        className: 123,
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('nickname: 5 → 400 bad_request (not TypeError 500)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        nickname: 5,
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('message: null → 400 bad_request (not TypeError 500)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        message: null,
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+})

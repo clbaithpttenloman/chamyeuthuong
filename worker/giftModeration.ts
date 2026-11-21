@@ -131,27 +131,30 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
     }
 
     // Reporter identity is NEVER included (ADR-8).
-    return json(
-      rows.map((g) => ({
-        id: g.id,
-        publicId: g.public_id,
-        campaignId: g.campaign_id,
-        userId: g.user_id,
-        userBanned: Boolean(g.user_banned),  // item 10: owning user's banned flag
-        status: g.status,
-        reportCount: g.report_count,
-        heartCount: g.heart_count,
-        nickname: g.nickname,
-        className: g.class_name,
-        message: g.message,
-        createdAt: g.created_at,
-        layout: g.layout,
-        font: g.font,
-        ink: g.ink,
-        backgroundTemplateId: g.background_template_id,
-        reportReasons: reasons.get(g.id),
-      })),
-    )
+    // X-Truncated: 1 is set when the result was capped at 200 rows (the response shape is a
+    // bare array and must not change, so we signal truncation via a header — cycle-2 suggestion).
+    const payload = rows.map((g) => ({
+      id: g.id,
+      publicId: g.public_id,
+      campaignId: g.campaign_id,
+      userId: g.user_id,
+      userBanned: Boolean(g.user_banned),  // item 10: owning user's banned flag
+      status: g.status,
+      reportCount: g.report_count,
+      heartCount: g.heart_count,
+      nickname: g.nickname,
+      className: g.class_name,
+      message: g.message,
+      createdAt: g.created_at,
+      layout: g.layout,
+      font: g.font,
+      ink: g.ink,
+      backgroundTemplateId: g.background_template_id,
+      reportReasons: reasons.get(g.id),
+    }))
+    const resp = json(payload)
+    if (rows.length === 200) resp.headers.set('X-Truncated', '1')
+    return resp
   }
 
   // ── GET /api/admin/tombstones ─────────────────────────────────────────────────
@@ -193,8 +196,13 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       // Restore: acknowledge all existing reports, reset report_count to 0, set status = visible,
       // clear status_before_ban (item 3: prevent stale restore on later unban).
       // Refuse deleted gifts (ADR-8: cannot resurrect deleted gifts) and unknown ids.
+      // Gate the acknowledge UPDATE so it only runs when the gift exists and is non-deleted
+      // (a 404 must write nothing — cycle-2 suggestion).
       const result = await env.DB.batch([
-        env.DB.prepare('UPDATE report SET acknowledged = 1 WHERE gift_id = ?').bind(giftId),
+        env.DB.prepare(
+          "UPDATE report SET acknowledged = 1 WHERE gift_id = ? " +
+          "  AND EXISTS (SELECT 1 FROM gift WHERE id = ? AND status != 'deleted')",
+        ).bind(giftId, giftId),
         env.DB.prepare(
           "UPDATE gift SET status = 'visible', report_count = 0, status_before_ban = NULL " +
           "WHERE id = ? AND status != 'deleted'",

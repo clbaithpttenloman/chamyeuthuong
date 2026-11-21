@@ -170,11 +170,8 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
 
   // Text validation — shared/gift.ts (NFC + trim, code-point lengths, control/bidi/surrogate).
   // All three fields validated in one call; field name identifies the failing field.
-  const textResult = validateGiftText({
-    message: typeof message === 'string' ? message : '',
-    nickname: typeof nickname === 'string' ? nickname : '',
-    className: typeof className === 'string' ? className : (className === undefined ? '' : null as unknown as string),
-  })
+  // Non-string inputs (null, number, object) return { ok: false, field } — no TypeError 500.
+  const textResult = validateGiftText({ message, nickname, className: className !== undefined ? className : '' })
   if (!textResult.ok) return json({ error: 'bad_request' }, 400)
   const { message: validMessage, nickname: validNickname, className: validClassName } = textResult.value
 
@@ -503,7 +500,7 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
   // Single conditional INSERT (item 5): checks gift still visible and campaign still open,
   // so a concurrent gift-delete or campaign-close between the read and the INSERT is handled.
   // INSERT OR IGNORE guards the PK so a concurrent duplicate report doesn't double-insert.
-  await env.DB.batch([
+  const batch = await env.DB.batch([
     // 1. Conditional INSERT: only if gift still visible + campaign still open + not yet reported
     env.DB.prepare(
       'INSERT OR IGNORE INTO report (gift_id, user_id, reason, acknowledged, created_at) ' +
@@ -514,19 +511,50 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
       "  AND c.status = 'active' AND ? BETWEEN c.starts_at AND c.ends_at " +
       '  AND NOT EXISTS (SELECT 1 FROM report WHERE gift_id = g.id AND user_id = ?)',
     ).bind(userId, reason, nowDt, state.gift_id, nowDt, userId),
-    // 2. Recount: only non-banned, unacknowledged reports
+    // 2. Recount: only non-banned, unacknowledged reports.
+    //    Guard: status != 'deleted' so a race where the gift was deleted between the
+    //    preliminary read and this batch does not reset the report_count on a deleted gift.
     env.DB.prepare(
       'UPDATE gift SET report_count = (' +
       '  SELECT COUNT(*) FROM report r ' +
       '  JOIN app_user u ON u.id = r.user_id ' +
-      '  WHERE r.gift_id = ? AND r.acknowledged = 0 AND u.banned = 0' +
-      ') WHERE id = ?',
+      "  WHERE r.gift_id = ? AND r.acknowledged = 0 AND u.banned = 0" +
+      ") WHERE id = ? AND status != 'deleted'",
     ).bind(state.gift_id, state.gift_id),
     // 3. Auto-hide if threshold reached (same batch, atomic)
     env.DB.prepare(
       "UPDATE gift SET status = 'hidden_auto' WHERE id = ? AND status = 'visible' AND report_count >= ?",
     ).bind(state.gift_id, threshold),
   ])
+
+  // If the INSERT changed 0 rows, the state changed between the preliminary read and
+  // the INSERT (gift deleted, campaign closed, or concurrent duplicate report). Run the
+  // same diagnosis to return a specific error instead of silently returning { ok: true }.
+  if (batch[0]!.meta.changes === 0) {
+    const diag = await env.DB
+      .prepare(
+        'SELECT g.id, g.status AS gift_status, ' +
+        '       c.status AS camp_status, c.starts_at, c.ends_at, ' +
+        '       (SELECT COUNT(*) FROM report r WHERE r.gift_id = g.id AND r.user_id = ?) AS already_rep ' +
+        'FROM gift g ' +
+        'JOIN campaign c ON c.id = g.campaign_id ' +
+        'WHERE g.id = ?',
+      )
+      .bind(userId, state.gift_id)
+      .first<{ id: number; gift_status: string; camp_status: string; starts_at: string; ends_at: string; already_rep: number }>()
+
+    if (!diag || diag.gift_status !== 'visible') return json({ error: 'gift_not_found' }, 404)
+
+    const campStillOpen = isEffectivelyOpen(
+      { status: diag.camp_status as 'draft' | 'active' | 'closed', starts_at: diag.starts_at, ends_at: diag.ends_at },
+      new Date(),
+    )
+    if (!campStillOpen) return json({ error: 'campaign_closed' }, 409)
+    if (diag.already_rep > 0) return json({ error: 'already_reported' }, 409)
+
+    // Fallback (shouldn't happen in practice)
+    return json({ error: 'gift_not_found' }, 404)
+  }
 
   return json({ ok: true })
 }
