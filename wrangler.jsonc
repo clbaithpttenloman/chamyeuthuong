@@ -9,10 +9,9 @@
   // once every admin has signed in with Google and the log shows no legacy use for 48 h.
   //
   // Phase 1 secrets (set via `wrangler secret put`):
-  //   NONCE_KEY    — 32+ byte random key for HMAC-signing sign-in nonces
-  //   SUB_HMAC_KEY — 32+ byte random key for HMAC-hashing Google subs in ban tombstones
-  //   IP_HMAC_KEY  — 32+ byte random key for HMAC-hashing IP addresses in sessions
-  //   ADMIN_TOKEN  — existing admin token (unchanged)
+  //   NONCE_KEY    — 32+ byte random key for HMAC-signing sign-in nonces (required)
+  //   SUB_HMAC_KEY — reserved for Phase 2 ban tombstones (not read yet)
+  //   IP_HMAC_KEY  — reserved for Phase 2 abuse handling (not read yet)
   //
   // First-admin bootstrap (email header, one-time):
   //   BOOTSTRAP_EMAIL in "vars" lets only that exact address claim an EMPTY admin table.
