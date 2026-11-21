@@ -298,6 +298,68 @@ INSERT INTO template_image VALUES ((SELECT MAX(id) FROM template), 'background',
 
 Verified 2026-11-20 for plan `.kiro/delivery/2026-11-18-campaign-platform/` (ADR-3).
 
+### Campaign Table & Migration
+
+**Phase 1 schema:**
+```sql
+campaign(
+  id       INTEGER PRIMARY KEY,
+  slug     TEXT UNIQUE NOT NULL CHECK (length(slug) BETWEEN 2 AND 32 AND NOT slug GLOB '*[^a-z0-9-]*'),
+  kind     TEXT NOT NULL CHECK (kind IN ('teacher_cards','gift_tree')),
+  name     TEXT NOT NULL,
+  tagline  TEXT NOT NULL DEFAULT '',
+  content  TEXT NOT NULL,  -- JSON { home: { kicker, heading, body } }
+  theme_colors TEXT NOT NULL DEFAULT '{}',  -- JSON
+  settings TEXT NOT NULL DEFAULT '{}',  -- JSON (validation in code)
+  starts_at TEXT NOT NULL,  -- ISO-8601 UTC YYYY-MM-DDTHH:MM:SSZ
+  ends_at TEXT NOT NULL,
+  status   TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','closed')),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL
+)
+CREATE UNIQUE INDEX one_active ON campaign(status) WHERE status = 'active'
+```
+
+**Migration step:** after campaign table is created, if no row with id=1 exists:
+1. Insert campaign 1 with slug='20-11', kind='teacher_cards', status='active', content from `src/content/site.json`
+2. This runs atomically with the `ADD COLUMN campaign_id` steps on existing tables (template, wish, student_card), all with DEFAULT 1
+
+**Existing table changes:**
+- `template.campaign_id INTEGER NOT NULL DEFAULT 1` (added in upgrade step, indexed)
+- `wish.campaign_id INTEGER NOT NULL DEFAULT 1` (added in upgrade step, indexed)
+- `student_card.campaign_id INTEGER NOT NULL DEFAULT 1` (added in upgrade step, indexed)
+
+(These columns are not foreign-key constrained because SQLite cannot `ALTER TABLE ... ADD COLUMN ... REFERENCES ... DEFAULT <non-null>` while FKs are ON. Validation is in app code and indexes are added after the ADD COLUMN step.)
+
+### Campaign Admin Endpoints (Phase 1)
+
+**All campaign admin routes require Google sign-in only** (no legacy email path). Signature: `POST /api/admin/campaigns` returns 201 on success; dates are validated (end > start), status defaults to 'draft' on POST (rejected on PATCH), slug is generated from name if absent.
+
+| Method | Path | Fields | Purpose | Response |
+|--------|------|--------|---------|----------|
+| POST | `/api/admin/campaigns` | slug, kind, name, content, theme_colors, settings, starts_at, ends_at | Create draft campaign | 201 created |
+| GET | `/api/admin/campaigns` | — | List all campaigns | 200 + array |
+| GET | `/api/admin/campaigns/<id>` | — | Get one for editing | 200 + campaign |
+| PATCH | `/api/admin/campaigns/<id>` | name, content, theme_colors, settings, starts_at, ends_at | Update (status rejected 400) | 200 + campaign |
+| POST | `/api/admin/campaigns/<id>/activate` | — | Close prev active, activate this | 200 + campaign |
+| POST | `/api/admin/campaigns/<id>/close` | — | Set status='closed' | 200 + campaign |
+| DELETE | `/api/admin/campaigns/<id>` | — | Remove campaign | 204 (or 409 if campaign 1 or owns rows) |
+
+**Slug validation:** 2–32 chars, regex `[a-z0-9-]+` (lowercase, digits, hyphens only); reserved words: admin, api, t, gui-thiep, ve-clb-ai, assets, theme, g.
+
+**Content shape:** `{ home: { kicker?: string, heading?: string, body?: string } }`; seeded for campaign 1 from `src/content/site.json`.
+
+**Effective open:** `status = 'active' AND now BETWEEN starts_at AND ends_at` (no automatic status flip at midnight).
+
+### Public Campaign Endpoints (Phase 1)
+
+| Method | Path | Returns | Rate Limit |
+|--------|------|---------|-----------|
+| GET | `/api/campaigns/active` | active campaign, or most recent closed (`open: false`) | PUBLIC_READ_LIMIT (3000/60 s, per IP, cache misses only) |
+| GET | `/api/campaigns/<slug>` | campaign by slug (drafts → 404 unless admin) | PUBLIC_READ_LIMIT (cache misses) |
+
+**Memo + cache:** `/api/campaigns/active` and `/:slug` are memoised per isolate (5 s TTL, 32-entry LRU, active slug pinned, unknown slugs in separate 30-s 404 cache). Memo key = normalised path + validated slug (query params ignored). Rate limiter is charged only on cache misses. Tests verify a /api/campaigns/active memo hit does not charge PUBLIC_READ_LIMIT.
+
 ### `jose` — version 6.2.17
 - Pin `"jose": "6.2.17"`: released 2026-11-09. 6.2.18 (2026-11-18) is inside the 7-day quarantine. ESM (`"type": "module"`).
 - Imports: `import { createRemoteJWKSet, jwtVerify, errors } from 'jose'`.
@@ -305,6 +367,7 @@ Verified 2026-11-20 for plan `.kiro/delivery/2026-11-18-campaign-platform/` (ADR
 - `jwtVerify(jwt, getKey, options)` where `options` includes `algorithms`, `issuer` (string | string[]), `audience`, `clockTolerance`, `maxTokenAge`, `requiredClaims`, `currentDate`.
 - Errors: `errors.JWTExpired` (code `ERR_JWT_EXPIRED`), `errors.JWTClaimValidationFailed` (`ERR_JWT_CLAIM_VALIDATION_FAILED`), `errors.JWKSNoMatchingKey`, `errors.JWKSTimeout`.
 - Behaviour checked locally with node 22: options `{ algorithms: ['RS256'], issuer: ['https://accounts.google.com','accounts.google.com'], audience, clockTolerance: 60, maxTokenAge: '1h', requiredClaims: ['sub','exp','iat'] }`.
+- **Shipped (worker/google.ts):** `maxTokenAge` is not passed, because jose subtracts `clockTolerance` from it. The code checks `iat` itself after `jwtVerify`: refused when `iat > now + 60 s` (future) or `now − iat > 3600 s` (older than 1 h).
   - `iat` = now passes; `iat` = now + 30 s passes (within tolerance).
   - `iat` = now + 300 s fails: "iat claim timestamp check failed (it should be in the past)".
   - Expired `exp` fails with `ERR_JWT_EXPIRED`.
@@ -337,6 +400,9 @@ Verified 2026-11-20 for plan `.kiro/delivery/2026-11-18-campaign-platform/` (ADR
   - `iss` ∈ {`accounts.google.com`, `https://accounts.google.com`}.
   - `exp` not passed.
   - Plus our own: RS256, `iat`/`sub` required, max age 1 h, `email_verified === true`, `nonce` equals the signed nonce cookie.
+- **Cookies as shipped (worker/session.ts, verified in tests 2026-11-21):**
+  - Nonce: `__Host-cyt_n=<32 hex>.<expiry epoch>.<HMAC-SHA256(NONCE_KEY) hex>`; HttpOnly; Secure; SameSite=Lax; Path=/; 5 min. Returned as `{ nonce, clientId }` by `GET /api/auth/nonce` (`clientId` = the `GOOGLE_CLIENT_ID` var). Cleared after every sign-in attempt.
+  - Session: `__Host-cyt_s=<32 random bytes, base64url>`; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=1209600 (14 days); no Domain. D1 stores only SHA-256(token). Sign-in deletes the presented session first; at most 10 per user.
 - **Email authority (affects admin matching):** Google is authoritative for an email only when it ends with `@gmail.com`, or when `email_verified` is true and `hd` is set (Workspace). For other addresses, Google says ownership "may have since changed". Rule: an `admin` entry matches only if the token's email is authoritative by this test. In every case, `admin.google_sub` is pinned on first sign-in.
 - Use `sub` as the user key, never email ("Email is not a good choice because it can be changed by the user").
 - GIS also sends a `g_csrf_token` cookie and body field, but only in `login_uri` (redirect) mode. We use the JS callback and POST JSON ourselves, so CSRF protection is our nonce plus `X-Requested-With` plus `Sec-Fetch-Site`.

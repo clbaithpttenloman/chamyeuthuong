@@ -682,7 +682,94 @@ curl -H "X-Admin-Email: you@example.com" \
 
 ---
 
-## Operational Notes
+## Campaigns (Phase 1)
+
+A **campaign** is one event on the site. 20/11 is campaign 1 (slug `20-11`, kind `teacher_cards`); Noel 2026 will be a `gift_tree` campaign. Status is `draft`, `active` or `closed`, and at most one campaign is `active` (partial unique index). A campaign is **open** when it is `active` **and** now is between `starts_at` and `ends_at`; nothing changes status automatically.
+
+Campaign endpoints need **Google sign-in**: the typed-email login is refused there (401). Sign in on `/admin` with "Đăng nhập bằng Google" (see `docs/runbooks/google-signin.md`).
+
+### Campaign editor (`/admin` → Chiến dịch)
+1. **Tạo chiến dịch**: slug (2–32 chars, `a-z`, `0-9`, `-`; reserved: admin, api, t, gui-thiep, ve-clb-ai, assets, theme, g), kind, name (required, ≤ 120), tagline (≤ 200), content JSON, start and end in Vietnam time (stored as UTC `YYYY-MM-DDTHH:MM:SSZ`), and for `gift_tree` the settings (ranges shown in the form). A new campaign is always **draft**.
+2. **Sửa**: loads the full campaign; saving changes only the fields you edit. Slug, kind and status cannot be changed here.
+3. **Kích hoạt** (asks for confirmation): closes the currently active campaign and activates this one in one transaction. Activating Noel closes 20/11 — new cards then get "campaign_closed", while 20/11 pages stay readable.
+4. **Đóng**: sets the campaign to `closed`. With no active campaign, `/` shows the most recently closed one, read-only.
+
+Content JSON shape (what `/` reads):
+
+```json
+{ "home": { "kicker": "Ngày Nhà giáo Việt Nam 20/11/2026", "heading": "Gửi thầy cô muôn vàn lời tri ân", "body": "…" } }
+```
+
+**Campaign 1 window:** created as `active` from 2026-01-01T00:00:00Z to 2026-12-31T23:59:59Z. After that it is no longer open (new cards → 409 `campaign_closed`) unless you edit the end date.
+
+**Caching:** public campaign reads are cached 5 s per Worker instance, and "not found" answers up to 30 s. After creating or activating a campaign, wait 30 s before announcing its link.
+
+**Delete** (API only, no button): `DELETE /api/admin/campaigns/<id>` → 409 `campaign_protected` for campaign 1 or the active campaign, 409 `campaign_has_rows` if templates, wishes or cards belong to it.
+
+### Campaign admin API
+
+All need a Google admin session cookie and, for writes, `X-Requested-With: fetch`. Bodies are JSON with snake_case keys; `status` is refused on POST and PATCH (use activate/close). Errors: 400 `bad_request` (invalid field), 401 not signed in with Google, 403 not an admin, 404 `not_found` (unknown id), 409 as above.
+
+| Method | Path | Body / result |
+|---|---|---|
+| GET | `/api/admin/campaigns` | `{ campaigns: [{ id, slug, kind, name, tagline, starts_at, ends_at, status, created_at, created_by }] }` |
+| POST | `/api/admin/campaigns` | `{ slug, kind, name, tagline?, content?, theme_colors?, settings?, starts_at, ends_at }` → 201 `{ id }` (draft) |
+| GET | `/api/admin/campaigns/<id>` | full row incl. `content`, `theme_colors`, `settings` |
+| PATCH | `/api/admin/campaigns/<id>` | any of `name, tagline, content, theme_colors, settings, starts_at, ends_at` → `{ ok: true }` |
+| POST | `/api/admin/campaigns/<id>/activate` | closes the previous active → `{ ok: true }` |
+| POST | `/api/admin/campaigns/<id>/close` | → `{ ok: true }` |
+| DELETE | `/api/admin/campaigns/<id>` | → `{ ok: true }` or 409 |
+
+Public (no sign-in): `GET /api/campaigns/active` (active campaign, else the most recent closed one with `open: false`, 404 if none) and `GET /api/campaigns/<slug>` (`draft` → 404; only the exact path, no trailing slash). Response: `{ slug, kind, name, tagline, content, themeColors, settings, startsAt, endsAt, status, open }`, `Cache-Control: public, max-age=5`.
+
+`POST /api/cards` returns **409 `{"error":"campaign_closed"}`** when campaign 1 is not open (other 20/11 responses are unchanged).
+
+### User data deletion requests (NFR-6, within 7 days)
+Users can delete their own account with `DELETE /api/me` (no button until Phase 2). For a request by message, delete by the user's Google email (removes their sessions and account; admin rows are not touched):
+
+```bash
+npx wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM session WHERE user_id IN (SELECT id FROM app_user WHERE email = 'student@gmail.com'); DELETE FROM app_user WHERE email = 'student@gmail.com';"
+```
+
+---
+
+## Phase 1 deploy checklist (campaigns + Google sign-in)
+
+Deploy **not before 23/11 and by 27/11**, outside event traffic. Production is currently at 4cb51a3 (Giám thị). Deploy = merge `campaign-platform` into `master` and push.
+
+### Before
+- [ ] Google OAuth client created and `GOOGLE_CLIENT_ID` set in `wrangler.jsonc` vars (`docs/runbooks/google-signin.md`). Without it, sign-in is refused and the button shows "chưa được cấu hình".
+- [ ] Secret `NONCE_KEY` set on production (without it the sign-in button cannot load: `GET /api/auth/nonce` → 503):
+  ```bash
+  printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put NONCE_KEY
+  ```
+  `SUB_HMAC_KEY` and `IP_HMAC_KEY` are reserved for Phase 2 and not read yet.
+- [ ] Staging deployed and checked (`docs/runbooks/staging.md`), including one 429 per new limit class.
+- [ ] Upgrade smoke **locally**: a git worktree of `4cb51a3` with `wrangler dev --persist-to <tmp>`, create data, then this branch on the same `--persist-to` state (method in `.kiro/delivery/2026-11-18-campaign-platform/phases/phase-1-campaigns-signin/smoke.md`). Never restore the production database for a test.
+- [ ] Note the restore point: `npx wrangler d1 time-travel info cham-yeu-thuong`
+- [ ] Orphan check is 0: `npx wrangler d1 execute cham-yeu-thuong --remote --command "SELECT count(*) AS n FROM teacher_profile WHERE teacher_id NOT IN (SELECT id FROM teacher)"`
+- [ ] Once a custom domain exists: Cloudflare WAF rate-limiting rule on `/api/auth/*` (the Worker limits are per location and approximate).
+
+### After
+- [ ] `/`, `/gui-thiep`, `/t/<token>` work as before; `/` shows the 20/11 home.
+- [ ] `GET /api/campaigns/active` → slug `20-11`, `open: true`.
+- [ ] `GET /api/auth/nonce` → `clientId` is the real client ID.
+- [ ] `/admin`: Google sign-in works; the typed-email login still works for the 20/11 sections; Chiến dịch tab lists `20-11`.
+- [ ] Write a card: it is accepted (pending).
+- [ ] Logs: no `schema: upgrade failed`. A single line right after deploy can be a race; repeated lines are not.
+- [ ] If indexes are missing after a crashed upgrade (reads slower, nothing else), create them:
+  ```bash
+  npx wrangler d1 execute cham-yeu-thuong --remote --command "CREATE INDEX IF NOT EXISTS idx_template_campaign_id ON template(campaign_id); CREATE INDEX IF NOT EXISTS idx_wish_campaign_id ON wish(campaign_id); CREATE INDEX IF NOT EXISTS idx_student_card_campaign_id ON student_card(campaign_id);"
+  ```
+
+### Rollback
+Roll forward with a fix. The previous code keeps working on the upgraded database (the new columns have defaults and the new tables are ignored), so redeploying `4cb51a3` is safe. Restoring the database (`npx wrangler d1 time-travel restore cham-yeu-thuong --bookmark=<restore point>`) is destructive: it loses everything written since.
+
+### Before the Phase 2 deploy (by 5/12): remove the typed-email login
+1. Every admin signs in once with Google on production (pins their `google_sub`).
+2. Logs show no `admin: legacy login used` for 48 h.
+3. Remove `ADMIN_LEGACY_LOGIN` and `BOOTSTRAP_EMAIL` from `wrangler.jsonc` vars and deploy.
+4. Check: the typed-email login on `/admin` now gets 401; Google sign-in still works.
 
 ### Schema & Tables
 

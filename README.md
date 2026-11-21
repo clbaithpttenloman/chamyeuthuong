@@ -1,22 +1,28 @@
-# Chạm yêu thương — AI Club Student Cards Platform
+# Chạm yêu thương — Campaign Platform with Google Sign-In & Student Cards
 
 **Mission:** Technology creates wishes; emotion creates meaning.  
 **Built by:** CLB AI — THPT Ten Lơ Man  
-**Date:** 20/11/2026
+**Campaigns:** the site runs one event at a time. 20/11 (teacher cards) is campaign 1; Noel 2026 (wish tree) comes next.
 
 A platform where students send personalized cards to teachers. Admins create card **templates** (layout + images); students pick a template, choose a teacher, and write a wish. Every card is pending until approved. Teachers access their cards via a private QR code.
 
+Phase 1 (campaigns + Google sign-in) adds:
+- **Campaigns:** `/admin` → Chiến dịch to create, edit, activate and close campaigns. `/` shows the active campaign's home text. See `docs/runbooks/admin.md` → "Campaigns (Phase 1)".
+- **Google sign-in** on `/admin`. Campaign management and adding/removing admins need Google; the typed-email login still works for the 20/11 sections until it is removed before the Phase 2 deploy. Setup: `docs/runbooks/google-signin.md`.
+- **Staging** environment for pre-launch tests: `docs/runbooks/staging.md`.
+
 **Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
 
-## Site Structure
+## Site Structure (Phase 1)
 
 | Route | Purpose |
 |---|---|
-| `/` | Home — intro, teacher count, approved card count, and the "Gửi thiệp" button. No teacher list: students find a teacher inside `/gui-thiep` (step 2) |
+| `/` | Home — intro from campaign content, teacher count, card count, and the "Gửi thiệp" button. No teacher list: students find a teacher inside `/gui-thiep` (step 2) |
 | `/gui-thiep` | Send flow — pick teacher → pick template → write message → submit (4 steps). From query `?thay=<id>` or `?t=<token>` |
 | `/t/:token` | QR page — teacher's private QR token; shows a random approved card + "View all" + empty state. One link per teacher, distributed privately |
 | `/ve-clb-ai` | About — club timeline, members, stats from database |
-| `/admin` | Admin dashboard — moderation, templates, teachers, wishes, images, admins (email typed, risk R1) |
+| `/admin` | Admin dashboard — moderation, templates, teachers, wishes, images, admins, campaigns |
+| `/:slug` | A campaign page by slug (e.g. `/noel-2026`); drafts and unknown slugs show not found. Reserved: admin, api, t, gui-thiep, ve-clb-ai, assets, theme, g |
 
 Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About content (timeline, members) is stored in D1 and edited via `/admin`.
 
