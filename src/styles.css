@@ -504,3 +504,237 @@ button:disabled { opacity: 0.5; cursor: default; }
 .layout-icon--portrait { width: 30px; height: 40px; }
 .layout-icon--landscape { width: 40px; height: 30px; }
 .layout-icon i { position: absolute; background: #93c5fd; }
+
+
+/* ══════════════════════════════════════════════════════════════════
+   Noel scene — gift tree 2.5D scene component (ADR-4)
+   Added for campaign-platform Phase 2.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Scene container ─────────────────────────────────────────────── */
+.noel-scene {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  /* Allow vertical scroll; horizontal captured for spin via setPointerCapture */
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+.noel-scene:focus-visible {
+  outline: 3px solid #7dd3fc;
+  outline-offset: -3px;
+  border-radius: 2px;
+}
+
+/* ── Sky ─────────────────────────────────────────────────────────── */
+.noel-sky {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Snow canvas ─────────────────────────────────────────────────── */
+.noel-snow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ── Tree image ──────────────────────────────────────────────────── */
+.noel-tree-img {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  pointer-events: none;
+  z-index: 4;
+  object-fit: contain;
+  object-position: top center;
+}
+
+/* ── Ground layer ────────────────────────────────────────────────── */
+.noel-ground {
+  position: absolute;
+  bottom: 0;
+  left: -2%;
+  width: 104%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* ── Ornament buttons (tree gifts) ───────────────────────────────── */
+/* Position is fully managed by the rAF loop via transform; elements
+   start off-screen (translate(-9999px,0)) until first rAF tick. */
+.noel-orn-btn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-9999px, 0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  /* z-index set dynamically (3=behind, 6=front) */
+}
+.noel-orn-btn:focus-visible {
+  outline: 3px solid #7dd3fc;
+  outline-offset: 4px;
+  border-radius: 50%;
+}
+.noel-orn-btn:hover,
+.noel-orn-btn:focus-visible {
+  filter: brightness(1.25);
+}
+
+.noel-orn-img {
+  width: 48px;
+  height: 56px;
+  display: block;
+  pointer-events: none;
+}
+
+/* Crown for ranks 1–3 */
+.noel-orn-crown {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.85rem;
+  line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+}
+
+/* Heart count chip */
+.noel-orn-hearts {
+  position: absolute;
+  bottom: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.72);
+  color: #fca5a5;
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  border: 1px solid rgba(252, 165, 165, 0.3);
+}
+/* Always show for top 3; show on hover/focus for all */
+.noel-orn-btn:hover .noel-orn-hearts,
+.noel-orn-btn:focus-visible .noel-orn-hearts,
+.noel-orn-btn[data-rank="1"] .noel-orn-hearts,
+.noel-orn-btn[data-rank="2"] .noel-orn-hearts,
+.noel-orn-btn[data-rank="3"] .noel-orn-hearts {
+  opacity: 1;
+}
+/* On coarse pointer devices, chips off by default (hover not reliable) */
+@media (pointer: coarse) {
+  .noel-orn-hearts {
+    opacity: 0;
+  }
+  .noel-orn-btn[data-rank="1"] .noel-orn-hearts,
+  .noel-orn-btn[data-rank="2"] .noel-orn-hearts,
+  .noel-orn-btn[data-rank="3"] .noel-orn-hearts {
+    opacity: 1;
+  }
+}
+
+/* ── Ground box buttons ──────────────────────────────────────────── */
+.noel-box-btn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-9999px, 0);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  z-index: 7;
+}
+.noel-box-btn:focus-visible {
+  outline: 3px solid #7dd3fc;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.noel-box-btn:hover,
+.noel-box-btn:focus-visible {
+  filter: brightness(1.12);
+}
+
+.noel-box-img {
+  width: 56px;
+  height: 56px;
+  display: block;
+  pointer-events: none;
+}
+
+/* ── Star ────────────────────────────────────────────────────────── */
+.noel-star {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-9999px, 0);
+  width: 56px;
+  height: 56px;
+  pointer-events: none;
+  z-index: 8;
+  /* animation applied via WAAPI in timelines.ts */
+}
+
+/* ── Sparkle particle (timelines.ts animateBoxOpen) ─────────────── */
+.noel-spark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fbbf24;
+  pointer-events: none;
+}
+
+/* ── Heart burst particle (timelines.ts burstHearts) ────────────── */
+.noel-heart-particle {
+  display: block;
+}
+
+/* ── Reduced motion: disable hover transitions on ornaments ─────── */
+@media (prefers-reduced-motion: reduce) {
+  .noel-orn-btn {
+    transition: none;
+  }
+  .noel-orn-btn:hover,
+  .noel-orn-btn:focus-visible {
+    filter: none;
+  }
+  .noel-box-btn:hover,
+  .noel-box-btn:focus-visible {
+    filter: none;
+  }
+}
