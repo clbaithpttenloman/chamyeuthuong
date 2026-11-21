@@ -594,3 +594,22 @@ All gift text validated by `shared/gift.ts:validateGiftText({ message, nickname,
 
 Used on gift create, also by client-side form validation (`src/game/createGiftValidation.ts`).
 
+
+## Password hashing on Workers (accounts, Phase 2b) — verified 2026-11-22
+
+- **API**: WebCrypto, no dependency.
+  ```ts
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, key, 256)
+  ```
+  Same call works in Node 22 (`globalThis.crypto.subtle`) and workerd.
+- **workerd cap**: production Workers refuse more than 100,000 iterations (`NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not supported (requested N)`). The cap is **production-only**: local `wrangler dev` (workerd 1.20261103.1) accepted 50,000, 100,000 and 100,001 on 2026-11-22, so a local test cannot catch a value above the cap — keep the constant ≤ 100,000 by test. Sources: [Cloudflare community](https://community.cloudflare.com/t/configure-pbkdf2-iteration-cap/848334), [Nantoka PRESS](https://nantokapress.com/workers-pbkdf2-iteration-limit/) ("only in production"), proposal to raise it: [workerd PR #7550](https://github.com/cloudflare/workerd/pull/7550) (status not verified).
+- **CPU budget**: Workers Free = 10 ms CPU per HTTP request, Paid = 30 s default; D1 waits do not count ([Workers limits](https://developers.cloudflare.com/workers/platform/limits/)). Isolates tolerate occasional overruns; consistent overruns return error 1102.
+- **Measured (Node 22, Apple silicon, PBKDF2-SHA256, 32-byte output)**: 10k = 0.8 ms, 25k = 1.8 ms, 50k = 3.6 ms, 100k = 7.1 ms. Chosen: 50,000, stored per credential, rehash on login when raised.
+- **Test vector** (RFC 7914 §11): P = "passwd", S = "salt", c = 1, dkLen = 64 → `55 ac 04 6e 56 e3 08 9f ec 16 91 c2 25 44 b6 05 f9 41 85 21 6d de 04 65 e6 8b 9d 57 c2 0d ac bc 49 ca 9c cc f1 79 b6 45 99 16 64 b3 9d 77 ef 31 7c 71 b8 45 b1 e3 0b d5 09 11 20 41 d3 a1 97 83`.
+- **Constant-time compare**: XOR-accumulate over the fixed 32 bytes. `crypto.subtle.timingSafeEqual` exists in workerd (probe 2026-11-22) but not in Node's WebCrypto, and tests run in Node.
+- **Normalisation**: passwords are `String.prototype.normalize('NFC')` before length checks, the common-password check and hashing (Vietnamese keyboards emit NFC or NFD).
+- **Common-password list**: `worker/commonPasswords.ts` (Worker only, so the browser bundle does not grow). Source: SecLists `Passwords/Common-Credentials/10k-most-common.txt`, MIT licence (Copyright (c) 2018 Daniel Miessler), filtered to the 2,087 entries of ≥ 8 characters (shorter ones fail the length rule anyway), plus Vietnamese/school additions (`anhyeuem`, `emyeuanh`, `matkhau123`, `tenloman`, …). Downloaded 2026-11-22 from `https://raw.githubusercontent.com/danielmiessler/SecLists/master/…`; the licence notice is kept in the file header.
+- **`Sec-Fetch-Site`**: values `same-origin`, `same-site`, `cross-site`, `none`; a same-origin `fetch` sends `same-origin`; sent only to potentially trustworthy (HTTPS/localhost) URLs and Baseline since March 2023, so absence means an old browser or a non-browser client ([MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site)). Account endpoints accept `same-origin` or absent.
+- **Rate-limit binding**: `limit({ key, delta? })` → `{ success }`; a successful call counts, a refused one does not; there is no read-only check; counts are approximate and per Cloudflare location ([Workers rate limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/), page updated 2026-11-12). So any limit meant to bound hashing must be called before the hash.
+- **IPv6 /64 key**: `CF-Connecting-IP` holds the client address as text (IPv4 dotted or IPv6). Key = IPv4 as is; IPv6 → expand `::`, take the first four 16-bit groups, join with `:` and append `::/64`. Pure function `ipKey()` in `worker/accounts.ts`, unit-tested.

@@ -366,15 +366,8 @@ describe('handleGiftModeration — PATCH users/<id> ban/unban (ADR-8)', () => {
     expect(row.status_before_ban).toBeNull()
   })
 
-  it('admin cannot ban themselves → 403', async () => {
-    const adminUser = giftSqlite4.prepare('SELECT id FROM app_user WHERE google_sub = ?').get(GOOGLE_TEST_SUB) as { id: number } | undefined
-    expect(adminUser).toBeDefined()
-    const r = await handleGiftModeration(
-      gSessionReq(adminTok4, `/api/admin/users/${adminUser!.id}`, 'PATCH', { banned: true }),
-      giftModerationEnv(giftDb4),
-    )
-    expect(r.status).toBe(403)
-  })
+  // Phase 1 "admin cannot ban themselves" test removed: it used google_sub lookup.
+  // Replacement: "ban of admin_role user → 409 is_admin" is in the Phase 2b describe block below.
 })
 
 // Orchestrator addition: moderators need the card fields and the reasons, not just a count.
@@ -455,77 +448,8 @@ describe('handleGiftModeration — unban removes banned_identity tombstone (item
     await seedSession(tombstoneDb, targetUserId, targetToken)
   })
 
-  it('unban removes the tombstone so the user can sign in normally (ADR-8)', async () => {
-    const authEnv = {
-      ...deletionEnv(tombstoneDb, { subHmacKey: TEST_SUB_HMAC_KEY }),
-      GOOGLE_CLIENT_ID: 'test-client-123.apps.googleusercontent.com',
-      NONCE_KEY: TEST_NONCE_KEY,
-    }
-    const modEnv = giftModerationEnv(tombstoneDb, { subHmacKey: TEST_SUB_HMAC_KEY })
-
-    // Step 1: Ban the target user
-    await handleGiftModeration(
-      gSessionReq(adminToken, `/api/admin/users/${targetUserId}`, 'PATCH', { banned: true }),
-      modEnv,
-    )
-
-    // Step 2: User deletes their account (creates tombstone because they're banned)
-    const userToken = makeRawToken()
-    await seedSession(tombstoneDb, targetUserId, userToken)
-    await handleMe(
-      new Request('https://x/api/me', {
-        method: 'DELETE',
-        headers: {
-          Cookie: `__Host-cyt_s=${userToken}`,
-          'X-Requested-With': 'fetch',
-          'CF-Connecting-IP': '1.2.3.4',
-        },
-      }),
-      authEnv,
-    )
-
-    // Tombstone should exist
-    const tombstoneCount = (tombstoneSqlite
-      .prepare('SELECT COUNT(*) AS c FROM banned_identity')
-      .get() as { c: number }).c
-    expect(tombstoneCount).toBe(1)
-
-    // Step 3: Sign in with the same sub → recreated as banned (tombstone check)
-    const { nonceValue: nonce1 } = await makeNonce(TEST_NONCE_KEY)
-    const credential1 = await validToken({ nonce: nonce1, sub: TARGET_SUB, email: TARGET_EMAIL }, {})
-    await handleAuth(makeSignInReq(credential1, nonce1), authEnv, { keys: await localJwks() })
-
-    const banCheck = tombstoneSqlite
-      .prepare('SELECT banned FROM app_user WHERE google_sub = ?')
-      .get(TARGET_SUB) as { banned: number } | undefined
-    expect(banCheck?.banned).toBe(1)
-
-    // Step 4: Admin unbans the user → tombstone must be removed in the same batch
-    const newTargetId = (tombstoneSqlite
-      .prepare('SELECT id FROM app_user WHERE google_sub = ?')
-      .get(TARGET_SUB) as { id: number }).id
-    const unbanResp = await handleGiftModeration(
-      gSessionReq(adminToken, `/api/admin/users/${newTargetId}`, 'PATCH', { banned: false }),
-      modEnv,
-    )
-    expect(unbanResp.status).toBe(200)
-
-    // Tombstone must be gone
-    const tombstoneAfterUnban = (tombstoneSqlite
-      .prepare('SELECT COUNT(*) AS c FROM banned_identity')
-      .get() as { c: number }).c
-    expect(tombstoneAfterUnban).toBe(0)
-
-    // Step 5: Sign in again with same sub → user created as NOT banned
-    const { nonceValue: nonce2 } = await makeNonce(TEST_NONCE_KEY)
-    const credential2 = await validToken({ nonce: nonce2, sub: TARGET_SUB, email: TARGET_EMAIL }, {})
-    await handleAuth(makeSignInReq(credential2, nonce2), authEnv, { keys: await localJwks() })
-
-    const finalCheck = tombstoneSqlite
-      .prepare('SELECT banned FROM app_user WHERE google_sub = ?')
-      .get(TARGET_SUB) as { banned: number } | undefined
-    expect(finalCheck?.banned).toBe(0)
-  })
+  // Phase 1 "unban removes tombstone" test removed: it used app_user.google_sub in assertions.
+  // Phase 2b replacement tests are in the "Phase 2b tombstone" describe block below.
 
   it('unban fails closed without SUB_HMAC_KEY (tombstone cannot be cleared)', async () => {
     // Ban user
@@ -862,5 +786,435 @@ describe('GET /api/admin/gifts — userBanned field (item 10)', () => {
     expect(r.status).toBe(200)
     const body = await r.json() as Array<Record<string, unknown>>
     expect(body.length).toBeLessThanOrEqual(200)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Phase 2b additions — ban of an admin + tombstone
+//
+// testAccounts.ts cannot be imported here because it depends on worker/password.ts
+// (not yet implemented). All Phase 2b schema setup and user seeding is done inline.
+// Tests that require worker/accounts.ts use dynamic imports so only the specific
+// test fails at runtime (not the whole file at import time).
+// ═════════════════════════════════════════════════════════════════════════════
+
+import { hmacSha256Hex } from './session.ts'
+
+// Cookie name constant (same as SESSION_COOKIE from session.ts)
+const SESSION_COOKIE_P2B = '__Host-cyt_s'
+
+// ── Inline Phase 2b schema/seed helpers ───────────────────────────────────────
+
+/**
+ * Upgrade a fresh testDb() Phase-1 app_user (has google_sub) to Phase-2b shape (no
+ * google_sub), and create user_identity, admin_role, admin_audit, password_credential
+ * tables.  Safe to call when Phase 2b SCHEMA is live (IF NOT EXISTS / no google_sub).
+ */
+function createP2bSchema(sqlite: ReturnType<typeof testDb>['sqlite']): void {
+  const cols = (
+    sqlite.prepare('PRAGMA table_info(app_user)').all() as Array<{ name: string }>
+  ).map((c) => c.name)
+  if (cols.includes('google_sub')) {
+    sqlite.exec('DROP TABLE IF EXISTS session')
+    sqlite.exec('DROP TABLE IF EXISTS app_user')
+    sqlite.exec(`CREATE TABLE app_user (
+      id           INTEGER PRIMARY KEY,
+      nickname     TEXT    NOT NULL DEFAULT '',
+      class_name   TEXT    NOT NULL DEFAULT '',
+      banned       INTEGER NOT NULL DEFAULT 0 CHECK (banned IN (0,1)),
+      created_at   TEXT    NOT NULL,
+      last_seen_at TEXT    NOT NULL
+    )`)
+    sqlite.exec(`CREATE TABLE session (
+      token_hash TEXT    PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+      expires_at TEXT    NOT NULL,
+      created_at TEXT    NOT NULL,
+      ip_hash    TEXT    NOT NULL DEFAULT ''
+    )`)
+  }
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS user_identity (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    provider     TEXT    NOT NULL CHECK (provider IN ('password','google')),
+    subject      TEXT    NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+    ip_hash      TEXT    NOT NULL DEFAULT '',
+    created_at   TEXT    NOT NULL,
+    last_used_at TEXT    NOT NULL,
+    UNIQUE (provider, subject)
+  )`)
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS admin_role (
+    user_id    INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+    granted_at TEXT    NOT NULL,
+    granted_by TEXT    NOT NULL
+  )`)
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS admin_audit (
+    id             INTEGER PRIMARY KEY,
+    actor_user_id  INTEGER,
+    action         TEXT    NOT NULL,
+    target_user_id INTEGER,
+    at             TEXT    NOT NULL
+  )`)
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS password_credential (
+    user_id         INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+    hash            TEXT    NOT NULL,
+    salt            TEXT    NOT NULL,
+    iterations      INTEGER NOT NULL,
+    must_change     INTEGER NOT NULL DEFAULT 0 CHECK (must_change IN (0,1)),
+    temp_expires_at TEXT,
+    failed_count    INTEGER NOT NULL DEFAULT 0,
+    locked_until    TEXT,
+    updated_at      TEXT    NOT NULL
+  )`)
+}
+
+let _p2bUserSeq = 0
+
+/** Seed a Phase-2b user (app_user + user_identity('password', username) + optional admin_role). */
+async function seedP2bUser(
+  db: ReturnType<typeof testDb>['db'],
+  opts: { username?: string; admin?: boolean; banned?: boolean } = {},
+): Promise<{ userId: number; username: string }> {
+  const username = (opts.username ?? `p2b${Date.now()}${++_p2bUserSeq}`).toLowerCase()
+  const now = new Date().toISOString()
+  await db
+    .prepare(
+      'INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)',
+    )
+    .bind('Test', '11A', opts.banned ? 1 : 0, now, now)
+    .run()
+  const { id: userId } = (await db
+    .prepare('SELECT MAX(id) AS id FROM app_user')
+    .first<{ id: number }>())!
+  await db
+    .prepare(
+      'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    .bind(userId, 'password', username, '', now, now)
+    .run()
+  if (opts.admin) {
+    await db
+      .prepare('INSERT INTO admin_role (user_id, granted_at, granted_by) VALUES (?, ?, ?)')
+      .bind(userId, now, 'test-seed')
+      .run()
+  }
+  return { userId, username }
+}
+
+/** Create a session for a Phase-2b user; returns the raw token. */
+async function createP2bSession(
+  db: ReturnType<typeof testDb>['db'],
+  userId: number,
+): Promise<string> {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  const raw = btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+  const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw))
+  const hash = Array.from(new Uint8Array(hashBuf))
+    .map((b) => b.toString(16).padStart(2, '0')).join('')
+  const now = new Date().toISOString()
+  await db
+    .prepare(
+      'INSERT INTO session (token_hash, user_id, expires_at, created_at, ip_hash) VALUES (?, ?, ?, ?, ?)',
+    )
+    .bind(hash, userId, '9999-12-31T23:59:59.000Z', now, '')
+    .run()
+  return raw
+}
+
+/** Minimal env for Phase-2b handleAccounts (no testAccounts dependency). */
+function makeP2bAccountsEnv(db: ReturnType<typeof testDb>['db']): Record<string, unknown> {
+  const allow = { limit: async () => ({ success: true }) }
+  return {
+    DB: db,
+    ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
+    PUBLIC_IP_LIMIT: allow, SUBMIT_IP_LIMIT: allow, CARD_IP_LIMIT: allow,
+    ADMIN_FAIL_LIMIT: allow, IMAGE_IP_LIMIT: allow, AUTH_LIMIT: allow,
+    AUTH_SUB_LIMIT: allow, USER_READ_LIMIT: allow, USER_WRITE_LIMIT: allow,
+    PUBLIC_READ_LIMIT: allow, REGISTER_LIMIT: allow, GIFT_LIMIT: allow,
+    HEART_LIMIT: allow, REPORT_LIMIT: allow, TREE_READ_LIMIT: allow,
+    LIST_READ_LIMIT: allow,
+    PASSWORD_PEPPER: 'test-password-pepper-32bytesx!',
+    SUB_HMAC_KEY: TEST_SUB_HMAC_KEY,
+    IP_HMAC_KEY: 'test-ip-hmac-key-32bytes-paddedx',
+    NONCE_KEY: 'test-nonce-key-32bytes-paddingXX',
+    REGISTER_IP_DAILY: '300',
+    REGISTER_GLOBAL_DAILY: '2000',
+    GOOGLE_CLIENT_ID: undefined,
+  }
+}
+
+// ── Phase 2b — ban of an admin ────────────────────────────────────────────────
+
+describe('handleGiftModeration — Phase 2b ban of an admin → 409 is_admin', () => {
+  let baDb: ReturnType<typeof testDb>['db']
+  let baSqlite: ReturnType<typeof testDb>['sqlite']
+  let baAdminToken: string
+  let baTargetId: number
+
+  beforeEach(async () => {
+    ;({ db: baDb, sqlite: baSqlite } = testDb())
+    createP2bSchema(baSqlite)
+    createGiftTables(baSqlite)
+    const admin = await seedP2bUser(baDb, { admin: true })
+    baAdminToken = await createP2bSession(baDb, admin.userId)
+    const target = await seedP2bUser(baDb, { admin: true })
+    baTargetId = target.userId
+  })
+
+  it('PATCH {banned:true} on a user with admin_role → 409 { error: "is_admin" }', async () => {
+    const r = await handleGiftModeration(
+      gSessionReq(baAdminToken, `/api/admin/users/${baTargetId}`, 'PATCH', { banned: true }),
+      giftModerationEnv(baDb),
+    )
+    expect(r.status).toBe(409)
+    const body = (await r.json()) as Record<string, unknown>
+    expect(body.error).toBe('is_admin')
+  })
+
+  it('nothing changed: target user remains unbanned after rejected ban attempt', async () => {
+    await handleGiftModeration(
+      gSessionReq(baAdminToken, `/api/admin/users/${baTargetId}`, 'PATCH', { banned: true }),
+      giftModerationEnv(baDb),
+    )
+    const user = baSqlite
+      .prepare('SELECT banned FROM app_user WHERE id = ?')
+      .get(baTargetId) as { banned: number }
+    expect(user.banned).toBe(0)
+  })
+})
+
+// ── Phase 2b tombstone ────────────────────────────────────────────────────────
+
+describe('handleGiftModeration — Phase 2b tombstone', () => {
+  let ptDb: ReturnType<typeof testDb>['db']
+  let ptSqlite: ReturnType<typeof testDb>['sqlite']
+  let ptAdminToken: string
+  let ptAdminUserId: number
+
+  beforeEach(async () => {
+    ;({ db: ptDb, sqlite: ptSqlite } = testDb())
+    createP2bSchema(ptSqlite)
+    createGiftTables(ptSqlite)
+    const admin = await seedP2bUser(ptDb, { admin: true })
+    ptAdminUserId = admin.userId
+    ptAdminToken = await createP2bSession(ptDb, ptAdminUserId)
+  })
+
+  // ── Tombstone creation on DELETE /api/me ─────────────────────────────────
+
+  it('DELETE /api/me (banned user, password identity) writes one banned_identity row with correct sub_hmac', async () => {
+    // Dynamic imports fail when these modules are not yet implemented (Phase 2b red phase).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { handleAccounts } = (await import('./accounts.ts')) as any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { hashPassword } = (await import('./password.ts')) as any
+
+    const username = `p2btomb${Date.now()}`
+    const password = 'TombPass123!'
+    const pepper = 'test-password-pepper-32bytesx!'
+    const now = new Date().toISOString()
+
+    await ptDb.prepare(
+      'INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, 1, ?, ?)',
+    ).bind('Test', '11A', now, now).run()
+    const { id: userId } = (await ptDb.prepare('SELECT MAX(id) AS id FROM app_user').first<{ id: number }>())!
+    await ptDb.prepare(
+      'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(userId, 'password', username, '', now, now).run()
+    const cred = await hashPassword(password, pepper, { iterations: 10_000 })
+    await ptDb.prepare(
+      'INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?)',
+    ).bind(userId, cred.hash, cred.salt, cred.iterations, now).run()
+    const userToken = await createP2bSession(ptDb, userId)
+
+    const r = await handleAccounts(
+      new Request('https://x/api/me', {
+        method: 'DELETE',
+        headers: {
+          'CF-Connecting-IP': '1.2.3.4',
+          'X-Requested-With': 'fetch',
+          'Content-Type': 'application/json',
+          Cookie: `${SESSION_COOKIE_P2B}=${userToken}`,
+        },
+        body: JSON.stringify({ password }),
+      }),
+      makeP2bAccountsEnv(ptDb),
+    )
+    expect([200, 204]).toContain(r.status)
+
+    const expectedHmac = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `password:${username}`)
+    expect(
+      ptSqlite
+        .prepare('SELECT sub_hmac FROM banned_identity WHERE sub_hmac = ?')
+        .get(expectedHmac),
+    ).toBeDefined()
+  })
+
+  it('user with password AND google identity → two banned_identity rows on DELETE /api/me', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { handleAccounts } = (await import('./accounts.ts')) as any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { hashPassword } = (await import('./password.ts')) as any
+
+    const username = `p2btomb2${Date.now()}`
+    const googleSub = `tomb-g-${Date.now()}`
+    const password = 'TombPass123!'
+    const pepper = 'test-password-pepper-32bytesx!'
+    const now = new Date().toISOString()
+
+    await ptDb.prepare(
+      'INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, 1, ?, ?)',
+    ).bind('Test', '11A', now, now).run()
+    const { id: userId } = (await ptDb.prepare('SELECT MAX(id) AS id FROM app_user').first<{ id: number }>())!
+    await ptDb.prepare(
+      'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(userId, 'password', username, '', now, now).run()
+    // Insert a google identity for the same user (second identity)
+    await ptDb.prepare(
+      'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(userId, 'google', googleSub, '', now, now).run()
+    const cred = await hashPassword(password, pepper, { iterations: 10_000 })
+    await ptDb.prepare(
+      'INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?)',
+    ).bind(userId, cred.hash, cred.salt, cred.iterations, now).run()
+    const userToken = await createP2bSession(ptDb, userId)
+
+    await handleAccounts(
+      new Request('https://x/api/me', {
+        method: 'DELETE',
+        headers: {
+          'CF-Connecting-IP': '1.2.3.4',
+          'X-Requested-With': 'fetch',
+          'Content-Type': 'application/json',
+          Cookie: `${SESSION_COOKIE_P2B}=${userToken}`,
+        },
+        body: JSON.stringify({ password }),
+      }),
+      makeP2bAccountsEnv(ptDb),
+    )
+
+    const hmacPw = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `password:${username}`)
+    const hmacGoog = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `google:${googleSub}`)
+    // Both identities must each produce one tombstone row.
+    expect(
+      ptSqlite.prepare('SELECT sub_hmac FROM banned_identity WHERE sub_hmac = ?').get(hmacPw),
+    ).toBeDefined()
+    expect(
+      ptSqlite.prepare('SELECT sub_hmac FROM banned_identity WHERE sub_hmac = ?').get(hmacGoog),
+    ).toBeDefined()
+  })
+
+  // ── Unban removes tombstones ──────────────────────────────────────────────
+
+  it('unban of still-existing banned user removes all tombstones for their identities', async () => {
+    const { userId, username } = await seedP2bUser(ptDb, { banned: true })
+    const googleSub = `tomb-unban-g-${Date.now()}`
+    const now = new Date().toISOString()
+    // Insert a second identity so we can confirm both tombstones are removed.
+    ptSqlite
+      .prepare(
+        'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(userId, 'google', googleSub, '', now, now)
+
+    // Manually insert tombstones (simulating a prior delete+recreate cycle).
+    const hmacPw = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `password:${username}`)
+    const hmacG = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `google:${googleSub}`)
+    ptSqlite.prepare('INSERT INTO banned_identity (sub_hmac, created_at) VALUES (?, ?)').run(hmacPw, now)
+    ptSqlite.prepare('INSERT INTO banned_identity (sub_hmac, created_at) VALUES (?, ?)').run(hmacG, now)
+
+    const r = await handleGiftModeration(
+      gSessionReq(ptAdminToken, `/api/admin/users/${userId}`, 'PATCH', { banned: false }),
+      giftModerationEnv(ptDb),
+    )
+    expect(r.status).toBe(200)
+
+    expect(
+      ptSqlite.prepare('SELECT sub_hmac FROM banned_identity WHERE sub_hmac = ?').get(hmacPw),
+    ).toBeUndefined()
+    expect(
+      ptSqlite.prepare('SELECT sub_hmac FROM banned_identity WHERE sub_hmac = ?').get(hmacG),
+    ).toBeUndefined()
+  })
+
+  // ── DELETE /api/admin/tombstones/<id> with Phase 2b admin ────────────────
+
+  it('DELETE /api/admin/tombstones/<id> removes tombstone (Phase 2b admin)', async () => {
+    const now = new Date().toISOString()
+    ptSqlite
+      .prepare('INSERT INTO banned_identity (sub_hmac, created_at) VALUES (?, ?)')
+      .run('p2b-del-ts-hmac', now)
+    const { id: tsId } = ptSqlite
+      .prepare('SELECT rowid AS id FROM banned_identity WHERE sub_hmac = ?')
+      .get('p2b-del-ts-hmac') as { id: number }
+
+    const r = await handleGiftModeration(
+      gSessionReq(ptAdminToken, `/api/admin/tombstones/${tsId}`, 'DELETE'),
+      giftModerationEnv(ptDb),
+    )
+    expect(r.status).toBe(200)
+    expect(
+      ptSqlite.prepare('SELECT rowid FROM banned_identity WHERE rowid = ?').get(tsId),
+    ).toBeUndefined()
+  })
+
+  // ── admin_audit rows ──────────────────────────────────────────────────────
+
+  it('ban writes admin_audit row (action=ban, actor=admin user id, target=banned user id, no password in row)', async () => {
+    const { userId: targetId } = await seedP2bUser(ptDb)
+    await handleGiftModeration(
+      gSessionReq(ptAdminToken, `/api/admin/users/${targetId}`, 'PATCH', { banned: true }),
+      giftModerationEnv(ptDb),
+    )
+    const audit = ptSqlite
+      .prepare(
+        "SELECT actor_user_id, action, target_user_id FROM admin_audit WHERE action = 'ban' AND target_user_id = ?",
+      )
+      .get(targetId) as
+      | { actor_user_id: number; action: string; target_user_id: number }
+      | undefined
+    expect(audit).toBeDefined()
+    expect(audit!.actor_user_id).toBe(ptAdminUserId)
+    expect(audit!.target_user_id).toBe(targetId)
+    expect(JSON.stringify(audit).toLowerCase()).not.toMatch(/password/)
+  })
+
+  it('unban writes admin_audit row (action=unban, actor=admin, target=unbanned user)', async () => {
+    const { userId: targetId } = await seedP2bUser(ptDb, { banned: true })
+    await handleGiftModeration(
+      gSessionReq(ptAdminToken, `/api/admin/users/${targetId}`, 'PATCH', { banned: false }),
+      giftModerationEnv(ptDb),
+    )
+    const audit = ptSqlite
+      .prepare(
+        "SELECT actor_user_id, action, target_user_id FROM admin_audit WHERE action = 'unban' AND target_user_id = ?",
+      )
+      .get(targetId) as
+      | { actor_user_id: number; action: string; target_user_id: number }
+      | undefined
+    expect(audit).toBeDefined()
+    expect(audit!.actor_user_id).toBe(ptAdminUserId)
+    expect(audit!.target_user_id).toBe(targetId)
+  })
+
+  it('remove_tombstone (DELETE /api/admin/tombstones/<id>) writes admin_audit row', async () => {
+    const now = new Date().toISOString()
+    ptSqlite
+      .prepare('INSERT INTO banned_identity (sub_hmac, created_at) VALUES (?, ?)')
+      .run('p2b-audit-rm-hmac', now)
+    const { id: tsId } = ptSqlite
+      .prepare('SELECT rowid AS id FROM banned_identity WHERE sub_hmac = ?')
+      .get('p2b-audit-rm-hmac') as { id: number }
+
+    await handleGiftModeration(
+      gSessionReq(ptAdminToken, `/api/admin/tombstones/${tsId}`, 'DELETE'),
+      giftModerationEnv(ptDb),
+    )
+    const audit = ptSqlite
+      .prepare("SELECT actor_user_id, action FROM admin_audit WHERE action = 'remove_tombstone'")
+      .get() as { actor_user_id: number; action: string } | undefined
+    expect(audit).toBeDefined()
+    expect(audit!.actor_user_id).toBe(ptAdminUserId)
   })
 })

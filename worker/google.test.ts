@@ -395,3 +395,157 @@ describe('isGoogleAuthoritative', () => {
     expect(isGoogleAuthoritative('notanemail')).toBe(false)
   })
 })
+
+// ── POST /api/auth/google — route behavior (Phase 2b) ────────────────────────
+//
+// These tests encode Phase 2b behavior:
+//   • GOOGLE_CLIENT_ID unset → 503 misconfigured (Phase 1 returns 401 → red ✓)
+//   • Existing user_identity('google', sub) → signs in as that user id (AC-27)
+//     (Phase 1 returns user without id field → red ✓)
+//   • Unknown sub → creates user_identity row
+//     (Phase 1 creates google_sub on app_user instead → red ✓)
+//   • Google route never creates admin_role or admin_bootstrap_done
+//     (Phase 1 also doesn't → test is green, encodes the constraint)
+
+import { testDb as gRouteTestDb } from './testDb.ts'
+import { handleAuth } from './me.ts'
+import {
+  makeNonce as gMakeNonce,
+  meEnv as gMeEnv,
+  seedUser as gRouteSeedUser,
+} from './testGoogle.ts'
+
+const NONCE_COOKIE_P2B = '__Host-cyt_n'
+
+/** Create user_identity and admin_role tables on a testDb() Phase-1 sqlite handle. */
+function setupGoogleRouteP2bTables(sqlite: ReturnType<typeof gRouteTestDb>['sqlite']): void {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS user_identity (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    provider     TEXT    NOT NULL CHECK (provider IN ('password','google')),
+    subject      TEXT    NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+    ip_hash      TEXT    NOT NULL DEFAULT '',
+    created_at   TEXT    NOT NULL,
+    last_used_at TEXT    NOT NULL,
+    UNIQUE (provider, subject)
+  )`)
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS admin_role (
+    user_id    INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+    granted_at TEXT    NOT NULL,
+    granted_by TEXT    NOT NULL
+  )`)
+}
+
+function makeGoogleSignInReq(credential: string, nonceCookieValue: string): Request {
+  return new Request('https://x/api/auth/google', {
+    method: 'POST',
+    headers: {
+      'CF-Connecting-IP': '1.2.3.4',
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'fetch',
+      Cookie: `${NONCE_COOKIE_P2B}=${nonceCookieValue}`,
+    },
+    body: JSON.stringify({ credential }),
+  })
+}
+
+describe('POST /api/auth/google — route behavior (Phase 2b)', () => {
+  it('→ 503 { error: "misconfigured" } when GOOGLE_CLIENT_ID is unset', async () => {
+    const { db, sqlite } = gRouteTestDb()
+    setupGoogleRouteP2bTables(sqlite)
+    // meEnv sets GOOGLE_CLIENT_ID = TEST_CLIENT_ID; override to undefined to test misconfigured path.
+    const env = { ...gMeEnv({ db }), GOOGLE_CLIENT_ID: undefined }
+    const { nonceValue } = await gMakeNonce()
+    const credential = await validToken({ nonce: nonceValue })
+    const r = await handleAuth(
+      makeGoogleSignInReq(credential, nonceValue),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      env as any,
+      { keys: await localJwks() },
+    )
+    // Phase 2b: unset GOOGLE_CLIENT_ID → 503 misconfigured.
+    // Phase 1 returns 401 unauthorized → assertion fails until Phase 2b is implemented.
+    expect(r.status).toBe(503)
+    const body = (await r.json()) as Record<string, unknown>
+    expect(body.error).toBe('misconfigured')
+  })
+
+  it('valid token for existing user_identity("google", sub) → 200, response.user.id = seeded user id (AC-27)', async () => {
+    const { db, sqlite } = gRouteTestDb()
+    setupGoogleRouteP2bTables(sqlite)
+    // Seed a Phase-1 app_user (google_sub present) and link it via user_identity as well.
+    const userId = await gRouteSeedUser(db, { sub: TEST_SUB, email: TEST_EMAIL })
+    const now = new Date().toISOString()
+    sqlite
+      .prepare(
+        'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run(userId, 'google', TEST_SUB, '', now, now)
+
+    const env = gMeEnv({ db })
+    const { nonceValue } = await gMakeNonce()
+    const credential = await validToken({ sub: TEST_SUB, nonce: nonceValue })
+    const r = await handleAuth(
+      makeGoogleSignInReq(credential, nonceValue),
+      env,
+      { keys: await localJwks() },
+    )
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { user?: Record<string, unknown> }
+    // Phase 2b: response.user.id must equal the seeded user id (AC-27 — same identity).
+    // Phase 1 omits the id field → assertion fails until Phase 2b handleAuth is implemented.
+    expect(body.user?.id).toBe(userId)
+  })
+
+  it('POST /api/auth/google with unknown sub → creates app_user and user_identity("google", sub)', async () => {
+    const { db, sqlite } = gRouteTestDb()
+    setupGoogleRouteP2bTables(sqlite)
+    // Start with no users so the sub is definitely unknown.
+    sqlite.prepare('DELETE FROM app_user WHERE 1=1').run()
+
+    const env = gMeEnv({ db })
+    const { nonceValue } = await gMakeNonce()
+    const credential = await validToken({ nonce: nonceValue })
+    const r = await handleAuth(
+      makeGoogleSignInReq(credential, nonceValue),
+      env,
+      { keys: await localJwks() },
+    )
+    expect(r.status).toBe(200)
+
+    // Phase 2b: sign-in of an unknown sub creates a user_identity('google', sub) row.
+    // Phase 1 creates app_user.google_sub instead → identity row is absent → test fails
+    // until Phase 2b handleAuth is implemented.
+    const identity = sqlite
+      .prepare("SELECT user_id FROM user_identity WHERE provider = 'google' AND subject = ?")
+      .get(TEST_SUB) as { user_id: number } | undefined
+    expect(identity).toBeDefined()
+  })
+
+  it('on empty DB, POST /api/auth/google never creates admin_role or admin_bootstrap_done meta marker', async () => {
+    const { db, sqlite } = gRouteTestDb()
+    setupGoogleRouteP2bTables(sqlite)
+    sqlite.prepare('DELETE FROM app_user WHERE 1=1').run()
+
+    const env = gMeEnv({ db })
+    const { nonceValue } = await gMakeNonce()
+    const credential = await validToken({ nonce: nonceValue })
+    const r = await handleAuth(
+      makeGoogleSignInReq(credential, nonceValue),
+      env,
+      { keys: await localJwks() },
+    )
+    expect(r.status).toBe(200)
+
+    // Google sign-in must NEVER trigger admin bootstrap (ADR-9: only password registration does).
+    const adminRoleCount = (
+      sqlite.prepare('SELECT COUNT(*) AS c FROM admin_role').get() as { c: number }
+    ).c
+    expect(adminRoleCount).toBe(0)
+
+    const bootstrapMeta = sqlite
+      .prepare("SELECT value FROM meta WHERE key = 'admin_bootstrap_done'")
+      .get()
+    expect(bootstrapMeta).toBeUndefined()
+  })
+})

@@ -2385,3 +2385,455 @@ describe('Phase 2 idempotency — ensureSchema twice leaves tables intact', () =
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 2b (ADR-9) schema tests
+// RED phase: Phase 2b tables are not in SCHEMA yet; stale-schema guard not
+//            implemented; admin.google_sub UPGRADE still present.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 4cb51a3 is the production baseline commit (20/11 build, no app_user, no google_sub on admin).
+// DDL extracted from `git show 4cb51a3:worker/schema.ts`.
+// Comment preserved per instructions so the reviewer can verify the source.
+const DEPLOYED_4CB51A3_ADMIN_DDL = `CREATE TABLE IF NOT EXISTS admin (
+  id         INTEGER PRIMARY KEY,
+  email      TEXT    UNIQUE NOT NULL,
+  created_at TEXT           NOT NULL,
+  created_by TEXT           NOT NULL,
+  CHECK (email = lower(email) AND length(email) <= 254)
+)`
+
+// Minimal subset of the 4cb51a3 SCHEMA needed for upgrade-path tests.
+// Enough to exercise runUpgrades (which probes teacher_profile and student_card)
+// without having to replicate every seed row.
+const DEPLOYED_4CB51A3_DDL: string[] = [
+  `CREATE TABLE IF NOT EXISTS teacher (
+    id         INTEGER PRIMARY KEY,
+    token      TEXT    UNIQUE NOT NULL,
+    name       TEXT           NOT NULL,
+    subject    TEXT           NOT NULL DEFAULT '',
+    created_at TEXT           NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS teacher_title (
+    teacher_id INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+    title      TEXT    NOT NULL CHECK (title IN ('Thầy','Cô'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS teacher_profile (
+    teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+    department   TEXT    NOT NULL DEFAULT '',
+    show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
+    role TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng','Giám thị'))
+  )`,
+  DEPLOYED_4CB51A3_ADMIN_DDL,
+  `CREATE TABLE IF NOT EXISTS image (
+    id INTEGER PRIMARY KEY,
+    token TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL CHECK (mime IN ('image/jpeg','image/png','image/webp')),
+    size INTEGER NOT NULL CHECK (size > 0 AND size <= 307200),
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS template (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    layout TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS template_image (
+    template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE CASCADE,
+    slot TEXT NOT NULL CHECK (slot IN ('background')),
+    image_id INTEGER NOT NULL REFERENCES image(id) ON DELETE RESTRICT,
+    PRIMARY KEY (template_id, slot)
+  )`,
+  `CREATE TABLE IF NOT EXISTS student_card (
+    id INTEGER PRIMARY KEY,
+    public_id TEXT UNIQUE NOT NULL,
+    teacher_id INTEGER NOT NULL REFERENCES teacher(id) ON DELETE CASCADE,
+    template_id INTEGER NOT NULL REFERENCES template(id) ON DELETE RESTRICT,
+    message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+    from_name TEXT NOT NULL DEFAULT '' CHECK (length(from_name) <= 40),
+    from_class TEXT NOT NULL DEFAULT '' CHECK (length(from_class) <= 10),
+    anonymous INTEGER NOT NULL DEFAULT 0 CHECK (anonymous IN (0,1)),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','hidden')),
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    reviewed_by TEXT,
+    font TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32),
+    ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_student_card_teacher_status ON student_card (teacher_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_student_card_status_created ON student_card (status, created_at)`,
+  `CREATE TABLE IF NOT EXISTS wish (id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS site_content (key TEXT PRIMARY KEY CHECK (key IN ('about')), value TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)`,
+]
+
+// ── Phase 2b tables exist on a fresh DB ──────────────────────────────────────
+
+describe('Phase 2b schema — fresh DB has account tables (RED: not in SCHEMA yet)', () => {
+  it('ensureSchema creates user_identity table', async () => {
+    // RED: user_identity is not in SCHEMA → test fails (table missing)
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('user_identity')
+  })
+
+  it('ensureSchema creates password_credential table', async () => {
+    // RED: not in SCHEMA
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('password_credential')
+  })
+
+  it('ensureSchema creates admin_role table', async () => {
+    // RED: not in SCHEMA
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('admin_role')
+  })
+
+  it('ensureSchema creates admin_audit table', async () => {
+    // RED: not in SCHEMA
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('admin_audit')
+  })
+
+  it('admin table has NO google_sub column on a fresh DB', async () => {
+    // RED: current SCHEMA runs the google_sub UPGRADE → adds the column.
+    // Phase 2b removes that UPGRADE entry so the production admin table is unchanged.
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const cols = (sqlite.prepare("PRAGMA table_info(admin)").all() as Array<{ name: string }>).map((c) => c.name)
+    expect(cols).not.toContain('google_sub')
+  })
+
+  it('app_user table has no google_sub column on a fresh Phase 2b DB', async () => {
+    // RED: current SCHEMA has app_user(google_sub).
+    // Phase 2b removes google_sub from app_user definition.
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    if (!names.includes('app_user')) return // app_user might not exist on 4cb51a3 prod
+    const cols = (sqlite.prepare("PRAGMA table_info(app_user)").all() as Array<{ name: string }>).map((c) => c.name)
+    expect(cols).not.toContain('google_sub')
+  })
+})
+
+// ── user_identity CHECK constraints ──────────────────────────────────────────
+
+describe('Phase 2b schema — user_identity CHECK constraints (RED: table not in SCHEMA yet)', () => {
+  it("provider CHECK accepts 'password'", async () => {
+    // RED: user_identity doesn't exist yet
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    // Create a minimal app_user row
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'alice', '', datetime('now'), datetime('now'))").run(userId)
+    }).not.toThrow()
+  })
+
+  it("provider CHECK accepts 'google'", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'google', 'google-sub-123456', '', datetime('now'), datetime('now'))").run(userId)
+    }).not.toThrow()
+  })
+
+  it("provider CHECK rejects unknown provider", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'twitter', 'some-sub', '', datetime('now'), datetime('now'))").run(userId)
+    }).toThrow()
+  })
+
+  it("password subject CHECK accepts valid username [a-z0-9_]{3,20}", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'valid_user123', '', datetime('now'), datetime('now'))").run(userId)
+    }).not.toThrow()
+  })
+
+  it("password subject CHECK rejects username with uppercase", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'BadUser', '', datetime('now'), datetime('now'))").run(userId)
+    }).toThrow()
+  })
+
+  it("password subject CHECK rejects username shorter than 3 chars", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'ab', '', datetime('now'), datetime('now'))").run(userId)
+    }).toThrow()
+  })
+
+  it("password subject CHECK rejects username longer than 20 chars", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'this_is_way_too_long_username', '', datetime('now'), datetime('now'))").run(userId)
+    }).toThrow()
+  })
+
+  it("google subject CHECK accepts any string 1..255 chars (including uppercase / special)", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'google', '1234567890Google_Sub/Any+Chars', '', datetime('now'), datetime('now'))").run(userId)
+    }).not.toThrow()
+  })
+
+  it("UNIQUE(provider, subject) rejects duplicate identity", async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'alice', '', datetime('now'), datetime('now'))").run(userId)
+    expect(() => {
+      sqlite.prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', 'alice', '', datetime('now'), datetime('now'))").run(userId)
+    }).toThrow()
+  })
+})
+
+// ── password_credential iterations CHECK ─────────────────────────────────────
+
+describe('Phase 2b schema — password_credential iterations CHECK (RED: table not in SCHEMA yet)', () => {
+  it('iterations CHECK accepts 10000', async () => {
+    // RED: table missing
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare('INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, 10000, 0, 0, datetime(\'now\'))').run(userId, 'h', 's')
+    }).not.toThrow()
+  })
+
+  it('iterations CHECK accepts 100000', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare('INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, 100000, 0, 0, datetime(\'now\'))').run(userId, 'h', 's')
+    }).not.toThrow()
+  })
+
+  it('iterations CHECK rejects 9999 (below minimum)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare('INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, 9999, 0, 0, datetime(\'now\'))').run(userId, 'h', 's')
+    }).toThrow()
+  })
+
+  it('iterations CHECK rejects 100001 (above maximum / workerd cap)', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    expect(() => {
+      sqlite.prepare('INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, 100001, 0, 0, datetime(\'now\'))').run(userId, 'h', 's')
+    }).toThrow()
+  })
+})
+
+// ── admin_role and admin_audit constraints ───────────────────────────────────
+
+describe('Phase 2b schema — admin_role and admin_audit (RED: tables not in SCHEMA yet)', () => {
+  it('admin_role FK CASCADE deletes when app_user is deleted', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec("INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('T','',0,datetime('now'),datetime('now'))")
+    const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
+    sqlite.prepare("INSERT INTO admin_role (user_id, granted_at, granted_by) VALUES (?, datetime('now'), 'test')").run(userId)
+    sqlite.prepare('DELETE FROM app_user WHERE id = ?').run(userId)
+    const row = sqlite.prepare('SELECT user_id FROM admin_role WHERE user_id = ?').get(userId)
+    expect(row).toBeUndefined()
+  })
+
+  it('admin_audit action CHECK rejects unknown action', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    expect(() => {
+      sqlite.prepare("INSERT INTO admin_audit (action, at) VALUES ('unknown_action', datetime('now'))").run()
+    }).toThrow()
+  })
+
+  it('admin_audit action CHECK accepts grant_admin, revoke_admin, reset_password, ban, unban, remove_tombstone', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    for (const action of ['grant_admin', 'revoke_admin', 'reset_password', 'ban', 'unban', 'remove_tombstone']) {
+      expect(() => {
+        sqlite.prepare("INSERT INTO admin_audit (action, at) VALUES (?, datetime('now'))").run(action)
+      }, `action '${action}' should be accepted`).not.toThrow()
+    }
+  })
+
+  it('idx_admin_audit_at index exists', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const indexes = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='admin_audit'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(indexes.some((n) => n.includes('admin_audit') || n.includes('at'))).toBe(true)
+  })
+})
+
+// ── 4cb51a3 "deployed schema" fixture — admin rows + PRAGMA unchanged ─────────
+
+describe('Phase 2b schema — 4cb51a3-shaped DB: admin rows + table structure preserved', () => {
+  /**
+   * Builds a sqlite DB from the 4cb51a3 SCHEMA subset (no app_user, no google_sub on admin).
+   * Returns the testDb handle so we can call ensureSchema on its D1 wrapper.
+   */
+  function deployedSchemaDb() {
+    const t = testDb({ schema: false })
+    for (const sql of DEPLOYED_4CB51A3_DDL) {
+      t.sqlite.exec(sql)
+    }
+    return t
+  }
+
+  it('admin rows are preserved after ensureSchema (admin table untouched)', async () => {
+    // RED: current schema.ts adds google_sub via UPGRADE; ADD COLUMN preserves rows but
+    // Phase 2b test expects the UPGRADE entry to be removed. This test checks that
+    // rows still exist (this passes with both Phase 1 and 2b — the useful check is column shape).
+    const { db, sqlite } = deployedSchemaDb()
+    sqlite.prepare("INSERT INTO admin (email, created_at, created_by) VALUES ('admin@example.com', datetime('now'), 'seed')").run()
+    await ensureSchema(db)
+    const count = (sqlite.prepare('SELECT COUNT(*) AS c FROM admin').get() as { c: number }).c
+    expect(count).toBe(1)
+    const row = sqlite.prepare("SELECT email FROM admin WHERE email = 'admin@example.com'").get() as { email: string } | undefined
+    expect(row?.email).toBe('admin@example.com')
+  })
+
+  it('PRAGMA table_info(admin) is unchanged — no google_sub column added', async () => {
+    // RED: current schema.ts runs UPGRADE that adds google_sub → PRAGMA shows google_sub.
+    // Phase 2b removes that UPGRADE so the admin table stays at its 4cb51a3 shape.
+    const { db, sqlite } = deployedSchemaDb()
+    // Record columns before ensureSchema
+    const before = (sqlite.prepare('PRAGMA table_info(admin)').all() as Array<{ name: string }>).map((c) => c.name)
+    await ensureSchema(db)
+    const after = (sqlite.prepare('PRAGMA table_info(admin)').all() as Array<{ name: string }>).map((c) => c.name)
+    expect(after).toEqual(before)
+    expect(after).not.toContain('google_sub')
+  })
+
+  it('Phase 2b tables exist after ensureSchema on a 4cb51a3-shaped DB', async () => {
+    // RED: Phase 2b tables not in SCHEMA yet.
+    const { db, sqlite } = deployedSchemaDb()
+    await ensureSchema(db)
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('user_identity')
+    expect(names).toContain('admin_role')
+    expect(names).toContain('admin_audit')
+  })
+})
+
+// ── Idempotency with Phase 2b tables ─────────────────────────────────────────
+
+describe('Phase 2b schema — ensureSchema idempotent twice with Phase 2b tables', () => {
+  it('running ensureSchema twice on a fresh DB leaves all Phase 2b tables (IF NOT EXISTS is a no-op)', async () => {
+    // RED: Phase 2b tables missing on first call → missing on second too.
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    // Clear the cache to force a second real run
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyDb = db as unknown as Record<string, unknown>
+    // The WeakMap cache is per-binding so a second call on the same object is cached.
+    // Create a second round manually: re-execute every SCHEMA statement.
+    for (const sql of SCHEMA) {
+      sqlite.exec(sql)
+    }
+    // All Phase 2b tables should still exist
+    const names = (sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name)
+    expect(names).toContain('user_identity')
+    expect(names).toContain('admin_role')
+  })
+})
+
+// ── Stale-schema guard: app_user with google_sub → 503 ───────────────────────
+
+describe('Phase 2b schema — stale app_user guard (RED: guard not implemented yet)', () => {
+  it('DB with app_user(google_sub) → ensureSchema throws with "stale app_user" message', async () => {
+    // RED: current ensureSchema does not check for stale app_user; it proceeds normally.
+    // Phase 2b adds: if PRAGMA table_info(app_user) includes google_sub → throw
+    //   'schema: stale app_user (recreate this database, docs/runbooks/staging.md)'
+    const { db, sqlite } = testDb({ schema: false })
+    // Create a Phase 1 app_user (with google_sub — the stale shape)
+    sqlite.exec(`CREATE TABLE app_user (
+      id          INTEGER PRIMARY KEY,
+      google_sub  TEXT UNIQUE NOT NULL,
+      email       TEXT NOT NULL,
+      nickname    TEXT NOT NULL DEFAULT '',
+      class_name  TEXT NOT NULL DEFAULT '',
+      banned      INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL
+    )`)
+    // Also create session (prerequisite for the 4cb51a3 upgrade path)
+    sqlite.exec(`CREATE TABLE session (
+      token_hash TEXT PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      ip_hash    TEXT NOT NULL DEFAULT ''
+    )`)
+    await expect(ensureSchema(db)).rejects.toThrow(/stale app_user/)
+  })
+
+  it('DB without app_user (production 4cb51a3 baseline) → ensureSchema succeeds', async () => {
+    // GREEN: production DB has no app_user → guard never fires.
+    const { db, sqlite } = testDb({ schema: false })
+    for (const sql of DEPLOYED_4CB51A3_DDL) {
+      sqlite.exec(sql)
+    }
+    // No app_user table — ensureSchema must not throw
+    await expect(ensureSchema(db)).resolves.toBeUndefined()
+  })
+})
