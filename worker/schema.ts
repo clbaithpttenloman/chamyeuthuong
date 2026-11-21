@@ -18,7 +18,7 @@ const INK_COLUMN =
 // Chức vụ column; the same definition is used by CREATE and by the ADD COLUMN upgrade.
 // Labels must match ROLES in shared/api.ts (tested).
 const ROLE_COLUMN =
-  "TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))"
+  "TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng','Giám thị'))"
 
 // campaign_id column added to template, wish, student_card via ALTER TABLE (ADR-2).
 // SQLite rejects ADD COLUMN … REFERENCES … DEFAULT <non-null>, so there is no FK here.
@@ -317,10 +317,24 @@ async function seedImages(db: D1): Promise<void> {
   }
 }
 
+// ---- Role list change (Giám thị): SQLite cannot alter a CHECK, so copy the table ----
+// The stored CREATE text contains ROLE_COLUMN verbatim (from CREATE or ADD COLUMN), so a table
+// whose text lacks the current ROLE_COLUMN has an older role list. All four columns are copied,
+// so a racing isolate that replays the copy changes nothing. Nothing references teacher_profile.
+const ROLE_CHECK_PROBE_SQL = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'teacher_profile'"
+const ROLE_REBUILD_SQL: string[] = [
+  TEACHER_PROFILE_DDL.replace('IF NOT EXISTS teacher_profile (', 'teacher_profile_new ('),
+  'INSERT INTO teacher_profile_new (teacher_id, department, show_on_home, role) ' +
+    'SELECT teacher_id, department, show_on_home, role FROM teacher_profile',
+  'DROP TABLE teacher_profile',
+  'ALTER TABLE teacher_profile_new RENAME TO teacher_profile',
+]
+
 /** Every SQL string the upgrade and seed steps can prepare (probes included); testDb counts these as DDL. */
 export const UPGRADE_SQL: string[] = [
   ...TABLES.map(columnsSql),
   ...UPGRADES.flatMap((u) => u.sql),
+  ROLE_CHECK_PROBE_SQL, ...ROLE_REBUILD_SQL,
   SEED_PROBE_SQL, SEED_IMAGE_SQL, SEED_TEMPLATE_SQL, SEED_LINK_SQL, SEED_FLAG_SQL,
 ]
 
@@ -351,6 +365,15 @@ async function runUpgrades(db: D1): Promise<void> {
       })
     }
     cols.set(u.table, await tableColumns(db, u.table))
+  }
+  // After the column steps, so a table that just got role via ADD COLUMN already has the
+  // current list and is not copied.
+  const tp = await db.prepare(ROLE_CHECK_PROBE_SQL).first<{ sql: string }>()
+  if (tp && !tp.sql.includes(ROLE_COLUMN)) {
+    await db.batch(ROLE_REBUILD_SQL.map((q) => db.prepare(q))).catch((e: unknown) => {
+      console.error('schema: upgrade failed')
+      throw e
+    })
   }
 }
 

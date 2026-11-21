@@ -138,6 +138,11 @@ describe('CardView — chức vụ / môn line', () => {
     expect(out).toContain('>Hiệu trưởng<')
     expect(out).not.toContain('Toán')
   })
+  it('Giám thị → only the chức vụ', () => {
+    const out = html({ card: { ...baseCard, role: 'Giám thị' } })
+    expect(out).toContain('>Giám thị<')
+    expect(out).not.toContain('Toán')
+  })
   it('Phó hiệu trưởng → only the chức vụ', () => {
     const out = html({ card: { ...baseCard, role: 'Phó hiệu trưởng' } })
     expect(out).toContain('>Phó hiệu trưởng<')

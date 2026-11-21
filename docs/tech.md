@@ -66,7 +66,7 @@ teacher_profile(
   teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
   department   TEXT NOT NULL DEFAULT '',
   show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
-  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))
+  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng','Giám thị'))
 )
 
 template(
@@ -137,7 +137,7 @@ site_content(
 - **Added:** `/api/about` (public) and `/api/admin/about` (admin editor)
 - **Added:** `POST /api/cards` accepts exactly one of `teacherId` or `teacherToken`
 - **Added:** `site_content` table for About page (seeded once via INSERT OR IGNORE)
-- **Added:** `teacher_profile.role` column (chức vụ: Giáo viên, Hiệu trưởng, Phó hiệu trưởng)
+- **Added:** `teacher_profile.role` column (chức vụ: Giáo viên, Hiệu trưởng, Phó hiệu trưởng; Giám thị added later)
 - **Added:** six layout ids (doc-giua, doc-duoi, doc-tren, ngang-giua, ngang-phai, ngang-trai)
 - **Added:** one-time seed: 6 flower backgrounds + 6 example templates (guarded by meta `images_seeded`)
 
@@ -146,9 +146,10 @@ site_content(
 `ensureSchema` runs the `UPGRADES` list in `worker/schema.ts` after the CREATE batch. It probes `PRAGMA table_info('teacher_profile')` and `PRAGMA table_info('student_card')` per table, re-probing only after a step ran on that table. Each step is its own `db.batch` (one D1 transaction).
 
 1. **Drop `public_id`** (if `public_id` present on teacher_profile and `role` absent): CREATE `teacher_profile_new` from the current DDL, copy `teacher_id, department, show_on_home`, DROP, RENAME. Rows get `role = 'Giáo viên'` from the DDL default.
-2. **Add `role`** (if absent on teacher_profile): `ALTER TABLE teacher_profile ADD COLUMN role TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))`. Skipped after step 1.
+2. **Add `role`** (if absent on teacher_profile): `ALTER TABLE teacher_profile ADD COLUMN role TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng','Giám thị'))`. Skipped after step 1.
 3. **Add `font`** (if absent on student_card, Card v3): `ALTER TABLE student_card ADD COLUMN font TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32)`. Existing cards get Bút bi.
 4. **Add `ink`** (if absent on student_card, Card v3): `ALTER TABLE student_card ADD COLUMN ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')`. Existing cards get blue.
+4b. **Role list (Giám thị)** (after steps 1–4, if the stored `teacher_profile` CREATE text lacks the current role CHECK): one batch that creates `teacher_profile_new` from the current DDL, copies all four columns, drops `teacher_profile`, and renames. Probe: `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'teacher_profile'`. Every row keeps its role; a racing replay copies the same data. Verified on local D1 from the f7cc60e shape (rows intact, Giám thị accepted, invalid values rejected, `ON DELETE CASCADE` kept).
 5. **Seed images & templates** (Card v3, best-effort, guarded by meta `images_seeded`): Six WebP backgrounds from `worker/seedImages.ts` (tokens seedbg0000000001–6, created_by 'seed') + six example templates (created_by 'seed') + links. Runs once per DB; failure logs `schema: seed images failed` (does not 503). Each statement repeats the flag-absent guard, so racing isolates produce exactly 6/6/6 rows and one flag.
 
 A failed step logs `schema: upgrade failed`, rejects (request → 503), and is retried on the next request. Two isolates racing: the loser gets "duplicate column name" once, then the retry skips. A 4d3a5df database runs step 1 (which also creates `role`), then 3–5. Production at fdb5da3 (no `public_id`, no `role`) runs steps 2–5 on the next deploy; verified on a local copy created by fdb5da3. Operator reference: `docs/runbooks/admin.md` → "Schema upgrades".

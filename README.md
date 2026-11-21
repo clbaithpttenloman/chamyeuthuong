@@ -108,7 +108,7 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 - **Rotate QR**: generates new token (old QR invalid; teacher's card page URL changes but that's why it's private)
 - **Delete**: removes teacher and all their cards (cascade)
 - **Nhận thiệp mới** (`showOnHome`): the teacher's on/off switch for new cards. On: listed in the send page's teacher picker and counted on the home page. Off: not listed, so students cannot send new cards; approved cards stay readable on the QR page. Hidden teachers are not in the picker, so students cannot choose them; the API still accepts `teacherToken` (`/gui-thiep?t=<token>`), but no page links to it. The teacher's QR page (`/t/<token>`) is for reading only: a random card, "Thiệp khác" and "Xem tất cả", with no send button
-- **Chức vụ (Role)**: select one of "Giáo viên" (default), "Hiệu trưởng", "Phó hiệu trưởng". Leaders (school heads) are shown by chức vụ only on tiles/cards; regular teachers show "Giáo viên: {môn}" or "Giáo viên" if no môn. Leaders' subject and department are hidden from display labels but still used for wishes and filters.
+- **Chức vụ (Role)**: select one of "Giáo viên" (default), "Hiệu trưởng", "Phó hiệu trưởng", "Giám thị". Every role except Giáo viên is shown by chức vụ only on tiles/cards; regular teachers show "Giáo viên: {môn}" or "Giáo viên" if no môn. Their subject and department are hidden from display labels but still used for wishes and filters.
 
 ### **Thư viện lời chúc** (Wish Library)
 
@@ -175,9 +175,9 @@ Teachers with `show_on_home = 1` only; no card content. Response shows teacher p
 
 - Only `show_on_home = 1` teachers and their approved card counts
 - `id` is numeric; used to construct `/gui-thiep?thay=<id>` send links
-- `role` is one of: `"Giáo viên"` (default), `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
+- `role` is one of: `"Giáo viên"` (default), `"Hiệu trưởng"`, `"Phó hiệu trưởng"`, `"Giám thị"`
 - **Display on tiles:** `roleLabel(role, subject)` returns:
-  - `"Hiệu trưởng"` or `"Phó hiệu trưởng"` for leaders (môn ignored)
+  - `"Hiệu trưởng"`, `"Phó hiệu trưởng"` or `"Giám thị"` (môn ignored)
   - `"Giáo viên: {subject}"` for teachers with subject
   - `"Giáo viên"` for teachers without subject
 - **Department display:** `departmentLabel(role, subject, department)` returns empty string for leaders; otherwise the department unless it repeats the subject (normalized comparison)
@@ -220,7 +220,7 @@ Private teacher QR token → approved cards + teacher profile
 
 - Only `status = 'approved'` cards, newest first, max 200
 - `total`: count of all approved cards (may exceed 200)
-- `role` is one of: `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
+- `role` is one of: `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"`, `"Giám thị"`
 - `layout` is one of the six new layout ids (old ids are resolved at read time)
 - `font` and `ink` are the student's choices; if missing from old cards, defaults are applied
 - `images` contains only `background`
@@ -413,7 +413,7 @@ List all teachers with card counts.
 
 - `token`: 16-char unique per teacher; never exposed to students
 - `id`: numeric identifier; internal use only
-- `role`: one of `"Giáo viên"` (default), `"Hiệu trưởng"`, `"Phó hiệu trưởng"`
+- `role`: one of `"Giáo viên"` (default), `"Hiệu trưởng"`, `"Phó hiệu trưởng"`, `"Giám thị"`
 
 #### POST /api/admin/teachers
 Create one teacher.
@@ -431,7 +431,7 @@ Create one teacher.
 ```
 
 - `title` (Thầy/Cô): **required**
-- `role`: optional; one of `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"` (any other value or non-string → 400); omitted defaults to `"Giáo viên"`
+- `role`: optional; one of `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"`, `"Giám thị"` (any other value or non-string → 400); omitted defaults to `"Giáo viên"`
 - Others: optional
 - `showOnHome` defaults to 1
 
@@ -450,7 +450,7 @@ Update teacher.
 }
 ```
 
-- `role`: optional; one of `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"` (invalid value → 400); omitted leaves role unchanged
+- `role`: optional; one of `"Giáo viên"`, `"Hiệu trưởng"`, `"Phó hiệu trưởng"`, `"Giám thị"` (invalid value → 400); omitted leaves role unchanged
 - Unknown teacher ID → **400**
 
 #### DELETE /api/admin/teachers/:id
@@ -858,7 +858,7 @@ teacher_profile(
   teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
   department   TEXT NOT NULL DEFAULT '',
   show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
-  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))
+  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng','Giám thị'))
 )
 
 template(
@@ -948,7 +948,7 @@ Visit `http://localhost:5173` for the frontend, and `/admin` to sign in.
 
 Tables are created automatically on the first request.
 
-**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Today: drop `teacher_profile.public_id` from databases created by 4d3a5df (including production), and add `teacher_profile.role` (chức vụ, default Giáo viên) where it is missing. Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
+**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Today: drop `teacher_profile.public_id` from databases created by 4d3a5df (including production), add `teacher_profile.role` (chức vụ, default Giáo viên) where it is missing, and copy `teacher_profile` into a table with the current role CHECK when its stored role list is older (Giám thị added; SQLite cannot alter a CHECK). Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
 
 ```bash
 rm -rf .wrangler/state
