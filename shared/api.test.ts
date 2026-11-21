@@ -85,8 +85,8 @@ describe('API constants', () => {
 // ---- ROLES / isRole / roleLabel ----
 
 describe('ROLES and isRole', () => {
-  it('has exactly the three chức vụ, Giáo viên first (the default)', () => {
-    expect(ROLES).toEqual(['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng'])
+  it('has exactly the four chức vụ, Giáo viên first (the default)', () => {
+    expect(ROLES).toEqual(['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng', 'Giám thị'])
     expect(DEFAULT_ROLE).toBe('Giáo viên')
   })
   it('accepts each role exactly', () => { for (const r of ROLES) expect(isRole(r)).toBe(true) })

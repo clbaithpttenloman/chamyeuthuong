@@ -996,7 +996,7 @@ describe('teacher role (chức vụ)', () => {
   })
 
   it('create with each valid role → stored and returned', async () => {
-    for (const role of ['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng']) {
+    for (const role of ['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng', 'Giám thị']) {
       const r = await create({ role })
       expect(r.status).toBe(200)
       expect(((await r.json()) as AdminTeacher).role).toBe(role)

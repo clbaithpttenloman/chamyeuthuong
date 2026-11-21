@@ -11,9 +11,9 @@ import { testDb } from './testDb.ts'
 import type { D1Stmt } from './types.ts'
 
 // Statements a fresh (unseeded) database prepares on its first ensureSchema: the SCHEMA batch,
-// one column probe per upgradable table (teacher_profile, student_card), the seed-flag probe,
+// one column probe per upgradable table (teacher_profile, student_card), the role-CHECK probe, the seed-flag probe,
 // and the seed batch.
-const FRESH_COLD_START = SCHEMA.length + 3 + SEED_STATEMENT_COUNT
+const FRESH_COLD_START = SCHEMA.length + 4 + SEED_STATEMENT_COUNT
 
 // ---- SCHEMA shape ----
 
@@ -971,14 +971,16 @@ describe('ensureSchema — upgrades teacher_profile from the 4d3a5df shape', () 
     const before = sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()
     await ensureSchema(db)
     expect(sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()).toEqual(before)
-    expect(state.ddl).toBe(SCHEMA.length + 3) // SCHEMA + 2 table probes + seed probe, no rebuild
+    expect(state.ddl).toBe(SCHEMA.length + 4) // SCHEMA + 2 table probes + role-CHECK probe + seed probe, no rebuild
   })
 
   it('running the rebuild twice keeps the same rows', async () => {
     const { db, sqlite } = oldDb()
     await ensureSchema(db)
-    // Second isolate whose probe ran before the first committed: replays the rebuild batch only.
-    for (const q of UPGRADE_SQL.filter((q) => /teacher_profile_new|DROP TABLE teacher_profile/.test(q))) sqlite.exec(q)
+    // Second isolate whose probe ran before the first committed: replays the public_id rebuild
+    // (its INSERT copies 3 columns; the role rebuild's copies 4).
+    const roleProbe = UPGRADE_SQL.findIndex((q) => q.startsWith('SELECT sql FROM sqlite_master'))
+    for (const q of UPGRADE_SQL.slice(0, roleProbe).filter((q) => /teacher_profile_new|DROP TABLE teacher_profile/.test(q))) sqlite.exec(q)
     expect(cols(sqlite)).toEqual(['teacher_id', 'department', 'show_on_home', 'role'])
     expect(sqlite.prepare('SELECT teacher_id, department, show_on_home FROM teacher_profile').all())
       .toEqual([{ teacher_id: 1, department: 'Tổ Toán', show_on_home: 0 }])
@@ -1016,6 +1018,86 @@ const NO_ROLE_TEACHER_PROFILE = `CREATE TABLE teacher_profile (
   department   TEXT    NOT NULL DEFAULT '',
   show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1))
 )`
+
+// f7cc60e shape: role CHECK without Giám thị (as deployed before the Giám thị role)
+const THREE_ROLE_TEACHER_PROFILE = `CREATE TABLE teacher_profile (
+  teacher_id   INTEGER PRIMARY KEY REFERENCES teacher(id) ON DELETE CASCADE,
+  department   TEXT    NOT NULL DEFAULT '',
+  show_on_home INTEGER NOT NULL DEFAULT 1 CHECK (show_on_home IN (0,1)),
+  role         TEXT NOT NULL DEFAULT 'Giáo viên' CHECK (role IN ('Giáo viên','Hiệu trưởng','Phó hiệu trưởng'))
+)`
+
+describe('ensureSchema — teacher_profile.role gains Giám thị', () => {
+  function threeRoleDb() {
+    const t = testDb()
+    t.sqlite.exec('DROP TABLE teacher_profile')
+    t.sqlite.exec(THREE_ROLE_TEACHER_PROFILE)
+    t.sqlite.exec(`INSERT INTO teacher (id, token, name, created_at) VALUES
+      (1, 'tok1234567890abc', 'A', '2026-11-17'), (2, 'tok2234567890abc', 'B', '2026-11-17'), (3, 'tok3234567890abc', 'C', '2026-11-17')`)
+    t.sqlite.exec(`INSERT INTO teacher_profile (teacher_id, department, show_on_home, role) VALUES
+      (1, 'Tổ Toán', 0, 'Hiệu trưởng'), (2, '', 1, 'Phó hiệu trưởng'), (3, 'Tổ Văn', 1, 'Giáo viên')`)
+    return t
+  }
+
+  it('deployed shape: every row kept byte-for-byte and Giám thị is accepted', async () => {
+    const { db, sqlite } = threeRoleDb()
+    const before = sqlite.prepare('SELECT * FROM teacher_profile ORDER BY teacher_id').all()
+    expect(() => sqlite.exec("UPDATE teacher_profile SET role = 'Giám thị' WHERE teacher_id = 3")).toThrow(/CHECK/)
+    await ensureSchema(db)
+    expect(sqlite.prepare('SELECT * FROM teacher_profile ORDER BY teacher_id').all()).toEqual(before)
+    expect(cols(sqlite)).toEqual(['teacher_id', 'department', 'show_on_home', 'role'])
+    expect(() => sqlite.exec("UPDATE teacher_profile SET role = 'Giám thị' WHERE teacher_id = 3")).not.toThrow()
+    expect(ROLE_CHECK_FAILS(sqlite)).toThrow(/CHECK/)
+  })
+
+  it('a racing replay of the role copy keeps every role (non-default included)', async () => {
+    const { db, sqlite } = threeRoleDb()
+    await ensureSchema(db)
+    sqlite.exec("UPDATE teacher_profile SET role = 'Giám thị' WHERE teacher_id = 3")
+    const before = sqlite.prepare('SELECT * FROM teacher_profile ORDER BY teacher_id').all()
+    const i = UPGRADE_SQL.findIndex((q) => q.startsWith('SELECT sql FROM sqlite_master'))
+    for (const q of UPGRADE_SQL.slice(i + 1, i + 5)) sqlite.exec(q)
+    expect(sqlite.prepare('SELECT * FROM teacher_profile ORDER BY teacher_id').all()).toEqual(before)
+  })
+
+  it('a failed role copy rolls back (old table, rows and old CHECK intact) and the next call retries', async () => {
+    const { db, sqlite } = threeRoleDb()
+    sqlite.exec('CREATE TABLE teacher_profile_new (x INTEGER)') // makes the copy batch fail
+    await expect(ensureSchema(db)).rejects.toThrow()
+    expect(sqlite.prepare('SELECT role FROM teacher_profile ORDER BY teacher_id').all())
+      .toEqual([{ role: 'Hiệu trưởng' }, { role: 'Phó hiệu trưởng' }, { role: 'Giáo viên' }])
+    expect(() => sqlite.exec("UPDATE teacher_profile SET role = 'Giám thị' WHERE teacher_id = 3")).toThrow(/CHECK/)
+    sqlite.exec('DROP TABLE teacher_profile_new')
+    await ensureSchema(db) // cache entry was evicted → retried
+    expect(() => sqlite.exec("UPDATE teacher_profile SET role = 'Giám thị' WHERE teacher_id = 3")).not.toThrow()
+  })
+
+  it('a table that got role via ADD COLUMN is not copied (probe stays quiet)', async () => {
+    const t = testDb()
+    t.sqlite.exec('DROP TABLE teacher_profile')
+    t.sqlite.exec(NO_ROLE_TEACHER_PROFILE)
+    await ensureSchema(t.db)
+    // SCHEMA + 2 column probes + ADD COLUMN + re-probe + role probe + seed probe; a copy would add 4.
+    expect(t.state.ddl).toBe(SCHEMA.length + 6)
+  })
+
+  it('cascade from teacher still works after the rebuild', async () => {
+    const { db, sqlite } = threeRoleDb()
+    await ensureSchema(db)
+    sqlite.exec('PRAGMA foreign_keys = ON')
+    sqlite.exec('DELETE FROM teacher WHERE id = 1')
+    expect(sqlite.prepare('SELECT teacher_id FROM teacher_profile ORDER BY teacher_id').all())
+      .toEqual([{ teacher_id: 2 }, { teacher_id: 3 }])
+  })
+
+  it('a second ensureSchema on a fresh binding does not rebuild again', async () => {
+    const { sqlite, db } = threeRoleDb()
+    await ensureSchema(db)
+    const t2 = testDb({ shareWith: sqlite })
+    await ensureSchema(t2.db)
+    expect(t2.state.ddl).toBe(SCHEMA.length + 4) // SCHEMA + 2 column probes + role-CHECK probe + seed probe
+  })
+})
 
 describe('ensureSchema — teacher_profile.role', () => {
   it('fresh DB: role column exists with DEFAULT Giáo viên and the CHECK', async () => {
@@ -1152,7 +1234,7 @@ describe('ensureSchema — student_card.font / ink', () => {
     const { db, state } = testDb()
     await ensureSchema(db)
     // SCHEMA batch + teacher_profile probe + student_card probe + seed-flag probe
-    expect(state.ddl).toBe(SCHEMA.length + 3)
+    expect(state.ddl).toBe(SCHEMA.length + 4)
     expect(state.prepares).toBe(0)
   })
 })
@@ -1246,7 +1328,7 @@ describe('ensureSchema — one-time image seed', () => {
   it('flag already set → no seed statement is prepared', async () => {
     const { db, sqlite, state } = testDb()
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length + 3)
+    expect(state.ddl).toBe(SCHEMA.length + 4)
     expect(count(sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(0)
   })
 

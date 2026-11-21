@@ -139,11 +139,11 @@ Format: `Thầy|Cô Name | Subject | Department`
 
 Click **Tạo** → all teachers added atomically.
 
-**To set role to Hiệu trưởng or Phó hiệu trưởng:** bulk add first, then edit each teacher individually in the admin form (search for their name, click **Chỉnh sửa**, change **Chức vụ** dropdown, save).
+**To set role to Hiệu trưởng, Phó hiệu trưởng or Giám thị:** bulk add first, then edit each teacher individually in the admin form (search for their name, click **Chỉnh sửa**, change **Chức vụ** dropdown, save).
 
 **Option B: Add One at a Time**
 
-Click **+ Thêm giáo viên**, fill form (choose **Chức vụ** from dropdown: "Giáo viên" is default, or pick "Hiệu trưởng" / "Phó hiệu trưởng"), click **Thêm**.
+Click **+ Thêm giáo viên**, fill form (choose **Chức vụ** from dropdown: "Giáo viên" is default, or pick "Hiệu trưởng" / "Phó hiệu trưởng" / "Giám thị"), click **Thêm**.
 
 ### 3. Upload Images
 
@@ -631,8 +631,9 @@ Steps, in order (each is its own batch; the Worker re-checks the table after a s
 2. **Add `role` (chức vụ).** Runs only if `role` is missing (databases without `public_id` from before this feature): `ALTER TABLE teacher_profile ADD COLUMN role ... DEFAULT 'Giáo viên'`. On production at 4d3a5df this step is skipped, because step 1 already created the column.
 3. **Add `font` to student_card.** Card v3 feature (2026-11-18): `ALTER TABLE student_card ADD COLUMN font TEXT NOT NULL DEFAULT 'patrick-hand' CHECK (length(font) <= 32)`. Existing cards get Bút bi (patrick-hand).
 4. **Add `ink` to student_card.** Card v3 feature (2026-11-18): `ALTER TABLE student_card ADD COLUMN ink TEXT NOT NULL DEFAULT '#1d3fa6' CHECK (ink GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')`. Existing cards get blue (#1d3fa6).
+5. **Role list (Giám thị).** Runs after steps 1–4, only if the stored `CREATE TABLE teacher_profile` text lacks the current role CHECK (SQLite cannot alter a CHECK). One batch copies all four columns into a new `teacher_profile` with the four-role CHECK, drops the old table and renames. Every row keeps its role. A `schema: upgrade failed` right after the Giám thị deploy comes from this step.
 
-**Production (fdb5da3 at the time of writing):** `public_id` is already gone, so the next deploy runs steps 2, 3 and 4, then the seed. Verified on a local copy created by fdb5da3.
+**Production (f7cc60e at the time of writing):** all columns exist, so the Giám thị deploy runs only step 5 (once), then nothing on later cold starts. Verified on workerd with a database created by f7cc60e.
 
 **One-time seed (after schema steps):** Six flower backgrounds (one per layout, ~18–23 KB WebP, tokens `seedbg0000000001`–`6`) + six active example templates ("Hoa hồng · Dọc – giữa" …). Guarded by meta flag `images_seeded`; INSERT-only, never overwrites. Added even if admin templates exist; admins can turn the templates off or delete them (an image still used by a template cannot be deleted). The six images count toward the 200-image / 40 MB library caps. Failure logs `schema: seed images failed` and the site keeps working; that line (repeated on new instances) is the signal to investigate. To regenerate the images, see the header of `worker/seedImages.ts` (source: `docs/design/card-v3-mockup.html`).
 
@@ -656,8 +657,9 @@ After deploy:
 3. Write a card with Thư pháp + Tím: the preview shows that font and colour; after approval the teacher's QR page shows the same.
 4. `/admin` → Mẫu thiệp: the editor preview shows the dashed writing zone.
 5. Adding a teacher still works.
+6. Editing a teacher to **Chức vụ: Giám thị** saves; their tile shows "Giám thị" only (no môn/tổ).
 
-**Rollback:** roll forward with a fix. Redeploying 4d3a5df after the upgrade breaks, because that code still reads `public_id` and expects no font/ink columns. If you must go back, restore the database together with the old code (destructive, overwrites all data written since):
+**Rollback:** roll forward with a fix. After step 5, redeploying f7cc60e keeps working only until someone saves a Giám thị role; after that, the old code rejects that teacher's role on edit (400) because it does not know the value. Redeploying 4d3a5df after the upgrade breaks, because that code still reads `public_id` and expects no font/ink columns. If you must go back, restore the database together with the old code (destructive, overwrites all data written since):
 
 ```bash
 npx wrangler d1 time-travel restore cham-yeu-thuong --bookmark=<bookmark from step 1>

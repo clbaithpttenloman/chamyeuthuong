@@ -277,7 +277,7 @@ export function formatFrom(opts: { fromName: string; fromClass: string; anonymou
 }
 
 /** Chức vụ. Stored as these exact labels (DB CHECK in teacher_profile.role). */
-export const ROLES = ['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng'] as const
+export const ROLES = ['Giáo viên', 'Hiệu trưởng', 'Phó hiệu trưởng', 'Giám thị'] as const
 export type Role = (typeof ROLES)[number]
 export const DEFAULT_ROLE: Role = 'Giáo viên'
 
@@ -286,12 +286,12 @@ export function isRole(v: unknown): v is Role {
   return typeof v === 'string' && (ROLES as readonly string[]).includes(v)
 }
 
-/** School leaders (Hiệu trưởng / Phó hiệu trưởng) are shown by chức vụ only. */
-const isLeader = (role: unknown) => role === 'Hiệu trưởng' || role === 'Phó hiệu trưởng'
+/** Every chức vụ except Giáo viên (Hiệu trưởng, Phó hiệu trưởng, Giám thị) is shown by chức vụ only. */
+const isLeader = (role: unknown) => isRole(role) && role !== DEFAULT_ROLE
 
 /**
  * The chức vụ / môn line on teacher tiles and cards.
- * Leaders → the chức vụ only. Giáo viên (or a missing/unknown role) → "Giáo viên: <môn>",
+ * Hiệu trưởng / Phó hiệu trưởng / Giám thị → the chức vụ only. Giáo viên (or a missing/unknown role) → "Giáo viên: <môn>",
  * or "Giáo viên" when there is no môn.
  */
 export function roleLabel(role: unknown, subject: string): string {
@@ -304,7 +304,7 @@ export function roleLabel(role: unknown, subject: string): string {
 const norm = (v: string) => v.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim().replace(/^tổ /, '')
 
 /**
- * Department line for a teacher tile. Returns "" for school leaders (shown by chức vụ only)
+ * Department line for a teacher tile. Returns "" for non-Giáo viên roles (shown by chức vụ only)
  * and when it only repeats the subject (e.g. môn "Toán", tổ "Toán" or "Tổ Toán").
  */
 export function departmentLabel(role: unknown, subject: string, department: string): string {

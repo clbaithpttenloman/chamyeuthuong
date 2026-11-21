@@ -11,7 +11,7 @@
  * - Sizes are in container-query units (cqw), so a 150 px thumbnail looks exactly like the full
  *   card. After layout, fitText shrinks the zone's font size until the text fits (bounded).
  * - The line under the name comes from roleLabel(): "Giáo viên: <môn>", "Giáo viên", or the
- *   chức vụ alone for Hiệu trưởng / Phó hiệu trưởng.
+ *   chức vụ alone for Hiệu trưởng / Phó hiệu trưởng / Giám thị.
  * - Image URLs are built only for tokens matching ^[a-z0-9]{16}$. Only the background slot is used.
  */
 import { useLayoutEffect, useRef } from 'react'
