@@ -106,7 +106,6 @@ export type AdminCampaignInput = {
   settings?: string
   starts_at?: string
   ends_at?: string
-  status?: string
 }
 
 /** Full campaign row returned by GET /api/admin/campaigns/<id> (includes content/settings/theme_colors). */

@@ -303,7 +303,8 @@ function validateCampaignBody(
   if ('name' in body) {
     if (typeof body.name !== 'string') return error('bad_request')
     const trimmed = body.name.trim()
-    if ([...trimmed].length > 120) return error('bad_request')
+    // Empty after trim is refused on POST and PATCH: a campaign always has a name.
+    if (trimmed === '' || [...trimmed].length > 120) return error('bad_request')
     body.name = trimmed
   } else if (!isPatch) {
     // POST: name is required (checked again in POST handler but guard here too)

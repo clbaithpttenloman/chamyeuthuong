@@ -41,6 +41,10 @@ type MeEnv = {
   /** Per-sub rate limit on successful sign-ins: 10/60 s. Key = HMAC(sub) or sub. */
   AUTH_SUB_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_FAIL_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
+  /** GET /api/me: 120/60 s, keyed by user id (IP when signed out). */
+  USER_READ_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
+  /** PUT /api/me and logout: 10/60 s, keyed by user id (IP when signed out). */
+  USER_WRITE_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_LEGACY_LOGIN?: string
   /** Used to hash the sub for AUTH_SUB_LIMIT key (privacy-preserving). */
   IP_HMAC_KEY?: string
@@ -52,6 +56,17 @@ const BASE_HDR: Record<string, string> = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
   'X-Robots-Tag': 'noindex',
+}
+
+/** True when the caller is within `limit` (missing binding → allowed). Key: user id, else IP. */
+async function withinUserLimit(
+  limit: MeEnv['USER_READ_LIMIT'],
+  request: Request,
+  userId: number | undefined,
+): Promise<boolean> {
+  if (!limit) return true
+  const key = userId !== undefined ? `u:${userId}` : `ip:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`
+  return (await limit.limit({ key })).success
 }
 
 function resp(body: unknown, status: number, extraCookies: string[] = []): Response {
@@ -215,8 +230,8 @@ export async function handleAuth(
     try {
       body = await readJson<{ credential?: unknown }>(request, 8192)
     } catch {
-      await env.AUTH_LIMIT?.limit({ key: ip })
-      return failResp('bad_request', 400, [nonceClear])
+      const rl = await env.AUTH_LIMIT?.limit({ key: ip }) ?? { success: true }
+      return failResp(rl.success ? 'bad_request' : 'rate_limited', rl.success ? 400 : 429, [nonceClear])
     }
     const credential = typeof body.credential === 'string' ? body.credential : ''
 
@@ -262,6 +277,8 @@ export async function handleAuth(
   // POST /api/auth/logout
   if (request.method === 'POST' && pathname === '/api/auth/logout') {
     if (!csrfGuard(request)) return failResp('forbidden', 403)
+    const current = await readSession(request, env.DB)
+    if (!(await withinUserLimit(env.USER_WRITE_LIMIT, request, current?.userId))) return failResp('rate_limited', 429)
     await revokeSession(request, env.DB)
     const cleared = clearCookie(SESSION_COOKIE)
     return resp({ ok: true }, 200, [cleared])
@@ -282,6 +299,7 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
 
   if (request.method === 'GET') {
     const session = await readSession(request, env.DB)
+    if (!(await withinUserLimit(env.USER_READ_LIMIT, request, session?.userId))) return failResp('rate_limited', 429)
     if (!session) return resp({ user: null, isAdmin: false }, 200)
 
     // Accept #10: single app_user read including google_sub (eliminates the second read)
@@ -315,6 +333,7 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
 
     const session = await readSession(request, env.DB)
     if (!session) return failResp('unauthorized', 401)
+    if (!(await withinUserLimit(env.USER_WRITE_LIMIT, request, session.userId))) return failResp('rate_limited', 429)
 
     let body: { nickname?: unknown; className?: unknown }
     try {

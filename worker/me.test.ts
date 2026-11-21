@@ -961,3 +961,117 @@ describe('Fix Group 5a — Accept #8: nickname/class validation (shared/text.ts)
     expect(r.status).toBe(400)
   })
 })
+
+// Review cycle 2 Warning: the re-read branch when the conditional pin changes 0 rows.
+// The wrapper writes another sub into admin.google_sub just before the pin UPDATE runs,
+// which is what a concurrent sign-in that wins the race looks like.
+describe('resolveAdmin — pin race (UPDATE … WHERE google_sub IS NULL changes 0 rows)', () => {
+  async function signInWithRace(winnerSub: string) {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    await seedAdminEmail(db, TEST_EMAIL)
+    const raced = {
+      prepare(sql: string) {
+        if (sql.startsWith('UPDATE admin SET google_sub')) {
+          sqlite.prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ?').run(winnerSub, TEST_EMAIL.toLowerCase())
+        }
+        return db.prepare(sql)
+      },
+      batch: (s: Parameters<typeof db.batch>[0]) => db.batch(s),
+    }
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const cred = await validToken({ nonce: nonceValue, sub: TEST_SUB })
+    const r = await handleAuth(makeSignInReq(cred, nonceValue), meEnv({ db: raced as typeof db }), { keys: await localJwks() })
+    const pinned = sqlite.prepare('SELECT google_sub FROM admin WHERE lower(email) = ?').get(TEST_EMAIL.toLowerCase())
+    return { body: (await r.json()) as { user?: { isAdmin?: boolean } }, pinned }
+  }
+
+  it('another sub won the pin → this sign-in is not admin, and the winner stays pinned', async () => {
+    const { body, pinned } = await signInWithRace('racing-winner-sub')
+    expect(body.user?.isAdmin).toBe(false)
+    expect(pinned).toEqual({ google_sub: 'racing-winner-sub' })
+  })
+
+  it('the same sub won the pin concurrently (two tabs) → still admin', async () => {
+    const { body, pinned } = await signInWithRace(TEST_SUB)
+    expect(body.user?.isAdmin).toBe(true)
+    expect(pinned).toEqual({ google_sub: TEST_SUB })
+  })
+})
+
+// Review cycle 2 Warning: USER_READ_LIMIT / USER_WRITE_LIMIT are enforced (keyed by user id).
+describe('USER_READ_LIMIT / USER_WRITE_LIMIT', () => {
+  function limiter(success: boolean) {
+    const keys: string[] = []
+    return { keys, binding: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success } } } }
+  }
+  async function signedIn() {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const userId = await seedUser(db)
+    const token = makeRawToken()
+    await seedSession(db, userId, token)
+    return { db, userId, cookie: `${SESSION_COOKIE_NAME}=${token}` }
+  }
+  const headers = (cookie: string, write = false): Record<string, string> => ({
+    Cookie: cookie, 'CF-Connecting-IP': '5.6.7.8',
+    ...(write ? { 'X-Requested-With': 'fetch', 'Content-Type': 'application/json' } : {}),
+  })
+
+  it('GET /api/me: charged by user id; exhausted → 429', async () => {
+    const { db, userId, cookie } = await signedIn()
+    const ok = limiter(true)
+    const r = await handleMe(new Request('https://x/api/me', { headers: headers(cookie) }), { ...meEnv({ db }), USER_READ_LIMIT: ok.binding } as never)
+    expect(r.status).toBe(200)
+    expect(ok.keys).toEqual([`u:${userId}`])
+    const no = limiter(false)
+    const r2 = await handleMe(new Request('https://x/api/me', { headers: headers(cookie) }), { ...meEnv({ db }), USER_READ_LIMIT: no.binding } as never)
+    expect(r2.status).toBe(429)
+  })
+
+  it('GET /api/me signed out: charged by IP', async () => {
+    const { db } = await signedIn()
+    const ok = limiter(true)
+    await handleMe(new Request('https://x/api/me', { headers: { 'CF-Connecting-IP': '5.6.7.8' } }), { ...meEnv({ db }), USER_READ_LIMIT: ok.binding } as never)
+    expect(ok.keys).toEqual(['ip:5.6.7.8'])
+  })
+
+  it('PUT /api/me: exhausted USER_WRITE_LIMIT → 429 and the nickname is unchanged', async () => {
+    const { db, userId, cookie } = await signedIn()
+    const no = limiter(false)
+    const r = await handleMe(
+      new Request('https://x/api/me', { method: 'PUT', headers: headers(cookie, true), body: JSON.stringify({ nickname: 'Mới', className: '10A1' }) }),
+      { ...meEnv({ db }), USER_WRITE_LIMIT: no.binding } as never,
+    )
+    expect(r.status).toBe(429)
+    expect(no.keys).toEqual([`u:${userId}`])
+    expect(await db.prepare('SELECT nickname FROM app_user WHERE id = ?').bind(userId).first()).toEqual({ nickname: 'TestUser' })
+  })
+
+  it('logout: exhausted USER_WRITE_LIMIT → 429 and the session survives', async () => {
+    const { db, userId, cookie } = await signedIn()
+    const no = limiter(false)
+    const r = await handleAuth(
+      new Request('https://x/api/auth/logout', { method: 'POST', headers: headers(cookie, true) }),
+      { ...meEnv({ db }), USER_WRITE_LIMIT: no.binding } as never,
+    )
+    expect(r.status).toBe(429)
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM session WHERE user_id = ?').bind(userId).first()).toEqual({ n: 1 })
+  })
+})
+
+describe('POST /api/auth/google — unparseable body', () => {
+  it('charges AUTH_LIMIT and returns 429 when it is exhausted (400 otherwise)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const req = () => new Request('https://x/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch', 'CF-Connecting-IP': '5.6.7.8' },
+      body: '{not json',
+    })
+    const limited = { limit: async () => ({ success: false }) }
+    const open = { limit: async () => ({ success: true }) }
+    expect((await handleAuth(req(), { ...meEnv({ db }), AUTH_LIMIT: limited } as never)).status).toBe(429)
+    expect((await handleAuth(req(), { ...meEnv({ db }), AUTH_LIMIT: open } as never)).status).toBe(400)
+  })
+})

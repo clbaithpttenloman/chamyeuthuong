@@ -58,8 +58,8 @@
   // AUTH_LIMIT (300/60 s per IP): guards /api/auth/nonce (all) and /api/auth/google FAILURES only.
   //   On successful sign-in, AUTH_LIMIT is NOT charged — only failure attempts count.
   // AUTH_SUB_LIMIT (10/60 s per sub): guards /api/auth/google successful sign-ins; namespace 2009.
-  // USER_READ_LIMIT (120/60 s per user): guards GET /api/me and /api/me/gifts.
-  // USER_WRITE_LIMIT (10/60 s per user): guards PUT/DELETE /api/me, logout.
+  // USER_READ_LIMIT (120/60 s per user id, IP when signed out): guards GET /api/me; namespace 2007.
+  // USER_WRITE_LIMIT (10/60 s per user id, IP when signed out): guards PUT /api/me and logout; namespace 2008.
   // PUBLIC_READ_LIMIT (3000/60 s per IP): guards public /api/campaigns/* cache misses; namespace 2010.
   "ratelimits": [
     { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "2004", "simple": { "limit": 120,  "period": 60 } },

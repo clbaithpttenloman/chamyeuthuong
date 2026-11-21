@@ -71,7 +71,8 @@ function loadGsiScript(): Promise<void> {
     script.src = 'https://accounts.google.com/gsi/client'
     script.async = true
     script.onload = () => resolve()
-    script.onerror = () => reject(new Error(GSI_SCRIPT_LOAD_ERROR))
+    // Remove a failed tag so the next mount adds a fresh one instead of waiting on a dead tag.
+    script.onerror = () => { script.remove(); reject(new Error(GSI_SCRIPT_LOAD_ERROR)) }
     document.head.appendChild(script)
   })
 }

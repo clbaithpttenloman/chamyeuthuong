@@ -12,6 +12,7 @@ import { handleCampaigns, activateCampaign, handleAdminCampaigns } from './campa
 import { handleSubmit } from './submit.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { newToken } from './token.ts'
+import { defaultForm, formToInput, rowToForm } from '../src/pages/admin/campaignFormHelpers.ts'
 
 // ---- Env builders ----
 
@@ -1229,5 +1230,83 @@ describe('Fix Group 5a — Accept #9: public campaign reads validation', () => {
     )
     expect(r.status).toBe(405)
     expect((await r.json() as { error: string }).error).toBe('method')
+  })
+})
+
+// Contract (review cycle 2 Critical): the payload the admin editor really sends must be
+// accepted by the real handler — client and server tests alone let the two drift apart.
+describe('admin editor ↔ handler contract', () => {
+  const form = () => ({
+    ...defaultForm(),
+    slug: 'noel-2026',
+    kind: 'gift_tree' as const,
+    name: 'Noel 2026',
+    tagline: 'Cây thông điều ước',
+    content: '{"home":{"kicker":"k","heading":"h","body":"b"}}',
+    startsAt: '2026-12-10T00:00',
+    endsAt: '2026-12-24T23:59',
+  })
+
+  it('create: formToInput(form, false) → 201, stored as draft', async () => {
+    const r = await handleAdminCampaigns(adminPost('https://x/api/admin/campaigns', formToInput(form(), false)), campaignsEnv(db), 'admin@test.com')
+    expect(r.status).toBe(201)
+    const { id } = (await r.json()) as { id: number }
+    const row = await db.prepare('SELECT status, name FROM campaign WHERE id = ?').bind(id).first<{ status: string; name: string }>()
+    expect(row).toEqual({ status: 'draft', name: 'Noel 2026' })
+  })
+
+  it('edit: rowToForm(full row) → formToInput(form, true) → PATCH 200', async () => {
+    const created = await handleAdminCampaigns(adminPost('https://x/api/admin/campaigns', formToInput(form(), false)), campaignsEnv(db), 'admin@test.com')
+    const { id } = (await created.json()) as { id: number }
+    const full = await (await handleAdminCampaigns(new Request(`https://x/api/admin/campaigns/${id}`), campaignsEnv(db), 'admin@test.com')).json()
+    const edited = { ...rowToForm(full as never), name: 'Noel 2026 (mới)' }
+    const r = await handleAdminCampaigns(
+      new Request(`https://x/api/admin/campaigns/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+        body: JSON.stringify(formToInput(edited, true)),
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(200)
+  })
+
+  it('POST with an empty (whitespace) name → 400', async () => {
+    const r = await handleAdminCampaigns(adminPost('https://x/api/admin/campaigns', { ...formToInput(form(), false), name: '   ' }), campaignsEnv(db), 'admin@test.com')
+    expect(r.status).toBe(400)
+  })
+})
+
+// Review cycle 2 Warning: PUBLIC_READ_LIMIT is charged on cache misses only.
+describe('handleCampaigns — PUBLIC_READ_LIMIT on cache misses only', () => {
+  function limiter(success = true) {
+    const calls: string[] = []
+    return { calls, binding: { limit: async ({ key }: { key: string }) => { calls.push(key); return { success } } } }
+  }
+  const get = (path: string) => new Request(`https://x${path}`, { headers: { 'CF-Connecting-IP': '9.9.9.9' } })
+
+  it('a miss charges the caller IP once; a memo hit charges nothing', async () => {
+    const l = limiter()
+    const env = { DB: db, PUBLIC_READ_LIMIT: l.binding }
+    expect((await handleCampaigns(get('/api/campaigns/active'), env)).status).toBe(200)
+    expect(l.calls).toEqual(['9.9.9.9'])
+    expect((await handleCampaigns(get('/api/campaigns/active'), env)).status).toBe(200)
+    expect(l.calls).toEqual(['9.9.9.9'])
+  })
+
+  it('a cached 404 charges nothing', async () => {
+    const l = limiter()
+    const env = { DB: db, PUBLIC_READ_LIMIT: l.binding }
+    expect((await handleCampaigns(get('/api/campaigns/khong-co'), env)).status).toBe(404)
+    expect((await handleCampaigns(get('/api/campaigns/khong-co'), env)).status).toBe(404)
+    expect(l.calls).toHaveLength(1)
+  })
+
+  it('exhausted limit on a miss → 429 rate_limited and no DB read', async () => {
+    const l = limiter(false)
+    const r = await handleCampaigns(get('/api/campaigns/active'), { DB: db, PUBLIC_READ_LIMIT: l.binding })
+    expect(r.status).toBe(429)
+    expect(((await r.json()) as { error: string }).error).toBe('rate_limited')
   })
 })

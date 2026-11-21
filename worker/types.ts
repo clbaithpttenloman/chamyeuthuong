@@ -35,9 +35,9 @@ export type Env = {
   AUTH_LIMIT?: RateLimit
   /** Per-sub rate limit on successful sign-ins: 10 req/60 s per sub, namespace 2009. */
   AUTH_SUB_LIMIT?: RateLimit
-  /** Rate limit for session reads (GET /api/me, /api/me/gifts): 120 req/60 s per user. */
+  /** Rate limit for GET /api/me: 120 req/60 s per user id (IP when signed out). */
   USER_READ_LIMIT?: RateLimit
-  /** Rate limit for session writes (PUT /api/me, DELETE, logout): 10 req/60 s per user. */
+  /** Rate limit for PUT /api/me and logout: 10 req/60 s per user id (IP when signed out). */
   USER_WRITE_LIMIT?: RateLimit
   /** Rate limit for public campaign reads (cache misses): 3,000 req/60 s per IP, namespace 2010. */
   PUBLIC_READ_LIMIT?: RateLimit

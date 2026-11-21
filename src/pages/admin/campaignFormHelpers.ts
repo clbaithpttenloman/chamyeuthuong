@@ -200,7 +200,7 @@ export function formToInput(form: CampaignFormState, editing: boolean): AdminCam
     }
   }
 
-  // POST: include all fields
+  // POST: never status — new campaigns are always draft (server rejects status on POST).
   return {
     slug: form.slug,
     kind: form.kind,
@@ -210,6 +210,5 @@ export function formToInput(form: CampaignFormState, editing: boolean): AdminCam
     settings: settingsStr,
     starts_at: startsUtc,
     ends_at: endsUtc,
-    status: form.status,
   }
 }

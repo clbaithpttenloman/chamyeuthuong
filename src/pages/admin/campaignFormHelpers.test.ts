@@ -161,7 +161,7 @@ describe('formToInput — PATCH mode (editing=true): slug/kind/status omitted', 
 
 // ── formToInput — POST mode (editing=false) ───────────────────────────────
 
-describe('formToInput — POST mode (editing=false): includes slug, kind, status', () => {
+describe('formToInput — POST mode (editing=false): includes slug and kind, never status', () => {
   it('includes slug', () => {
     const form = { ...defaultForm(), slug: 'new-campaign' }
     const input = formToInput(form, false)
@@ -174,10 +174,9 @@ describe('formToInput — POST mode (editing=false): includes slug, kind, status
     expect(input.kind).toBe('gift_tree')
   })
 
-  it('includes status', () => {
-    const form = { ...defaultForm(), status: 'draft' }
-    const input = formToInput(form, false)
-    expect(input.status).toBe('draft')
+  it('omits status (new campaigns are always draft; status changes only via activate/close)', () => {
+    const input = formToInput({ ...defaultForm(), status: 'draft' }, false)
+    expect('status' in input).toBe(false)
   })
 })
 

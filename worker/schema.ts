@@ -272,14 +272,16 @@ const UPGRADES: {
           throw e
         })
       }
-      // Create indexes unconditionally at the end of runFn (optional #10).
-      // IF NOT EXISTS is always safe; this ensures indexes exist even after a crash
-      // between ALTER TABLE and CREATE INDEX.
+      // Create the indexes after all three columns. IF NOT EXISTS makes a replay safe.
+      // SHORTCUT: if an isolate dies after the last ALTER and before this loop, the step is
+      // never re-run (needed() is false) and the indexes stay missing — only reads get slower;
+      // create them by hand (docs/runbooks/admin.md) or make index creation its own probe step.
       for (const sql of CAMPAIGN_INDEX_SQLS) {
         await db.batch([db.prepare(sql)])
       }
     },
-  },  {
+  },
+  {
     // ADR-3: the Google sub pinned on an admin's first Google sign-in. Admin tables created
     // before Phase 1 lack it. A racing isolate loses with "duplicate column name" (one 503).
     table: 'admin',
