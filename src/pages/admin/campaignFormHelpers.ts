@@ -61,6 +61,19 @@ export const GIFT_TREE_RANGES: Record<keyof GiftTreeSettings, [number, number, s
   ground_slots: [0, 15, 'Ô dưới đất'],
 }
 
+/**
+ * Parse and clamp a raw settings input string.
+ * Returns the default for the key when the value is empty, NaN, or out of range.
+ * Used to separate display (raw string while typing) from validated numbers (blur/submit).
+ * Exported for unit testing.
+ */
+export function clampSetting(key: keyof GiftTreeSettings, raw: string): number {
+  const [min, max] = GIFT_TREE_RANGES[key]
+  const n = parseInt(raw, 10)
+  if (isNaN(n)) return DEFAULT_GIFT_TREE_SETTINGS[key]
+  return Math.max(min, Math.min(max, n))
+}
+
 // ── Form state type ───────────────────────────────────────────────────────
 
 export type CampaignFormState = {

@@ -35,6 +35,7 @@ import {
   defaultForm,
   utcToVnDatetime,
   vnDatetimeToUtc,
+  clampSetting,
   DEFAULT_GIFT_TREE_SETTINGS,
   GIFT_TREE_RANGES,
   type CampaignFormState,
@@ -47,7 +48,6 @@ import {
 function campaignMessageFor(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 401) return 'Vui lòng đăng nhập bằng Google để quản lý chiến dịch.'
-    if (e.code === 'campaign_has_rows') return 'Không thể xóa — chiến dịch đang có dữ liệu.'
     if (e.code === 'bad_request') return 'Dữ liệu không hợp lệ. Kiểm tra lại slug, ngày và cài đặt.'
   }
   return messageFor(e)
@@ -68,14 +68,30 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
+  // Raw string values displayed in the inputs while typing.
+  // Validated and clamped on blur and submit — not on every keystroke.
+  // This allows typing intermediate values like "12" without being snapped to a boundary.
+  const [rawSettings, setRawSettings] = useState<Record<keyof GiftTreeSettings, string>>(
+    () => Object.fromEntries(
+      (Object.keys(GIFT_TREE_RANGES) as (keyof GiftTreeSettings)[]).map((k) => [
+        k, String(initial.settings[k]),
+      ])
+    ) as Record<keyof GiftTreeSettings, string>,
+  )
+
   function update<K extends keyof CampaignFormState>(key: K, value: CampaignFormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  function updateSetting(key: keyof GiftTreeSettings, value: string) {
-    const n = parseInt(value, 10)
-    const [min, max] = GIFT_TREE_RANGES[key]
-    const clamped = isNaN(n) ? DEFAULT_GIFT_TREE_SETTINGS[key] : Math.max(min, Math.min(max, n))
+  /** Update raw display only — does NOT clamp. */
+  function handleSettingChange(key: keyof GiftTreeSettings, value: string) {
+    setRawSettings((r) => ({ ...r, [key]: value }))
+  }
+
+  /** Clamp and commit on blur — syncs both display and form state. */
+  function handleSettingBlur(key: keyof GiftTreeSettings) {
+    const clamped = clampSetting(key, rawSettings[key])
+    setRawSettings((r) => ({ ...r, [key]: String(clamped) }))
     setForm((f) => ({ ...f, settings: { ...f.settings, [key]: clamped } }))
   }
 
@@ -98,8 +114,16 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
       return
     }
 
+    // Derive current settings from raw values (bypasses stale form.settings if the user
+    // typed without blurring before submitting).
+    const currentSettings = Object.fromEntries(
+      (Object.keys(GIFT_TREE_RANGES) as (keyof GiftTreeSettings)[]).map((k) => [
+        k, clampSetting(k, rawSettings[k]),
+      ])
+    ) as GiftTreeSettings
+
     // Validate settings
-    const settingsResult = validateSettings(form.kind, form.settings)
+    const settingsResult = validateSettings(form.kind, currentSettings)
     if (!settingsResult.ok) {
       setError(`Cài đặt không hợp lệ: ${settingsResult.field}`)
       return
@@ -113,7 +137,7 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
       return
     }
 
-    const input = formToInput({ ...form, content: contentJson }, editing)
+    const input = formToInput({ ...form, settings: currentSettings, content: contentJson }, editing)
 
     setSaving(true)
     setError(null)
@@ -236,10 +260,11 @@ function CampaignForm({ initial, editing, editId, onSaved, onCancel }: CampaignF
                 <input
                   id={`camp-setting-${key}`}
                   type="number"
-                  value={form.settings[key]}
+                  value={rawSettings[key]}
                   min={min}
                   max={max}
-                  onChange={(e) => updateSetting(key, e.target.value)}
+                  onChange={(e) => handleSettingChange(key, e.target.value)}
+                  onBlur={() => handleSettingBlur(key)}
                 />
                 <small>{min}–{max}, mặc định {DEFAULT_GIFT_TREE_SETTINGS[key]}</small>
               </label>
@@ -390,6 +415,7 @@ export default function CampaignsSection({ onAccessError }: Props) {
       ) : (
         <div className="table-wrap">
           <table className="admin-table">
+            <caption>Danh sách chiến dịch</caption>
             <thead>
               <tr>
                 <th>Slug</th>
@@ -416,12 +442,23 @@ export default function CampaignsSection({ onAccessError }: Props) {
                   <td>{utcToVnDatetime(c.ends_at)}</td>
                   <td>
                     <div className="admin-actions">
-                      <button type="button" onClick={() => { void handleEdit(c.id) }}>Sửa</button>
+                      <button
+                        type="button"
+                        aria-label={`Sửa chiến dịch ${c.name}`}
+                        onClick={() => { void handleEdit(c.id) }}
+                      >
+                        Sửa
+                      </button>
                       {c.status !== 'active' && (
                         <button
                           type="button"
                           className="btn-warn"
-                          onClick={() => { void handleActivate(c.id) }}
+                          aria-label={`Kích hoạt chiến dịch ${c.name}`}
+                          onClick={() => {
+                            if (window.confirm(`Kích hoạt chiến dịch "${c.name}"?\nChiến dịch đang hoạt động sẽ bị đóng.`)) {
+                              void handleActivate(c.id)
+                            }
+                          }}
                         >
                           Kích hoạt
                         </button>
@@ -430,6 +467,7 @@ export default function CampaignsSection({ onAccessError }: Props) {
                         <button
                           type="button"
                           className="btn-ghost"
+                          aria-label={`Đóng chiến dịch ${c.name}`}
                           onClick={() => { void handleClose(c.id) }}
                         >
                           Đóng

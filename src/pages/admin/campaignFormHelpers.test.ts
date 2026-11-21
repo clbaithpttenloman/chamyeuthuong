@@ -14,6 +14,7 @@ import {
   defaultForm,
   utcToVnDatetime,
   vnDatetimeToUtc,
+  clampSetting,
   DEFAULT_GIFT_TREE_SETTINGS,
   type AdminCampaignFullRow,
 } from './campaignFormHelpers.ts'
@@ -201,5 +202,66 @@ describe('utcToVnDatetime / vnDatetimeToUtc round-trip', () => {
   it('empty string → empty string', () => {
     expect(utcToVnDatetime('')).toBe('')
     expect(vnDatetimeToUtc('')).toBe('')
+  })
+})
+
+// ── clampSetting — raw settings input ────────────────────────────────────
+//
+// Proves "typing 12 or 20 works": intermediate values must NOT be clamped to
+// the range boundary.  Ref: review.md Cycle 1 Warning; tasks.md Fix Group 5a Accept 3.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('clampSetting — accepts valid values in range', () => {
+  it('returns 12 for "12" in tree_slots [5, 25] — typing 12 works', () => {
+    expect(clampSetting('tree_slots', '12')).toBe(12)
+  })
+
+  it('returns 20 for "20" in hearts_per_day [1, 20] — typing 20 (at max) works', () => {
+    expect(clampSetting('hearts_per_day', '20')).toBe(20)
+  })
+
+  it('returns 5 for "5" in tree_slots (at min)', () => {
+    expect(clampSetting('tree_slots', '5')).toBe(5)
+  })
+
+  it('returns 1 for "1" in hearts_per_day (at min)', () => {
+    expect(clampSetting('hearts_per_day', '1')).toBe(1)
+  })
+
+  it('returns 10 for "10" in ground_slots [0, 15]', () => {
+    expect(clampSetting('ground_slots', '10')).toBe(10)
+  })
+})
+
+describe('clampSetting — clamps out-of-range values', () => {
+  it('clamps "30" to max 25 for tree_slots', () => {
+    expect(clampSetting('tree_slots', '30')).toBe(25)
+  })
+
+  it('clamps "1" to min 5 for tree_slots (below min)', () => {
+    expect(clampSetting('tree_slots', '1')).toBe(5)
+  })
+
+  it('clamps "0" to min 1 for hearts_per_day', () => {
+    expect(clampSetting('hearts_per_day', '0')).toBe(1)
+  })
+
+  it('clamps "21" to max 20 for hearts_per_day', () => {
+    expect(clampSetting('hearts_per_day', '21')).toBe(20)
+  })
+})
+
+describe('clampSetting — returns default for unparseable input', () => {
+  it('returns default for empty string', () => {
+    expect(clampSetting('tree_slots', '')).toBe(DEFAULT_GIFT_TREE_SETTINGS.tree_slots)
+  })
+
+  it('returns default for non-numeric string', () => {
+    expect(clampSetting('tree_slots', 'abc')).toBe(DEFAULT_GIFT_TREE_SETTINGS.tree_slots)
+  })
+
+  it('returns default for decimal string (parseInt truncates correctly)', () => {
+    // parseInt('12.9') = 12 — within range
+    expect(clampSetting('tree_slots', '12.9')).toBe(12)
   })
 })

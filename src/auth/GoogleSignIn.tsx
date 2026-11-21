@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react'
 import { isInAppBrowser } from '../campaign/inAppBrowser.ts'
 import { getNonce, messageFor, signInWithGoogle } from '../api.ts'
 import OnboardingForm from './OnboardingForm.tsx'
+import { GSI_SCRIPT_LOAD_ERROR, signInFailureNeedsNonceRefresh } from './googleSignInHelpers.ts'
 
 // window.google is declared in src/vite-env.d.ts (GsiInitConfig, Window extension).
 
@@ -43,8 +44,9 @@ function InAppBrowserGuide() {
       </p>
       <div className="form-actions">
         <button type="button" onClick={handleCopy} aria-label="Sao chép liên kết trang">
-          {copied ? 'Đã sao chép!' : 'Sao chép liên kết'}
+          Sao chép liên kết
         </button>
+        {copied && <p role="status">Đã sao chép!</p>}
       </div>
       <p><small>Dán vào thanh địa chỉ của Chrome hoặc Safari để mở.</small></p>
     </div>
@@ -54,13 +56,14 @@ function InAppBrowserGuide() {
 // ── Load GSI script on demand ─────────────────────────────────────────────
 
 function loadGsiScript(): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (window.google?.accounts?.id) { resolve(); return }
     const existing = document.querySelector<HTMLScriptElement>(
       'script[src="https://accounts.google.com/gsi/client"]',
     )
     if (existing) {
       existing.addEventListener('load', () => resolve(), { once: true })
+      existing.addEventListener('error', () => reject(new Error(GSI_SCRIPT_LOAD_ERROR)), { once: true })
       if (window.google?.accounts?.id) resolve()
       return
     }
@@ -68,6 +71,7 @@ function loadGsiScript(): Promise<void> {
     script.src = 'https://accounts.google.com/gsi/client'
     script.async = true
     script.onload = () => resolve()
+    script.onerror = () => reject(new Error(GSI_SCRIPT_LOAD_ERROR))
     document.head.appendChild(script)
   })
 }
@@ -91,14 +95,25 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
   // undefined until the server answers; the nonce is bound to this page load.
   const [nonce, setNonce] = useState<string | undefined>(undefined)
 
-  // Step 1: load the GSI script and fetch { nonce, clientId }.
+  // Step 1: load the GSI script, then fetch { nonce, clientId }.
+  // Errors from script load and nonce fetch are separated so the right message is shown.
   useEffect(() => {
     if (inApp) return
     let cancelled = false
     void (async () => {
+      // Load the script first — onerror now rejects the promise
       try {
         await loadGsiScript()
-        if (cancelled) return
+      } catch (e) {
+        if (!cancelled) {
+          setClientId('')
+          setError(e instanceof Error && e.message ? e.message : GSI_SCRIPT_LOAD_ERROR)
+        }
+        return
+      }
+      if (cancelled) return
+      // Fetch nonce + clientId from server
+      try {
         const r = await getNonce()
         if (cancelled) return
         setNonce(r.nonce)
@@ -136,6 +151,18 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
           }
         } catch (e) {
           setError(messageFor(e))
+          // Nonce is single-use: server clears it after every attempt.
+          // Always refresh so the user can retry without reloading the page.
+          if (signInFailureNeedsNonceRefresh(e)) {
+            try {
+              const r = await getNonce()
+              // Updating nonce triggers this useEffect to re-initialize GIS
+              setNonce(r.nonce)
+            } catch {
+              // If nonce refresh fails, the user will need to reload.
+              // The error message already shown guides them.
+            }
+          }
         } finally {
           setLoading(false)
         }
@@ -168,8 +195,8 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
   return (
     <div>
       {error && <p className="admin-signin-error" role="alert">{error}</p>}
-      {loading && <p className="admin-loading">Đang xử lý…</p>}
-      <div ref={buttonRef} aria-label="Nút đăng nhập bằng Google" />
+      {loading && <p className="admin-loading" role="status">Đang xử lý…</p>}
+      <div role="group" ref={buttonRef} aria-label="Nút đăng nhập bằng Google" />
     </div>
   )
 }

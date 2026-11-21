@@ -16,8 +16,12 @@ import site from '../content/site.json'
 
 type HomeContent = { kicker: string; heading: string; body: string }
 
-/** Extract home display fields from campaign.content (seeded from site.json). */
-function extractHomeContent(content: unknown): HomeContent | null {
+/**
+ * Extract home display fields from campaign.content (seeded from site.json).
+ * Expects shape `{"home":{"kicker":…,"heading":…,"body":…}}`.
+ * Exported for unit testing.
+ */
+export function extractHomeContent(content: unknown): HomeContent | null {
   if (!content || typeof content !== 'object' || Array.isArray(content)) return null
   const c = content as Record<string, unknown>
   const home = c.home as Record<string, unknown> | undefined
