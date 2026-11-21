@@ -23,65 +23,23 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { D1 } from './testDb.ts'
 import { seedUser as _seedUser, seedSession as _seedSession, SESSION_COOKIE_NAME } from './testGoogle.ts'
+import type { GiftsEnv } from './gifts.ts'
 
 export { SESSION_COOKIE_NAME }
 export { seedUser, seedSession } from './testGoogle.ts'
+export type { GiftsEnv }
 
 // ── Phase 2 DDL ───────────────────────────────────────────────────────────────
 
 /**
- * Creates the Phase 2 gift-game tables on a sqlite handle from testDb().
- * Mirrors plan.md "Data model" exactly (gift, heart, report, banned_identity).
- * Safe to call multiple times (IF NOT EXISTS).
+ * No-op: gift, heart, report, and banned_identity are now in SCHEMA (worker/schema.ts),
+ * so testDb() creates them automatically via ensureSchema/SCHEMA DDL.
+ * Kept as a function for call-site compatibility with existing test helpers.
+ * The IF NOT EXISTS DDL is equivalent to the SCHEMA DDL, so calling it is a safe no-op.
  */
-export function createGiftTables(sqlite: DatabaseSync): void {
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS gift (
-      id                     INTEGER PRIMARY KEY,
-      public_id              TEXT    UNIQUE NOT NULL,
-      campaign_id            INTEGER NOT NULL REFERENCES campaign(id),
-      user_id                INTEGER NOT NULL REFERENCES app_user(id),
-      box_style              INTEGER NOT NULL CHECK (box_style BETWEEN 1 AND 6),
-      ornament_style         INTEGER NOT NULL CHECK (ornament_style BETWEEN 1 AND 6),
-      layout                 TEXT    NOT NULL DEFAULT '',
-      background_template_id INTEGER REFERENCES template(id),
-      font                   TEXT    NOT NULL DEFAULT '',
-      ink                    TEXT    NOT NULL DEFAULT '',
-      message                TEXT    NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
-      nickname               TEXT    NOT NULL CHECK (length(nickname) BETWEEN 1 AND 30),
-      class_name             TEXT    NOT NULL DEFAULT '' CHECK (length(class_name) <= 10),
-      heart_count            INTEGER NOT NULL DEFAULT 0,
-      report_count           INTEGER NOT NULL DEFAULT 0,
-      status                 TEXT    NOT NULL DEFAULT 'visible'
-                             CHECK (status IN ('visible','hidden_auto','hidden_admin','deleted')),
-      status_before_ban      TEXT,
-      created_at             TEXT    NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS gift_rank ON gift(campaign_id, status, heart_count DESC, created_at);
-
-    CREATE TABLE IF NOT EXISTS heart (
-      gift_id    INTEGER NOT NULL REFERENCES gift(id) ON DELETE CASCADE,
-      user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-      day        TEXT    NOT NULL,
-      created_at TEXT    NOT NULL,
-      PRIMARY KEY (gift_id, user_id)
-    );
-    CREATE INDEX IF NOT EXISTS heart_user_day ON heart(user_id, day);
-
-    CREATE TABLE IF NOT EXISTS report (
-      gift_id      INTEGER NOT NULL REFERENCES gift(id) ON DELETE CASCADE,
-      user_id      INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-      reason       TEXT    NOT NULL CHECK (reason IN ('inappropriate','spam','other')),
-      acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (acknowledged IN (0,1)),
-      created_at   TEXT    NOT NULL,
-      PRIMARY KEY (gift_id, user_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS banned_identity (
-      sub_hmac   TEXT PRIMARY KEY,
-      created_at TEXT NOT NULL
-    );
-  `)
+export function createGiftTables(_sqlite: DatabaseSync): void {
+  // Tables are created by SCHEMA via testDb(). This function is a no-op.
+  // Any test calling testDb() already has gift/heart/report/banned_identity.
 }
 
 // ── Rate-limiter fakes ────────────────────────────────────────────────────────
@@ -93,29 +51,20 @@ const fakeLimitFail = (): Limiter => ({ limit: async () => ({ success: false }) 
 // ── GiftsEnv ──────────────────────────────────────────────────────────────────
 
 /**
- * Env for handleGifts (worker/gifts.ts, to be created in Phase 2).
+ * Env for handleGifts (worker/gifts.ts).
  *
  * Rate-limit bindings (plan API section):
  *   GIFT_LIMIT   — 6/60 s per user (namespace 2011 prod / 3011 staging)
  *   HEART_LIMIT  — 20/60 s per user (namespace 2012 / 3012)
  *   REPORT_LIMIT — 10/60 s per user (namespace 2013 / 3013)
- */
-export type GiftsEnv = {
-  DB: D1
-  GIFT_LIMIT: Limiter
-  HEART_LIMIT: Limiter
-  REPORT_LIMIT: Limiter
-}
-
-export function giftsEnv(
+ */export function giftsEnv(
   db: D1,
   opts: {
     giftLimitFail?: boolean
     heartLimitFail?: boolean
     reportLimitFail?: boolean
   } = {},
-): GiftsEnv {
-  return {
+): GiftsEnv {  return {
     DB: db,
     GIFT_LIMIT: opts.giftLimitFail ? fakeLimitFail() : fakeLimit(),
     HEART_LIMIT: opts.heartLimitFail ? fakeLimitFail() : fakeLimit(),

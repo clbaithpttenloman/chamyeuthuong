@@ -58,4 +58,13 @@ export type Env = {
   IP_HMAC_KEY?: string
   /** Set to '1' in Phase 1 to allow legacy X-Admin-Email login on 20/11 routes (transition only). */
   ADMIN_LEGACY_LOGIN?: string
+  // ---- Phase 2: Gift tree rate limits ----
+  /** Rate limit for gift creation: 6/60 s per user, namespace 2011. */
+  GIFT_LIMIT?: RateLimit
+  /** Rate limit for giving hearts: 20/60 s per user, namespace 2012. */
+  HEART_LIMIT?: RateLimit
+  /** Rate limit for reporting gifts: 10/60 s per user, namespace 2013. */
+  REPORT_LIMIT?: RateLimit
+  /** Rate limit for tree read cache misses: 3,000/60 s per IP, namespace 2014. */
+  TREE_READ_LIMIT?: RateLimit
 }

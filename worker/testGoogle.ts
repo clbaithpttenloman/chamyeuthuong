@@ -339,9 +339,11 @@ export async function seedSession(
 ): Promise<void> {
   const hash = await sha256Hex(rawToken)
   const now = new Date().toISOString()
+  // Use far-future expiry by default so fake-clock tests (vi.setSystemTime) don't expire
+  // sessions created in beforeEach. Only { expired: true } creates a past expiry.
   const expires = opts.expired
     ? new Date(Date.now() - 1000).toISOString()
-    : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+    : '9999-12-31T23:59:59.000Z'
   await db
     .prepare(
       'INSERT INTO session (token_hash, user_id, expires_at, created_at, ip_hash) VALUES (?, ?, ?, ?, ?)',

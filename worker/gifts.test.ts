@@ -57,7 +57,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./token.ts', () => ({
-  newToken: vi.fn(() => 'generatedgift1234'),
+  newToken: vi.fn(() => 'generatedgift123'),
   isToken: (t: string) => /^[a-z0-9]{16}$/.test(t),
 }))
 
@@ -103,7 +103,7 @@ beforeEach(async () => {
   ;({ db, sqlite } = testDb())
   createNewTables(sqlite)
   createGiftTables(sqlite)
-  vi.mocked(newToken).mockReturnValue('generatedgift1234')
+  vi.mocked(newToken).mockReturnValue('generatedgift123')
   campaignId = await seedGiftCampaign(db)
   templateId = await seedTemplate(db, campaignId)
   userId = await seedUser(db)
@@ -431,7 +431,7 @@ describe('POST /api/campaigns/<slug>/gifts — gift count limits (AC-10)', () =>
 
   it('delete a gift frees a slot (gifts_per_user slot count)', async () => {
     // Create 3 gifts (at limit), delete one, then create again → 201
-    const tokens = ['gifta0created1234', 'giftb0created1234', 'giftc0created1234']
+    const tokens = ['gifta0created123', 'giftb0created123', 'giftc0created123']
     const publicIds: string[] = []
     for (const token of tokens) {
       vi.mocked(newToken).mockReturnValueOnce(token)
@@ -447,7 +447,7 @@ describe('POST /api/campaigns/<slug>/gifts — gift count limits (AC-10)', () =>
       giftsEnv(db),
     )
     // Now should succeed
-    vi.mocked(newToken).mockReturnValue('giftd0after12345a')
+    vi.mocked(newToken).mockReturnValue('giftd0after1234a')
     const r = await handleGifts(
       sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', validGiftBody(templateId)),
       giftsEnv(db),

@@ -5,6 +5,7 @@ import { handleAdmin } from './admin.ts'
 import { handleAbout } from './about.ts'
 import { handlePublicImage } from './images.ts'
 import { handleCampaigns, handleAdminCampaigns } from './campaigns.ts'
+import { handleGifts } from './gifts.ts'
 import { requireAdmin } from './auth.ts'
 import { handleAuth, handleMe } from './me.ts'
 import { error } from './http.ts'
@@ -15,19 +16,21 @@ import type { Env, ExecutionContext } from './types.ts'
  * every other path is served from the static assets in dist/.
  *
  * Routes (in order):
- *   /api/image/:token     → handlePublicImage
- *   /api/wall             → handlePublic
- *   /api/templates        → handlePublic
- *   /api/wishes           → handlePublic
- *   /api/about            → handleAbout  (public GET, rate-limited)
- *   /api/auth/*           → handleAuth   (nonce, google sign-in, logout)
- *   /api/me               → handleMe     (profile read/update)
- *   /api/cards            → handleSubmit
- *   /api/qr/*             → handleQr
- *   /api/admin/campaigns* → handleAdminCampaigns (Google session required)
- *   /api/admin/*          → handleAdmin
- *   /api/*                → 404
- *   /*                    → ASSETS (SPA)
+ *   /api/image/:token        - handlePublicImage
+ *   /api/wall                - handlePublic
+ *   /api/templates           - handlePublic
+ *   /api/wishes              - handlePublic
+ *   /api/about               - handleAbout  (public GET, rate-limited)
+ *   /api/auth/...            - handleAuth   (nonce, google sign-in, logout)
+ *   /api/me                  - handleMe     (profile read/update)
+ *   /api/cards               - handleSubmit
+ *   /api/qr/...              - handleQr
+ *   /api/admin/campaigns...  - handleAdminCampaigns (Google session required)
+ *   /api/admin/...           - handleAdmin
+ *   /api/campaigns/:slug/gifts - handleGifts (gift create)
+ *   /api/gifts/...           - handleGifts (gift delete, heart, report)
+ *   /api/...                 - 404
+ *   /...                     - ASSETS (SPA)
  */
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -46,8 +49,13 @@ export default {
       if (pathname.startsWith('/api/qr/')) return await handleQr(request, env)
       // Campaign public endpoints (no auth; memoised per isolate; rate limited on cache misses)
       if (pathname === '/api/campaigns/active' || pathname.startsWith('/api/campaigns/')) {
+        // Gift-tree write paths (/api/campaigns/:slug/gifts) are handled by handleGifts
+        const giftsPath = pathname.match(/^\/api\/campaigns\/[^/]+\/gifts$/)
+        if (giftsPath) return await handleGifts(request, env as never)
         return await handleCampaigns(request, env)
       }
+      // Gift read/write paths (/api/gifts/:publicId, /heart, /report)
+      if (pathname.startsWith('/api/gifts/')) return await handleGifts(request, env as never)
       // Campaign admin CRUD — requires Google session (not legacy email)
       if (pathname.startsWith('/api/admin/campaigns')) {
         const auth = await requireAdmin(request, env)

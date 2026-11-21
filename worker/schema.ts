@@ -188,6 +188,52 @@ export const SCHEMA: string[] = [
 )`,
   // Partial unique index: at most one active campaign at a time (FR-2 / ADR-1).
   `CREATE UNIQUE INDEX IF NOT EXISTS one_active ON campaign(status) WHERE status = 'active'`,
+  // ---- Phase 2: Gift tree game tables (ADR-7, ADR-8) ----
+  // New tables (not ALTER TABLE), so no UPGRADES step is needed.
+  // background_template_id is nullable — no ON DELETE clause so a template with gift references
+  // can still be deactivated; the FK is validated on gift creation, not enforced on template update.
+  `CREATE TABLE IF NOT EXISTS gift (
+  id                     INTEGER PRIMARY KEY,
+  public_id              TEXT    UNIQUE NOT NULL,
+  campaign_id            INTEGER NOT NULL REFERENCES campaign(id),
+  user_id                INTEGER NOT NULL REFERENCES app_user(id),
+  box_style              INTEGER NOT NULL CHECK (box_style BETWEEN 1 AND 6),
+  ornament_style         INTEGER NOT NULL CHECK (ornament_style BETWEEN 1 AND 6),
+  layout                 TEXT    NOT NULL DEFAULT '',
+  background_template_id INTEGER REFERENCES template(id),
+  font                   TEXT    NOT NULL DEFAULT '',
+  ink                    TEXT    NOT NULL DEFAULT '',
+  message                TEXT    NOT NULL CHECK (length(message) BETWEEN 1 AND 300),
+  nickname               TEXT    NOT NULL CHECK (length(nickname) BETWEEN 1 AND 30),
+  class_name             TEXT    NOT NULL DEFAULT '' CHECK (length(class_name) <= 10),
+  heart_count            INTEGER NOT NULL DEFAULT 0,
+  report_count           INTEGER NOT NULL DEFAULT 0,
+  status                 TEXT    NOT NULL DEFAULT 'visible'
+                         CHECK (status IN ('visible','hidden_auto','hidden_admin','deleted')),
+  status_before_ban      TEXT,
+  created_at             TEXT    NOT NULL
+)`,
+  `CREATE INDEX IF NOT EXISTS gift_rank ON gift(campaign_id, status, heart_count DESC, created_at)`,
+  `CREATE TABLE IF NOT EXISTS heart (
+  gift_id    INTEGER NOT NULL REFERENCES gift(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  day        TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  PRIMARY KEY (gift_id, user_id)
+)`,
+  `CREATE INDEX IF NOT EXISTS heart_user_day ON heart(user_id, day)`,
+  `CREATE TABLE IF NOT EXISTS report (
+  gift_id      INTEGER NOT NULL REFERENCES gift(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  reason       TEXT    NOT NULL CHECK (reason IN ('inappropriate','spam','other')),
+  acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (acknowledged IN (0,1)),
+  created_at   TEXT    NOT NULL,
+  PRIMARY KEY (gift_id, user_id)
+)`,
+  `CREATE TABLE IF NOT EXISTS banned_identity (
+  sub_hmac   TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+)`,
   // ---- Seeds: 12 example wishes + meta flag (run once, guarded by meta flag) ----
   ...SEEDS,
   // ---- About seed (INSERT OR IGNORE — idempotent) ----

@@ -2162,7 +2162,7 @@ describe('gift table — column presence and CHECKs', () => {
         .prepare(
           `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,` +
           `background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
-          `VALUES ('pid${status.slice(0,3)}12345678901',1,1,1,1,'','', '','','Msg','Nick','11A','${status}','${now}')`,
+          `VALUES ('${(status + '0000000000000000').slice(0, 16)}',1,1,1,1,'','', '','','Msg','Nick','11A','${status}','${now}')`,
         )
         .run()
     for (const s of ['visible', 'hidden_auto', 'hidden_admin', 'deleted']) {

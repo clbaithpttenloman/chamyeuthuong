@@ -70,7 +70,11 @@
     { "name": "AUTH_SUB_LIMIT",   "namespace_id": "2009", "simple": { "limit": 10,   "period": 60 } },
     { "name": "USER_READ_LIMIT",  "namespace_id": "2007", "simple": { "limit": 120,  "period": 60 } },
     { "name": "USER_WRITE_LIMIT", "namespace_id": "2008", "simple": { "limit": 10,   "period": 60 } },
-    { "name": "PUBLIC_READ_LIMIT","namespace_id": "2010", "simple": { "limit": 3000, "period": 60 } }
+    { "name": "PUBLIC_READ_LIMIT","namespace_id": "2010", "simple": { "limit": 3000, "period": 60 } },
+    { "name": "GIFT_LIMIT",       "namespace_id": "2011", "simple": { "limit": 6,    "period": 60 } },
+    { "name": "HEART_LIMIT",      "namespace_id": "2012", "simple": { "limit": 20,   "period": 60 } },
+    { "name": "REPORT_LIMIT",     "namespace_id": "2013", "simple": { "limit": 10,   "period": 60 } },
+    { "name": "TREE_READ_LIMIT",  "namespace_id": "2014", "simple": { "limit": 3000, "period": 60 } }
   ],
   // Staging environment: separate Worker name and D1 database.
   // All bindings and vars are non-inheritable and must be repeated here.
@@ -103,7 +107,11 @@
         { "name": "AUTH_SUB_LIMIT",   "namespace_id": "3009", "simple": { "limit": 10,   "period": 60 } },
         { "name": "USER_READ_LIMIT",  "namespace_id": "3007", "simple": { "limit": 120,  "period": 60 } },
         { "name": "USER_WRITE_LIMIT", "namespace_id": "3008", "simple": { "limit": 10,   "period": 60 } },
-        { "name": "PUBLIC_READ_LIMIT","namespace_id": "3010", "simple": { "limit": 3000, "period": 60 } }
+        { "name": "PUBLIC_READ_LIMIT","namespace_id": "3010", "simple": { "limit": 3000, "period": 60 } },
+        { "name": "GIFT_LIMIT",       "namespace_id": "3011", "simple": { "limit": 6,    "period": 60 } },
+        { "name": "HEART_LIMIT",      "namespace_id": "3012", "simple": { "limit": 20,   "period": 60 } },
+        { "name": "REPORT_LIMIT",     "namespace_id": "3013", "simple": { "limit": 10,   "period": 60 } },
+        { "name": "TREE_READ_LIMIT",  "namespace_id": "3014", "simple": { "limit": 3000, "period": 60 } }
       ]
     }
   }
