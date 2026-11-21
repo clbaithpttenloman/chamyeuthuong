@@ -540,24 +540,22 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, userRow.google_sub)
     }
 
-    // Pre-fetch gift IDs this user hearted (need IDs before deleting hearts, for recount).
-    const { results: heartRows } = await env.DB
-      .prepare('SELECT DISTINCT gift_id FROM heart WHERE user_id = ?')
-      .bind(session.userId)
-      .all<{ gift_id: number }>()
-    const heartedGiftIds = heartRows.map((r) => r.gift_id)
+    // Pre-fetch the user's google_sub for tombstone (need it before deleting the user row).
+    // No pre-fetch of hearted gift ids needed — heart recount uses in-batch subquery (item 4).
 
     // One D1 batch for the entire deletion (ADR-8: "delete the user's gifts, hearts and reports,
     // recount affected gifts, revoke sessions"):
     //   1. Write tombstone if banned.
     //   2. Delete own gift rows (gift.user_id FK has no CASCADE, so rows must be deleted before the user).
     //      Cascade on heart.gift_id and report.gift_id removes hearts/reports on own gifts.
-    //   3. Delete hearts the user gave to other gifts (not cascade-deleted in step 2).
-    //   4. Recount heart_count for every gift they had hearted (after hearts are deleted in step 3).
-    //   5. Delete reports the user filed on others' gifts (not cascade-deleted in step 2).
-    //   6. Delete sessions (also covered by app_user CASCADE, but explicit for clarity).
-    //   7. Delete the user row (remaining session/heart/report rows on this user_id are
-    //      cascade-deleted by the FKs on those tables, but all should be gone by now).
+    //   3. Heart recount: in-batch subquery (no pre-read) recount for gifts the user hearted,
+    //      BEFORE deleting the user's hearts (item 4). Counts only other users' hearts by excluding
+    //      this user's hearts, so the result equals COUNT(heart) after the delete in step 4.
+    //   4. Delete hearts the user gave to other gifts (not cascade-deleted in step 2).
+    //   5. Recount report_count for every gift they reported (item 4: their reports gone after step 6).
+    //   6. Delete reports the user filed on others' gifts.
+    //   7. Delete sessions.
+    //   8. Delete the user row.
     const stmts = [
       ...(subHmac !== null
         ? [
@@ -567,12 +565,23 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
           ]
         : []),
       env.DB.prepare('DELETE FROM gift WHERE user_id = ?').bind(session.userId),
+      // In-batch heart recount BEFORE the delete (item 4: no pre-read drift).
+      // The subquery excludes the user's hearts, equaling post-delete COUNT(heart).
+      env.DB.prepare(
+        'UPDATE gift SET heart_count = (' +
+        '  SELECT COUNT(*) FROM heart h WHERE h.gift_id = gift.id AND h.user_id != ?' +
+        ') WHERE id IN (SELECT DISTINCT gift_id FROM heart WHERE user_id = ?)',
+      ).bind(session.userId, session.userId),
       env.DB.prepare('DELETE FROM heart WHERE user_id = ?').bind(session.userId),
-      ...heartedGiftIds.map((giftId) =>
-        env.DB.prepare(
-          'UPDATE gift SET heart_count = (SELECT COUNT(*) FROM heart WHERE gift_id = ?) WHERE id = ?',
-        ).bind(giftId, giftId),
-      ),
+      // Report recount: their reports will be deleted in the next step, so pre-delete recount
+      // by excluding their reports from the count. (item 4)
+      env.DB.prepare(
+        'UPDATE gift SET report_count = (' +
+        '  SELECT COUNT(*) FROM report r ' +
+        '  JOIN app_user u ON u.id = r.user_id ' +
+        '  WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND u.banned = 0 AND r.user_id != ?' +
+        ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
+      ).bind(session.userId, session.userId),
       env.DB.prepare('DELETE FROM report WHERE user_id = ?').bind(session.userId),
       env.DB.prepare('DELETE FROM session WHERE user_id = ?').bind(session.userId),
       env.DB.prepare('DELETE FROM app_user WHERE id = ?').bind(session.userId),

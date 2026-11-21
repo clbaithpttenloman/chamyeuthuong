@@ -824,3 +824,58 @@ describe('POST /api/cards — font and ink', () => {
     expect(await stored(db)).toEqual({ font: 'itim', ink: '#6b21a8' })
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Fix Group 8a — Item 8: 20/11 submit must only accept campaign 1 templates
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('POST /api/cards — template must belong to campaign 1 (item 8)', () => {
+  it('templateId whose campaign_id = 2 → 400 bad_request', async () => {
+    const { tid } = await seedTeacherAndTemplate(db)
+
+    // Seed a campaign 2 and a template linked to it
+    const now = new Date().toISOString()
+    await db
+      .prepare(
+        "INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) " +
+          "VALUES (2, 'noel-2026', 'gift_tree', 'Noel', '', '{}', '{}', '{}', '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'draft', ?, 'test')",
+      )
+      .bind(now)
+      .run()
+    // Insert template explicitly with campaign_id = 2 (not campaign 1)
+    await db
+      .prepare('INSERT INTO template (name, layout, active, created_at, created_by, campaign_id) VALUES (?, ?, 1, ?, ?, ?)')
+      .bind('Noel Template', 'classic', now, 'test', 2)
+      .run()
+    const noelTmplId = (await db.prepare('SELECT MAX(id) AS id FROM template').first<{ id: number }>())!.id
+
+    // Submit with the noel template (campaign 2) → should be rejected
+    const r = await handleSubmit(
+      submitReq({
+        teacherId: tid,
+        templateId: noelTmplId,  // campaign 2 template, not campaign 1
+        message: 'Test',
+        fromName: 'Student',
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toBe('bad_request')
+  })
+
+  it('templateId with campaign_id = 1 (default) → 201 (unaffected)', async () => {
+    const { tid, tmplId } = await seedTeacherAndTemplate(db)
+    // tmplId has default campaign_id = 1
+    vi.mocked(newToken).mockReturnValue('validcampaign12345'.slice(0, 16))
+    const r = await handleSubmit(
+      submitReq({
+        teacherId: tid,
+        templateId: tmplId,
+        message: 'Happy teaching!',
+        fromName: 'Student',
+      }),
+      makeEnv(db),
+    )
+    expect(r.status).toBe(201)
+  })
+})

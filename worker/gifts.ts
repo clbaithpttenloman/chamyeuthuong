@@ -17,11 +17,13 @@
  *   2. UPDATE gift SET heart_count = COUNT(heart) WHERE public_id = ?
  *   If batch[0].meta.changes === 0 → one diagnosis read in the specified order.
  *
- * Write path for reports (ADR-8):
- *   Preliminary read (gift + campaign + user), then one batch:
- *   1. INSERT INTO report (the INSERT OR IGNORE guards the PK)
- *   2. UPDATE gift SET report_count = COUNT(non-banned unacknowledged reports)
- *   3. UPDATE gift SET status = 'hidden_auto' WHERE status = 'visible' AND report_count >= threshold
+ * Write path for gift create (Fix Group 8a item 5):
+ *   Single conditional INSERT INTO gift … SELECT … WHERE (per-user count < limit) AND (daily count < limit).
+ *   On 0 changes → diagnosis read to return limit_reached or daily_limit.
+ *
+ * Write path for reports (ADR-8, Fix Group 8a item 5):
+ *   Single conditional INSERT OR IGNORE INTO report … SELECT … WHERE (gift visible AND campaign open).
+ *   On 0 changes → diagnosis read to return specific error code.
  *
  * Public payloads NEVER include gift.id or user_id (ADR-8).
  */
@@ -30,10 +32,10 @@ import { ensureSchema } from './schema.ts'
 import { readSession } from './session.ts'
 import { newToken } from './token.ts'
 import { error, json, readJson } from './http.ts'
-import { hasControlCharsSingleLine, hasControlCharsMultiline, hasLoneSurrogate } from '../shared/text.ts'
+import { isEffectivelyOpen } from '../shared/campaign.ts'
+import { validateGiftText } from '../shared/gift.ts'
 import { isLayout } from '../shared/layouts.ts'
 import { isFont, isInkInput, normalizeInk } from '../shared/fonts.ts'
-import { isEffectivelyOpen } from '../shared/campaign.ts'
 import type { D1 } from './types.ts'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -45,6 +47,8 @@ export type GiftsEnv = {
   GIFT_LIMIT: Limiter
   HEART_LIMIT: Limiter
   REPORT_LIMIT: Limiter
+  /** Owner delete and report rate limit: 10/60 s per user (plan API section). */
+  USER_WRITE_LIMIT?: Limiter
 }
 
 // Known fields in the gift create body — unknown fields → 400 (ADR-8).
@@ -93,6 +97,15 @@ export async function handleGifts(request: Request, env: GiftsEnv): Promise<Resp
 /** Vietnam day string (YYYY-MM-DD) using Date.now() so fake clocks work in tests. */
 function vietnamDay(): string {
   return new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+}
+
+/** Second-precision ISO string (YYYY-MM-DDTHH:MM:SSZ) for SQL BETWEEN comparisons.
+ *  Avoids the string-ordering edge where '...T10:00:00.100Z' < '...T10:00:00Z' because
+ *  '.' (ASCII 46) < 'Z' (ASCII 90), causing the BETWEEN check to fail in the first
+ *  millisecond of the campaign window.
+ */
+function nowSecond(): string {
+  return new Date(Date.now()).toISOString().slice(0, 19) + 'Z'
 }
 
 function csrfGuard(request: Request): Response | null {
@@ -155,29 +168,15 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
     return json({ error: 'bad_request' }, 400)
   }
 
-  // Message: 1-300 chars, no control chars (except \n), no bidi/zero-width
-  if (typeof message !== 'string' || message.length === 0 || message.length > 300) {
-    return json({ error: 'bad_request' }, 400)
-  }
-  if (hasControlCharsMultiline(message) || hasLoneSurrogate(message)) {
-    return json({ error: 'bad_request' }, 400)
-  }
-
-  // Nickname: 1-30 chars, single-line
-  if (typeof nickname !== 'string' || nickname.length === 0 || nickname.length > 30) {
-    return json({ error: 'bad_request' }, 400)
-  }
-  if (hasControlCharsSingleLine(nickname) || hasLoneSurrogate(nickname)) {
-    return json({ error: 'bad_request' }, 400)
-  }
-
-  // ClassName: 0-10 chars, single-line (optional — empty string is valid)
-  const classNameStr = typeof className === 'string' ? className : (className === undefined ? '' : null)
-  if (classNameStr === null) return json({ error: 'bad_request' }, 400)
-  if (classNameStr.length > 10) return json({ error: 'bad_request' }, 400)
-  if (classNameStr.length > 0 && (hasControlCharsSingleLine(classNameStr) || hasLoneSurrogate(classNameStr))) {
-    return json({ error: 'bad_request' }, 400)
-  }
+  // Text validation — shared/gift.ts (NFC + trim, code-point lengths, control/bidi/surrogate).
+  // All three fields validated in one call; field name identifies the failing field.
+  const textResult = validateGiftText({
+    message: typeof message === 'string' ? message : '',
+    nickname: typeof nickname === 'string' ? nickname : '',
+    className: typeof className === 'string' ? className : (className === undefined ? '' : null as unknown as string),
+  })
+  if (!textResult.ok) return json({ error: 'bad_request' }, 400)
+  const { message: validMessage, nickname: validNickname, className: validClassName } = textResult.value
 
   // Load campaign (must be gift_tree kind)
   const campaign = await env.DB
@@ -206,24 +205,6 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
   if (!user) return error('unauthorized')
   if (user.banned) return json({ error: 'banned' }, 403)
 
-  // Per-user gift count (non-deleted) vs gifts_per_user limit
-  const countRow = await env.DB
-    .prepare("SELECT COUNT(*) AS c FROM gift WHERE user_id = ? AND campaign_id = ? AND status != 'deleted'")
-    .bind(userId, campaign.id)
-    .first<{ c: number }>()
-  if ((countRow?.c ?? 0) >= giftsPerUser) return json({ error: 'limit_reached' }, 409)
-
-  // Daily creation limit (all creations including deleted, per Vietnam day)
-  const day = vietnamDay()
-  const dailyRow = await env.DB
-    .prepare(
-      "SELECT COUNT(*) AS c FROM gift WHERE user_id = ? AND campaign_id = ? " +
-      "AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?",
-    )
-    .bind(userId, campaign.id, day)
-    .first<{ c: number }>()
-  if ((dailyRow?.c ?? 0) >= DAILY_CREATE_LIMIT) return json({ error: 'daily_limit' }, 429)
-
   // Template must be active and belong to this campaign
   const tmpl = await env.DB
     .prepare('SELECT id FROM template WHERE id = ? AND campaign_id = ? AND active = 1')
@@ -231,26 +212,55 @@ async function handleCreateGift(slug: string, request: Request, env: GiftsEnv): 
     .first<{ id: number }>()
   if (!tmpl) return json({ error: 'bad_request' }, 400)
 
-  // INSERT gift
+  // Single conditional INSERT (item 5): per-user limit and daily limit are inside the WHERE
+  // so concurrent POSTs cannot race past either limit.
   const publicId = newToken()
   const createdAt = new Date().toISOString()
   const normalizedInk = normalizeInk(ink as string)
+  const day = vietnamDay()
 
-  await env.DB
+  const result = await env.DB
     .prepare(
       'INSERT INTO gift ' +
       '(public_id, campaign_id, user_id, box_style, ornament_style, layout, background_template_id, ' +
       ' font, ink, message, nickname, class_name, heart_count, report_count, status, created_at) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, \'visible\', ?)',
+      "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'visible', ? " +
+      'WHERE ' +
+      '  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? AND status != \'deleted\') < ? ' +
+      '  AND (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? ' +
+      "       AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?) < ?",
     )
     .bind(
       publicId, campaign.id, userId,
       boxStyle, ornamentStyle, layout as string, backgroundTemplateId as number,
       font as string, normalizedInk,
-      message as string, nickname as string, classNameStr,
+      validMessage, validNickname, validClassName,
       createdAt,
+      // per-user count check
+      userId, campaign.id, giftsPerUser,
+      // daily count check
+      userId, campaign.id, day, DAILY_CREATE_LIMIT,
     )
     .run()
+
+  if (result.meta.changes === 0) {
+    // Diagnose which limit was hit
+    const limitRow = await env.DB
+      .prepare(
+        'SELECT ' +
+        "  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? AND status != 'deleted') AS per_user, " +
+        "  (SELECT COUNT(*) FROM gift WHERE user_id = ? AND campaign_id = ? " +
+        "   AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?) AS daily",
+      )
+      .bind(userId, campaign.id, userId, campaign.id, day)
+      .first<{ per_user: number; daily: number }>()
+
+    // Diagnosis order: per-user limit first, then daily limit
+    if ((limitRow?.per_user ?? 0) >= giftsPerUser) return json({ error: 'limit_reached' }, 409)
+    if ((limitRow?.daily ?? 0) >= DAILY_CREATE_LIMIT) return json({ error: 'daily_limit' }, 429)
+    // Fallback (shouldn't happen in practice — race between diagnosis and re-check)
+    return json({ error: 'limit_reached' }, 409)
+  }
 
   return json({ publicId }, 201)
 }
@@ -267,11 +277,17 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
   if (!session) return error('unauthorized')
   const userId = session.userId
 
-  // Load gift
+  // USER_WRITE_LIMIT for owner delete (plan API section; item 6)
+  if (env.USER_WRITE_LIMIT) {
+    const { success } = await env.USER_WRITE_LIMIT.limit({ key: String(userId) })
+    if (!success) return json({ error: 'rate_limited' }, 429)
+  }
+
+  // Load gift + campaign_id (need campaign for the closed-campaign check)
   const gift = await env.DB
-    .prepare('SELECT id, user_id, status FROM gift WHERE public_id = ?')
+    .prepare('SELECT id, user_id, status, campaign_id FROM gift WHERE public_id = ?')
     .bind(publicId)
-    .first<{ id: number; user_id: number; status: string }>()
+    .first<{ id: number; user_id: number; status: string; campaign_id: number }>()
 
   // 404 for not found or already deleted (deleted is treated as not found)
   if (!gift || gift.status === 'deleted') return error('not_found')
@@ -282,6 +298,16 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
   // 409 pending_review for hidden gifts (ADR-8: evidence cannot be removed)
   if (gift.status === 'hidden_auto' || gift.status === 'hidden_admin') {
     return json({ error: 'pending_review' }, 409)
+  }
+
+  // 409 campaign_closed: owner may not delete after the campaign ends (FR-28: frozen leaderboard).
+  // Only moderation may change the final order.
+  const campaignRow = await env.DB
+    .prepare('SELECT status, starts_at, ends_at FROM campaign WHERE id = ?')
+    .bind(gift.campaign_id)
+    .first<{ status: string; starts_at: string; ends_at: string }>()
+  if (!campaignRow || !isEffectivelyOpen({ status: campaignRow.status as 'draft' | 'active' | 'closed', starts_at: campaignRow.starts_at, ends_at: campaignRow.ends_at }, new Date())) {
+    return json({ error: 'campaign_closed' }, 409)
   }
 
   // Update status to deleted (only if visible — the check above already guarantees this)
@@ -310,7 +336,10 @@ async function handleHeart(publicId: string, request: Request, env: GiftsEnv): P
   if (!heartOk) return json({ error: 'rate_limited' }, 429)
 
   const day = vietnamDay()
-  const nowDt = new Date().toISOString()
+  // Second-precision ISO string to avoid SQL BETWEEN edge where '...T10:00:00.100Z' < '...T10:00:00Z'
+  // (ASCII '.' = 46 < 'Z' = 90). Without truncation, a request at 100ms into the campaign window
+  // would appear outside the window. (item 11)
+  const nowDt = nowSecond()
 
   // One D1 batch (ADR-7): INSERT OR IGNORE + recount
   //
@@ -434,7 +463,8 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
     return json({ error: 'bad_request' }, 400)
   }
 
-  // Preliminary read: gift + campaign + user + existing report
+  // Preliminary read: gift + campaign + user + existing report (for specific error codes).
+  // The INSERT below is conditional so a race between this read and the INSERT returns 0 changes.
   const state = await env.DB
     .prepare(
       'SELECT g.id AS gift_id, g.status AS gift_status, ' +
@@ -468,14 +498,22 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
   try { settings = JSON.parse(state.settings) } catch { /* use default */ }
   const threshold = typeof settings.report_threshold === 'number' ? settings.report_threshold : 3
 
-  const nowDt = new Date().toISOString()
+  const nowDt = nowSecond()
 
-  // One D1 batch (ADR-8): INSERT report + recount + auto-hide
+  // Single conditional INSERT (item 5): checks gift still visible and campaign still open,
+  // so a concurrent gift-delete or campaign-close between the read and the INSERT is handled.
+  // INSERT OR IGNORE guards the PK so a concurrent duplicate report doesn't double-insert.
   await env.DB.batch([
-    // 1. Insert the report (INSERT OR IGNORE guards the PK in concurrent races)
+    // 1. Conditional INSERT: only if gift still visible + campaign still open + not yet reported
     env.DB.prepare(
-      'INSERT OR IGNORE INTO report (gift_id, user_id, reason, acknowledged, created_at) VALUES (?, ?, ?, 0, ?)',
-    ).bind(state.gift_id, userId, reason, nowDt),
+      'INSERT OR IGNORE INTO report (gift_id, user_id, reason, acknowledged, created_at) ' +
+      'SELECT g.id, ?, ?, 0, ? ' +
+      'FROM gift g ' +
+      'JOIN campaign c ON c.id = g.campaign_id ' +
+      "WHERE g.id = ? AND g.status = 'visible' " +
+      "  AND c.status = 'active' AND ? BETWEEN c.starts_at AND c.ends_at " +
+      '  AND NOT EXISTS (SELECT 1 FROM report WHERE gift_id = g.id AND user_id = ?)',
+    ).bind(userId, reason, nowDt, state.gift_id, nowDt, userId),
     // 2. Recount: only non-banned, unacknowledged reports
     env.DB.prepare(
       'UPDATE gift SET report_count = (' +

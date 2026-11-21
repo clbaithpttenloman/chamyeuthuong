@@ -575,3 +575,157 @@ describe('DELETE /api/gifts/<publicId> — owner delete', () => {
     expect(r.status).toBe(401)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Fix Group 8a — new tests for items 5 and 6
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── Item 5: concurrent creates cannot exceed gifts_per_user ───────────────────
+//
+// The old code uses SELECT-then-INSERT which allows parallel POSTs to race past the
+// per-user limit. The fix: single INSERT ... SELECT ... WHERE with diagnosis on 0 changes.
+
+describe('POST /api/campaigns/<slug>/gifts — concurrent create cannot exceed gifts_per_user (item 5)', () => {
+  it('4 concurrent POSTs with gifts_per_user = 3: at most 3 succeed, never more', async () => {
+    // Reset any mock
+    vi.mocked(newToken)
+      .mockReturnValueOnce('concurrgift000001')
+      .mockReturnValueOnce('concurrgift000002')
+      .mockReturnValueOnce('concurrgift000003')
+      .mockReturnValueOnce('concurrgift000004')
+
+    // Two DB bindings on the same SQLite connection
+    const { db: db1, sqlite: shared } = testDb()
+    createNewTables(shared)
+    createGiftTables(shared)
+    const { db: db2 } = testDb({ shareWith: shared })
+
+    const campId = await seedGiftCampaign(db1, { id: 10, slug: 'noel-race-create', settings: { gifts_per_user: 3 } })
+    const tmplId = await seedTemplate(db1, campId)
+    const uid = await seedUser(db1, { sub: 'concurrent-creator', email: 'conc-create@gmail.com' })
+    const tok = makeRawToken()
+    await seedSession(db1, uid, tok)
+
+    const env1 = giftsEnv(db1)
+    const env2 = giftsEnv(db2)
+    const body = {
+      boxStyle: 1, ornamentStyle: 1, layout: 'doc-giua',
+      backgroundTemplateId: tmplId,
+      font: 'patrick-hand', ink: '#1d3fa6',
+      message: 'Race test', nickname: 'Racer', className: '11A',
+    }
+
+    // Fire 4 concurrent create requests — only 3 can succeed (gifts_per_user = 3)
+    const results = await Promise.all([
+      handleGifts(sessionReq(tok, '/api/campaigns/noel-race-create/gifts', 'POST', body), env1),
+      handleGifts(sessionReq(tok, '/api/campaigns/noel-race-create/gifts', 'POST', body), env1),
+      handleGifts(sessionReq(tok, '/api/campaigns/noel-race-create/gifts', 'POST', body), env2),
+      handleGifts(sessionReq(tok, '/api/campaigns/noel-race-create/gifts', 'POST', body), env2),
+    ])
+
+    const successes = results.filter((r) => r.status === 201).length
+    expect(successes).toBeLessThanOrEqual(3)
+
+    // Verify DB count matches — never more than gifts_per_user non-deleted gifts
+    const count = (shared
+      .prepare("SELECT COUNT(*) AS c FROM gift WHERE user_id = ? AND status != 'deleted'")
+      .get(uid) as { c: number }).c
+    expect(count).toBeLessThanOrEqual(3)
+  })
+})
+
+// ── Item 6: owner delete — USER_WRITE_LIMIT and campaign_closed ────────────────
+
+describe('DELETE /api/gifts/<publicId> — USER_WRITE_LIMIT (item 6)', () => {
+  it('USER_WRITE_LIMIT exhausted → 429 rate_limited', async () => {
+    const { publicId } = await seedGift(db, userId, campaignId, templateId)
+    const r = await handleGifts(
+      sessionReq(rawToken, `/api/gifts/${publicId}`, 'DELETE'),
+      giftsEnv(db, { userWriteLimitFail: true }),
+    )
+    expect(r.status).toBe(429)
+    expect((await r.json() as { error: string }).error).toBe('rate_limited')
+  })
+})
+
+describe('DELETE /api/gifts/<publicId> — refused after campaign ends (item 6)', () => {
+  it('delete after campaign ends → 409 campaign_closed (frozen leaderboard, FR-28)', async () => {
+    // Seed a campaign that is "closed" (ended)
+    await seedGiftCampaign(db, {
+      id: 11,
+      slug: 'noel-ended-del',
+      status: 'closed',
+      startsAt: '2020-01-01T00:00:00Z',
+      endsAt: '2020-12-31T23:59:59Z',
+    })
+    const tmpl = await seedTemplate(db, 11)
+    const { publicId } = await seedGift(db, userId, 11, tmpl, { publicId: 'closeddel12345678' })
+    const r = await handleGifts(
+      sessionReq(rawToken, `/api/gifts/${publicId}`, 'DELETE'),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(409)
+    expect((await r.json() as { error: string }).error).toBe('campaign_closed')
+  })
+
+  it('delete while campaign is active → 200 ok (normal case unaffected)', async () => {
+    const { publicId } = await seedGift(db, userId, campaignId, templateId)
+    const r = await handleGifts(
+      sessionReq(rawToken, `/api/gifts/${publicId}`, 'DELETE'),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(200)
+  })
+})
+
+// ── Item 7: shared/gift.ts used by worker (NFC + trim + code-point lengths) ───
+//
+// The existing message/nickname/className checks in gifts.ts used UTF-16 .length.
+// Now they must call validateGiftText from shared/gift.ts.
+
+describe('POST /api/campaigns/<slug>/gifts — text rule uses shared/gift.ts (item 7)', () => {
+  it('whitespace-only message → 400 (rejected after NFC + trim)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        message: '   ',
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('whitespace-only nickname → 400 (rejected after NFC + trim)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        nickname: '   ',  // only spaces — current code accepts (not control chars); fix trims → empty
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('300 emoji chars in message (600 UTF-16 units, 300 code points) → 201 (code-point counting)', async () => {
+    vi.mocked(newToken).mockReturnValue('codepointtest123')
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        message: '🎄'.repeat(300),
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(201)
+  })
+
+  it('301 emoji chars in message → 400 (exceeds MAX_GIFT_MESSAGE by 1 code point)', async () => {
+    const r = await handleGifts(
+      sessionReq(rawToken, '/api/campaigns/noel-2026/gifts', 'POST', {
+        ...validGiftBody(templateId),
+        message: '🎄'.repeat(301),
+      }),
+      giftsEnv(db),
+    )
+    expect(r.status).toBe(400)
+  })
+})

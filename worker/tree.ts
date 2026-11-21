@@ -19,9 +19,10 @@ import { fetchTemplateImages } from './publicSql.ts'
 import { resolveLayout } from '../shared/layouts.ts'
 import { error, json } from './http.ts'
 import { ensureSchema } from './schema.ts'
-import { isValidSlug } from '../shared/campaign.ts'
+import { isValidSlug, isEffectivelyOpen } from '../shared/campaign.ts'
 import { readSession } from './session.ts'
 import { isGoogleAuthoritative } from './google.ts'
+import { isToken } from './token.ts'
 import type { D1 } from './types.ts'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ type GiftItem = {
 
 type TreeData = {
   asOf: string
+  open: boolean   // effective open: status=active AND now BETWEEN starts_at AND ends_at (item 9)
   gifts: GiftItem[]
   totals: { visible: number }
 }
@@ -230,9 +232,9 @@ async function handleTreeEndpoint(slug: string, request: Request, env: TreeEnv):
 
   // 4. Fetch campaign
   const campaign = await db
-    .prepare('SELECT id, kind, status, settings FROM campaign WHERE slug = ? LIMIT 1')
+    .prepare('SELECT id, kind, status, starts_at, ends_at, settings FROM campaign WHERE slug = ? LIMIT 1')
     .bind(slug)
-    .first<{ id: number; kind: string; status: string; settings: string }>()
+    .first<{ id: number; kind: string; status: string; starts_at: string; ends_at: string; settings: string }>()
 
   if (!campaign || campaign.kind !== 'gift_tree' || campaign.status === 'draft') {
     memoSet404(db, slug)
@@ -265,9 +267,13 @@ async function handleTreeEndpoint(slug: string, request: Request, env: TreeEnv):
   const totalVisible = totalRow?.total ?? 0
 
   const asOf = new Date().toISOString()
+  const open = isEffectivelyOpen(
+    { status: campaign.status as 'draft' | 'active' | 'closed', starts_at: campaign.starts_at, ends_at: campaign.ends_at },
+    new Date(),
+  )
   const gifts = giftRows.map((row, i) => toPublicGift(row, i + 1, treeSlots))
 
-  const data: TreeData = { asOf, gifts, totals: { visible: totalVisible } }
+  const data: TreeData = { asOf, open, gifts, totals: { visible: totalVisible } }
   memoSet(db, slug, data, campaign.status === 'active')
 
   return treeResponse(data)
@@ -288,9 +294,9 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
     if (!rl.success) return error('rate_limited')
   }
 
-  // Page validation (1–50)
+  // Page validation: must be a pure digit string (item 11), then 1–50 range.
   const rawPage = url.searchParams.get('page')
-  const page = rawPage !== null ? Number(rawPage) : 1
+  const page = rawPage !== null ? (/^\d+$/.test(rawPage) ? Number(rawPage) : NaN) : 1
   if (!Number.isInteger(page) || page < 1 || page > 50) {
     return new Response(JSON.stringify({ error: 'bad_request' }), {
       status: 400,
@@ -379,6 +385,10 @@ async function handleCampaignTemplates(slug: string, request: Request, env: Tree
 
 async function handleGiftById(publicId: string, request: Request, env: TreeEnv): Promise<Response> {
   const db = env.DB
+
+  // Validate publicId format before hitting the DB (item 11: isToken check).
+  // A well-formed public id is exactly 16 lowercase alphanumeric characters.
+  if (!isToken(publicId)) return error('not_found')
 
   // Rate limit
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'

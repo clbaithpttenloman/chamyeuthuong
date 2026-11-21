@@ -417,20 +417,20 @@ describe('POST /api/gifts/<publicId>/heart — concurrency invariant (ADR-7)', (
     expect(heartCount).toBe(count)
   })
 
-  it('heart_count = COUNT(heart) is maintained after a ban removes one gifter\'s hearts', async () => {
-    // This tests the drift invariant from ADR-8
-    // Setup: 2 users heart a gift, then one user is banned (hearts removed)
+  it('heart_count = COUNT(heart) after ban via handleGiftModeration (handler-driven, item 2)', async () => {
+    // Handler-driven replacement for the tautological SQL-only test.
+    // The ban operation goes through handleGiftModeration so the actual batch is exercised.
     const { publicId } = await seedGift(db, ownerId, campaignId, templateId, {
       publicId: 'drifttest12345678'.slice(0, 16),
     })
 
-    // gifter1 hearts
+    // gifter1 hearts via handler
     await handleGifts(
       sessionReq(gifterToken, `/api/gifts/${publicId}/heart`, 'POST'),
       giftsEnv(db),
     )
 
-    // gifter2 hearts
+    // gifter2 hearts via handler
     const gifter2 = await seedUser(db, { sub: 'drift-g2-001', email: 'driftg2@gmail.com' })
     const tok2 = makeRawToken()
     await seedSession(db, gifter2, tok2)
@@ -445,13 +445,26 @@ describe('POST /api/gifts/<publicId>/heart — concurrency invariant (ADR-7)', (
       .get(publicId) as { heart_count: number }
     expect(beforeBan.heart_count).toBe(2)
 
-    // Directly simulate ban effect (delete gifter1's hearts + recount)
-    // This mimics what handleGiftModeration ban would do
-    sqlite.prepare('DELETE FROM heart WHERE user_id = ?').run(gifterId)
-    sqlite.prepare(
-      'UPDATE gift SET heart_count = (SELECT COUNT(*) FROM heart WHERE gift_id = id) WHERE public_id = ?',
-    ).run(publicId)
+    // Ban gifter1 via handleGiftModeration (handler-driven — not raw SQL)
+    const { handleGiftModeration } = await import('./giftModeration.ts')
+    const {
+      seedAdminEmail, pinAdminSub,
+      TEST_EMAIL: ADMIN_EMAIL, TEST_SUB: ADMIN_SUB,
+    } = await import('./testGoogle.ts')
+    const { giftModerationEnv, sessionReq: sReq } = await import('./testGift.ts')
 
+    await seedAdminEmail(db, ADMIN_EMAIL)
+    const adminId = await seedUser(db, { sub: ADMIN_SUB, email: ADMIN_EMAIL })
+    await pinAdminSub(db, ADMIN_EMAIL, ADMIN_SUB)
+    const adminToken = makeRawToken()
+    await seedSession(db, adminId, adminToken)
+
+    await handleGiftModeration(
+      sReq(adminToken, `/api/admin/users/${gifterId}`, 'PATCH', { banned: true }),
+      giftModerationEnv(db),
+    )
+
+    // After ban: heart_count = COUNT(heart) for the gift
     const afterBan = sqlite
       .prepare('SELECT heart_count FROM gift WHERE public_id = ?')
       .get(publicId) as { heart_count: number }
@@ -460,7 +473,7 @@ describe('POST /api/gifts/<publicId>/heart — concurrency invariant (ADR-7)', (
       .get(publicId) as { c: number }).c
 
     expect(afterBan.heart_count).toBe(actual)
-    expect(actual).toBe(1)
+    expect(actual).toBe(1)  // gifter2's heart remains
   })
 })
 

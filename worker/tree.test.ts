@@ -934,3 +934,179 @@ describe('GET /api/gifts/<publicId>', () => {
     expect(r.status).toBe(404)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Fix Group 8a — new tests for items 9 and 11
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── Item 9: tree response gains `open` (effective open) ───────────────────────
+
+describe('GET /api/campaigns/<slug>/tree — `open` field (item 9)', () => {
+  it('response has open: true when campaign is active and in-dates', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    const userId = await seedUser(db)
+    const campaignId = seedGiftTreeCampaign(sqlite, { status: 'active' })
+    seedGift(sqlite, { campaignId, userId })
+
+    const r = await handleTree(treeReq('noel'), makeTreeEnv(db))
+    expect(r.status).toBe(200)
+    const body = await r.json() as { open?: unknown }
+    expect('open' in body).toBe(true)
+    expect(body.open).toBe(true)
+  })
+
+  it('response has open: false when campaign status = closed', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    const userId = await seedUser(db)
+    const campaignId = seedGiftTreeCampaign(sqlite, { status: 'closed' })
+    seedGift(sqlite, { campaignId, userId })
+
+    const r = await handleTree(treeReq('noel'), makeTreeEnv(db))
+    expect(r.status).toBe(200)
+    const body = await r.json() as { open?: unknown }
+    expect('open' in body).toBe(true)
+    expect(body.open).toBe(false)
+  })
+
+  it('response has open: false when campaign is active but past ends_at', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    const userId = await seedUser(db)
+    // Campaign active but ends in the past
+    const campaignId = seedGiftTreeCampaign(sqlite, {
+      status: 'active',
+      settings: JSON.stringify({
+        tree_slots: 15, ground_slots: 10, hearts_per_day: 5, gifts_per_user: 3, report_threshold: 3,
+      }),
+    })
+    // Manually update ends_at to the past
+    sqlite.prepare("UPDATE campaign SET ends_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(campaignId)
+    seedGift(sqlite, { campaignId, userId })
+
+    const r = await handleTree(treeReq('noel'), makeTreeEnv(db))
+    expect(r.status).toBe(200)
+    const body = await r.json() as { open?: unknown }
+    expect(body.open).toBe(false)
+  })
+})
+
+// ── Item 11: `isToken` and `page /^\d+$/` validation before DB (suggestions) ──
+
+describe('GET /api/campaigns/<slug>/gifts — page /^\\d+$/ validation (item 11)', () => {
+  it('page=abc → 400 bad_request', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    seedGiftTreeCampaign(sqlite)
+
+    const r = await handleTree(giftsReq('noel', { page: 'abc' }), makeTreeEnv(db))
+    expect(r.status).toBe(400)
+  })
+
+  it('page=1.5 → 400 bad_request (must be integer)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    seedGiftTreeCampaign(sqlite)
+
+    const r = await handleTree(giftsReq('noel', { page: '1.5' }), makeTreeEnv(db))
+    expect(r.status).toBe(400)
+  })
+})
+
+describe('GET /api/gifts/<publicId> — isToken validation before DB (item 11)', () => {
+  it('publicId shorter than 16 chars → 404 (no DB hit for invalid token format)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    seedGiftTreeCampaign(sqlite)
+
+    const r = await handleTree(giftByIdReq('tooshort'), makeTreeEnv(db))
+    expect(r.status).toBe(404)
+  })
+
+  it('publicId with uppercase letters → 404 (not a valid token)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    seedGiftTreeCampaign(sqlite)
+
+    const r = await handleTree(giftByIdReq('UPPERCASE1234567'), makeTreeEnv(db))
+    expect(r.status).toBe(404)
+  })
+})
+
+// ── Item 11: second-precision time binding for window checks ──────────────────
+//
+// The heart INSERT uses `? BETWEEN c.starts_at AND c.ends_at` where `?` is
+// new Date().toISOString() which includes milliseconds (e.g. '...T10:00:00.100Z').
+//
+// SQLite string comparison: '...T10:00:00.100Z' < '...T10:00:00Z' because
+// '.' (ASCII 46) < 'Z' (ASCII 90). So in the first millisecond of the window,
+// the SQL BETWEEN check fails even though the campaign is open.
+//
+// Fix: bind second-precision string: new Date().toISOString().slice(0, 19) + 'Z'
+
+describe('POST /api/gifts/<publicId>/heart — second-precision window check (item 11)', () => {
+  it('heart at 100ms into campaign start succeeds (second-precision fix)', async () => {
+    const { vi: viTest } = await import('vitest')
+    viTest.useFakeTimers()
+
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+
+    // Campaign that starts at exactly 10:00:00Z
+    const campaignStart = '2026-12-10T10:00:00Z'
+    const campaignEnd = '2026-12-24T16:59:59Z'
+
+    // Set clock to 100ms AFTER campaign start
+    viTest.setSystemTime(new Date('2026-12-10T10:00:00.100Z'))
+
+    // Seed campaign and gift
+    sqlite.prepare("UPDATE campaign SET status = 'closed' WHERE status = 'active'").run()
+    sqlite.prepare(`
+      INSERT INTO campaign
+        (slug, kind, name, tagline, content, theme_colors, settings,
+         starts_at, ends_at, status, created_at, created_by)
+      VALUES ('noel', 'gift_tree', 'Noel', '', '{}', '{}',
+        '{"tree_slots":15,"ground_slots":10,"hearts_per_day":5,"gifts_per_user":3,"report_threshold":3}',
+        ?, ?, 'active', datetime('now'), 'test')
+    `).run(campaignStart, campaignEnd)
+
+    const { handleGifts: hg } = await import('./gifts.ts')
+    const { giftsEnv: ge } = await import('./testGift.ts')
+    const { seedUser: su, seedSession: ss, makeRawToken: mrt } = await import('./testGoogle.ts')
+
+    const campId = (sqlite.prepare('SELECT id FROM campaign WHERE slug = ?').get('noel') as { id: number }).id
+    const ownerId = await su(db, { sub: 'sec-owner-001', email: 'sec-owner@gmail.com' })
+    // Need a template for the campaign
+    const now = new Date().toISOString()
+    sqlite.prepare('INSERT INTO template (name, layout, active, created_at, created_by, campaign_id) VALUES (?, ?, 1, ?, ?, ?)')
+      .run('T', 'doc-giua', now, 'test', campId)
+    sqlite.prepare(`
+      INSERT INTO gift
+        (public_id, campaign_id, user_id, box_style, ornament_style, layout,
+         font, ink, message, nickname, class_name,
+         heart_count, report_count, status, created_at)
+      VALUES ('secgift12345678x', ?, ?, 1, 1, 'doc-giua', 'patrick-hand', '#1d3fa6', 'msg', 'Nick', '', 0, 0, 'visible', ?)
+    `).run(campId, ownerId, now)
+
+    const gifterId = await su(db, { sub: 'sec-gifter-001', email: 'sec-gifter@gmail.com' })
+    const gifterToken = mrt()
+    await ss(db, gifterId, gifterToken)
+
+    const { sessionReq: sr } = await import('./testGift.ts')
+    const r = await hg(sr(gifterToken, '/api/gifts/secgift12345678x/heart', 'POST'), ge(db))
+    // With second-precision fix: campaign is open → 200
+    // Without fix (ms precision): SQL BETWEEN sees '...T10:00:00.100Z' < '...T10:00:00Z' → campaign_closed → 429 or 409
+    expect(r.status).toBe(200)
+
+    viTest.useRealTimers()
+  })
+})

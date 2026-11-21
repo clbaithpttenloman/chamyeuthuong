@@ -369,31 +369,56 @@ describe('POST /api/gifts/<publicId>/report — reports from banned users not co
     expect(gift?.report_count).toBe(2)
   })
 
-  it('report_count reflects only non-banned reporters', async () => {
-    // Create 3 reporters; mark one as banned
+  it('report_count reflects only non-banned reporters: handler-driven ban reduces count (item 2)', async () => {
+    // Handler-driven replacement for the tautological SQL-only test.
+    // Three reporters; one gets banned via handleGiftModeration.
+    // After ban: report_count must equal COUNT(unacknowledged, non-banned reporter reports).
     const { id: giftId } = await seedGift(db, ownerId, campaignId, templateId, {
       publicId: 'rcountbangift12345'.slice(0, 16),
+      reportCount: 0,
     })
-
-    // Insert 2 non-banned reports + 1 banned report directly into the report table
-    // (simulating what happens when a user who reported a gift gets banned later)
     const now = new Date().toISOString()
-    const r1Id = await seedUser(db, { sub: 'rcb-r1', email: 'rcb-r1@gmail.com' })
-    const r2Id = await seedUser(db, { sub: 'rcb-r2', email: 'rcb-r2@gmail.com' })
-    const r3Id = await seedUser(db, { sub: 'rcb-r3', email: 'rcb-r3@gmail.com', banned: true })
 
+    // Three reporters: r1, r2 (normal), r3 (will be banned)
+    const r1Id = await seedUser(db, { sub: 'rcb-r1-new', email: 'rcb-r1-new@gmail.com' })
+    const r2Id = await seedUser(db, { sub: 'rcb-r2-new', email: 'rcb-r2-new@gmail.com' })
+    const r3Id = await seedUser(db, { sub: 'rcb-r3-new', email: 'rcb-r3-new@gmail.com' })
+
+    // Insert 3 reports directly (simulating 3 prior reports)
     sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, r1Id, 'spam', now)
     sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, r2Id, 'other', now)
     sqlite.prepare('INSERT INTO report (gift_id,user_id,reason,acknowledged,created_at) VALUES (?,?,?,0,?)').run(giftId, r3Id, 'inappropriate', now)
+    sqlite.prepare('UPDATE gift SET report_count = 3 WHERE id = ?').run(giftId)
 
-    // Recompute report_count excluding banned users
-    // (This is what the moderation handler does on ban, and what the INSERT batch does)
-    const correctCount = (sqlite.prepare(
+    // Set up an admin
+    const { handleGiftModeration } = await import('./giftModeration.ts')
+    const { seedAdminEmail, pinAdminSub, TEST_EMAIL, TEST_SUB, makeRawToken: mrt, seedSession: ss } = await import('./testGoogle.ts')
+    const { giftModerationEnv, sessionReq: sReq } = await import('./testGift.ts')
+
+    await seedAdminEmail(db, TEST_EMAIL)
+    const adminId = await seedUser(db, { sub: TEST_SUB, email: TEST_EMAIL })
+    await pinAdminSub(db, TEST_EMAIL, TEST_SUB)
+    const adminToken = mrt()
+    await ss(db, adminId, adminToken)
+
+    // Ban r3 via handleGiftModeration → their report should no longer count
+    await handleGiftModeration(
+      sReq(adminToken, `/api/admin/users/${r3Id}`, 'PATCH', { banned: true }),
+      giftModerationEnv(db),
+    )
+
+    // report_count should now be 2 (r1 and r2 only)
+    const gift = sqlite
+      .prepare('SELECT report_count FROM gift WHERE id = ?')
+      .get(giftId) as { report_count: number } | undefined
+    const actual = (sqlite.prepare(
       'SELECT COUNT(*) AS c FROM report r ' +
       'JOIN app_user u ON u.id = r.user_id ' +
       'WHERE r.gift_id = ? AND r.acknowledged = 0 AND u.banned = 0',
     ).get(giftId) as { c: number }).c
-    expect(correctCount).toBe(2)  // only 2 non-banned reporters
+
+    expect(gift?.report_count).toBe(actual)
+    expect(actual).toBe(2)  // r1 and r2, not r3 (banned)
   })
 })
 

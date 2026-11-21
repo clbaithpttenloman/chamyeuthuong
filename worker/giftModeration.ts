@@ -3,19 +3,28 @@
  *
  * Routes:
  *   GET  /api/admin/gifts?status=reported|hidden
- *        → 200 [{ id, publicId, campaignId, userId, status, reportCount, ... }]
+ *        → 200 [{ id, publicId, campaignId, userId, userBanned, status, reportCount, ... }]
  *        Reporter identity is never included. reportCount (aggregate) is included.
+ *        LIMIT 200 to cap queue size (item 10).
  *
  *   PATCH /api/admin/gifts/<id>  { status: 'visible'|'hidden_admin'|'deleted' }
- *        → 200 { ok: true }
- *        restore (→ visible): marks existing reports acknowledged=1, resets report_count=0
+ *        → 200 { ok: true }  |  404 (unknown id or deleted gift)
+ *        restore (→ visible): marks existing reports acknowledged=1, resets report_count=0,
+ *                              clears status_before_ban (item 3)
+ *        hide/delete: sets status, clears status_before_ban (item 3), 404 on 0 changes
  *
  *   PATCH /api/admin/users/<id>  { banned: true|false }
  *        → 200 { ok: true }
  *        ban=true:  saves status_before_ban, hides visible gifts to hidden_admin, deletes
- *                   the user's hearts with recounts for every affected gift, revokes sessions.
+ *                   the user's hearts with in-batch recounts (no pre-read, item 4), recounts
+ *                   report_count for affected gifts (item 4), revokes sessions.
  *                   Admin cannot ban themselves (403).
- *        ban=false: restores gift status from status_before_ban; hearts NOT restored.
+ *        ban=false: restores gift status from status_before_ban; hearts NOT restored;
+ *                   recounts report_count for affected gifts (item 4); removes tombstone (item 1).
+ *                   Fails closed without SUB_HMAC_KEY (item 1).
+ *
+ *   GET  /api/admin/tombstones        → 200 [{ id, createdAt }]  (sub_hmac never returned)
+ *   DELETE /api/admin/tombstones/<id> → 200 { ok: true }
  *
  * Auth: requireAdmin without opts.legacy (Google session only).
  *       Typed X-Admin-Email + ADMIN_LEGACY_LOGIN='1' → 401.
@@ -26,6 +35,7 @@
 import { requireAdmin } from './auth.ts'
 import { ensureSchema } from './schema.ts'
 import { json, error, readJson } from './http.ts'
+import { hmacSha256Hex } from './session.ts'
 import type { D1 } from './types.ts'
 
 type Limiter = { limit(opts: { key: string }): Promise<{ success: boolean }> }
@@ -36,6 +46,8 @@ export type GiftModerationEnv = {
   ADMIN_LEGACY_LOGIN?: string
   BOOTSTRAP_EMAIL?: string
   ALLOW_FIRST_CLAIM?: string
+  /** Required for unban tombstone removal. Missing → fail closed for unban. */
+  SUB_HMAC_KEY?: string
 }
 
 export async function handleGiftModeration(request: Request, env: GiftModerationEnv): Promise<Response> {
@@ -54,39 +66,48 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       return json({ error: 'bad_request' }, 400)
     }
 
-    let rows: Array<{
+    // Alias for the join type
+    type GiftWithUser = {
       id: number; public_id: string; campaign_id: number; user_id: number; status: string
       report_count: number; heart_count: number; nickname: string; class_name: string
       message: string; created_at: string
       layout: string; font: string; ink: string; background_template_id: number | null
-    }>
+      user_banned: number  // item 10: owning user's banned flag
+    }
+    let rows: GiftWithUser[]
 
+    // LIMIT 200 to cap the queue (item 10 suggestion)
     if (statusParam === 'reported') {
-      // Gifts with at least 1 report (not deleted) — admin sees all with report_count ≥ 1
       ;({ results: rows } = await env.DB
         .prepare(
           'SELECT g.id, g.public_id, g.campaign_id, g.user_id, g.status, g.report_count,' +
           '       g.heart_count, g.nickname, g.class_name, g.message, g.created_at,' +
-          '       g.layout, g.font, g.ink, g.background_template_id ' +
-          "FROM gift g WHERE g.report_count > 0 AND g.status != 'deleted' " +
-          'ORDER BY g.report_count DESC, g.created_at ASC',
+          '       g.layout, g.font, g.ink, g.background_template_id,' +
+          '       COALESCE(u.banned, 0) AS user_banned ' +
+          'FROM gift g ' +
+          'LEFT JOIN app_user u ON u.id = g.user_id ' +
+          "WHERE g.report_count > 0 AND g.status != 'deleted' " +
+          'ORDER BY g.report_count DESC, g.created_at ASC ' +
+          'LIMIT 200',
         )
-        .all<typeof rows[number]>())
+        .all<GiftWithUser>())
     } else {
-      // status === 'hidden': hidden_auto or hidden_admin
       ;({ results: rows } = await env.DB
         .prepare(
           'SELECT g.id, g.public_id, g.campaign_id, g.user_id, g.status, g.report_count,' +
           '       g.heart_count, g.nickname, g.class_name, g.message, g.created_at,' +
-          '       g.layout, g.font, g.ink, g.background_template_id ' +
-          "FROM gift g WHERE g.status IN ('hidden_auto','hidden_admin') " +
-          'ORDER BY g.created_at DESC',
+          '       g.layout, g.font, g.ink, g.background_template_id,' +
+          '       COALESCE(u.banned, 0) AS user_banned ' +
+          'FROM gift g ' +
+          'LEFT JOIN app_user u ON u.id = g.user_id ' +
+          "WHERE g.status IN ('hidden_auto','hidden_admin') " +
+          'ORDER BY g.created_at DESC ' +
+          'LIMIT 200',
         )
-        .all<typeof rows[number]>())
+        .all<GiftWithUser>())
     }
 
     // Unacknowledged reports by reason for the listed gifts (counts only, no reporter identity).
-    // Reports from banned users are left out, as in report_count.
     const reasons = new Map<number, { inappropriate: number; spam: number; other: number }>()
     for (const g of rows) reasons.set(g.id, { inappropriate: 0, spam: 0, other: 0 })
     if (rows.length > 0) {
@@ -109,14 +130,14 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       }
     }
 
-    // Reporter identity is NEVER included (ADR-8: never return reporter identities except to admin,
-    // and only what the tests require — which is the aggregate count, not individual identities).
+    // Reporter identity is NEVER included (ADR-8).
     return json(
       rows.map((g) => ({
         id: g.id,
         publicId: g.public_id,
         campaignId: g.campaign_id,
         userId: g.user_id,
+        userBanned: Boolean(g.user_banned),  // item 10: owning user's banned flag
         status: g.status,
         reportCount: g.report_count,
         heartCount: g.heart_count,
@@ -131,6 +152,24 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
         reportReasons: reasons.get(g.id),
       })),
     )
+  }
+
+  // ── GET /api/admin/tombstones ─────────────────────────────────────────────────
+  // Returns tombstone list (id, created_at only — sub_hmac never returned) for admin
+  // to identify and remove ("Gỡ khóa") tombstones for already-deleted users. (item 1 / ADR-8)
+  if (request.method === 'GET' && pathname === '/api/admin/tombstones') {
+    const { results } = await env.DB
+      .prepare('SELECT rowid AS id, created_at FROM banned_identity ORDER BY created_at DESC')
+      .all<{ id: number; created_at: string }>()
+    return json(results.map((r) => ({ id: r.id, createdAt: r.created_at })))
+  }
+
+  // ── DELETE /api/admin/tombstones/<id> ─────────────────────────────────────────
+  const tombstoneDeleteMatch = pathname.match(/^\/api\/admin\/tombstones\/(\d+)$/)
+  if (request.method === 'DELETE' && tombstoneDeleteMatch) {
+    const tombstoneId = parseInt(tombstoneDeleteMatch[1]!, 10)
+    await env.DB.prepare('DELETE FROM banned_identity WHERE rowid = ?').bind(tombstoneId).run()
+    return json({ ok: true })
   }
 
   // ── PATCH /api/admin/gifts/<id> ──────────────────────────────────────────────
@@ -151,21 +190,28 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
     }
 
     if (status === 'visible') {
-      // Restore: acknowledge all existing reports, reset report_count to 0, set status = visible.
-      // One batch so the recount and status flip are atomic (ADR-8: "restore acknowledges reports
-      // and resets report_count, so only new reports can re-hide it").
-      await env.DB.batch([
+      // Restore: acknowledge all existing reports, reset report_count to 0, set status = visible,
+      // clear status_before_ban (item 3: prevent stale restore on later unban).
+      // Refuse deleted gifts (ADR-8: cannot resurrect deleted gifts) and unknown ids.
+      const result = await env.DB.batch([
         env.DB.prepare('UPDATE report SET acknowledged = 1 WHERE gift_id = ?').bind(giftId),
         env.DB.prepare(
-          "UPDATE gift SET status = 'visible', report_count = 0 WHERE id = ?",
+          "UPDATE gift SET status = 'visible', report_count = 0, status_before_ban = NULL " +
+          "WHERE id = ? AND status != 'deleted'",
         ).bind(giftId),
       ])
+      // Check the gift UPDATE result (index 1) for 0 changes → 404
+      if (result[1]!.meta.changes === 0) return json({ error: 'not_found' }, 404)
     } else {
-      // Hide or delete — single update (no recount needed; hearts untouched for hide/delete).
-      await env.DB
-        .prepare('UPDATE gift SET status = ? WHERE id = ?')
+      // Hide or delete: set status, clear status_before_ban (item 3: prevents a later unban
+      // from using a stale saved status), 404 on 0 changes (unknown id or deleted gift).
+      const result = await env.DB
+        .prepare(
+          "UPDATE gift SET status = ?, status_before_ban = NULL WHERE id = ? AND status != 'deleted'",
+        )
         .bind(status, giftId)
         .run()
+      if (result.meta.changes === 0) return json({ error: 'not_found' }, 404)
     }
 
     return json({ ok: true })
@@ -198,44 +244,80 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
         return json({ error: 'forbidden' }, 403)
       }
 
-      // Pre-fetch gift IDs this user has hearted so we can recount after deleting their hearts.
-      // This read must happen before the batch (hearts not yet deleted at this point).
-      const { results: heartRows } = await env.DB
-        .prepare('SELECT DISTINCT gift_id FROM heart WHERE user_id = ?')
-        .bind(targetUserId)
-        .all<{ gift_id: number }>()
-      const heartedGiftIds = heartRows.map((r) => r.gift_id)
-
-      // One D1 batch for the entire ban lifecycle (ADR-8: "one batch each, counters recomputed
-      // in the same batch"):
+      // One D1 batch for the entire ban lifecycle (ADR-8):
       //   1. Mark user banned.
       //   2. Save status_before_ban and hide visible gifts.
       //   3. Delete the user's hearts.
       //   4. Revoke sessions.
-      //   5. Recount heart_count for every affected gift (after hearts are deleted in step 3).
+      //   5. In-batch recount heart_count for every gift they hearted (item 4: no pre-read).
+      //      Uses an UPDATE WHERE id IN (SELECT gift_id FROM heart WHERE user_id = ?) BEFORE
+      //      the delete, counting other users' hearts (excluding the banned user's).
+      //   6. Recount report_count for every gift they reported (item 4: reporters now banned
+      //      so their reports no longer count toward the threshold).
       await env.DB.batch([
         env.DB.prepare('UPDATE app_user SET banned = 1 WHERE id = ?').bind(targetUserId),
         env.DB.prepare(
           "UPDATE gift SET status_before_ban = status, status = 'hidden_admin'" +
           " WHERE user_id = ? AND status = 'visible'",
         ).bind(targetUserId),
+        // Heart recount BEFORE the delete (item 4): exclude the user's own hearts in the subcount,
+        // so the result equals COUNT(heart) after the delete completes in the same batch.
+        env.DB.prepare(
+          'UPDATE gift SET heart_count = (' +
+          '  SELECT COUNT(*) FROM heart h WHERE h.gift_id = gift.id AND h.user_id != ?' +
+          ') WHERE id IN (SELECT DISTINCT gift_id FROM heart WHERE user_id = ?)',
+        ).bind(targetUserId, targetUserId),
         env.DB.prepare('DELETE FROM heart WHERE user_id = ?').bind(targetUserId),
         env.DB.prepare('DELETE FROM session WHERE user_id = ?').bind(targetUserId),
-        ...heartedGiftIds.map((giftId) =>
-          env.DB.prepare(
-            'UPDATE gift SET heart_count = (SELECT COUNT(*) FROM heart WHERE gift_id = ?) WHERE id = ?',
-          ).bind(giftId, giftId),
-        ),
+        // Report recount for gifts this user reported (item 4): their reports now excluded.
+        env.DB.prepare(
+          'UPDATE gift SET report_count = (' +
+          '  SELECT COUNT(*) FROM report r ' +
+          '  JOIN app_user u ON u.id = r.user_id ' +
+          '  WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND u.banned = 0' +
+          ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
+        ).bind(targetUserId),
       ])
     } else {
       // Unban: restore previous gift status from status_before_ban; hearts NOT restored (ADR-8).
-      // One batch: clear banned flag + restore gifts.
+      // Also:
+      //   - Recounts report_count for gifts this user reported (item 4: their reports now count).
+      //   - Removes their banned_identity tombstone (item 1: so they can sign in normally).
+      //     Fails closed without SUB_HMAC_KEY.
+
+      // Need the user's google_sub to compute sub_hmac for tombstone removal.
+      if (!env.SUB_HMAC_KEY) {
+        // Can't safely clear the tombstone without the key — fail closed.
+        console.error('giftModeration: SUB_HMAC_KEY missing; unban refused (tombstone cannot be cleared)')
+        return json({ error: 'misconfigured' }, 500)
+      }
+
+      const userRow = await env.DB
+        .prepare('SELECT google_sub FROM app_user WHERE id = ?')
+        .bind(targetUserId)
+        .first<{ google_sub: string | null }>()
+      if (!userRow || !userRow.google_sub) {
+        return json({ error: 'not_found' }, 404)
+      }
+
+      const subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, userRow.google_sub)
+
       await env.DB.batch([
         env.DB.prepare('UPDATE app_user SET banned = 0 WHERE id = ?').bind(targetUserId),
         env.DB.prepare(
           'UPDATE gift SET status = status_before_ban, status_before_ban = NULL ' +
           "WHERE user_id = ? AND status = 'hidden_admin' AND status_before_ban IS NOT NULL",
         ).bind(targetUserId),
+        // Report recount for gifts this user reported (item 4): their reports now count again.
+        env.DB.prepare(
+          'UPDATE gift SET report_count = (' +
+          '  SELECT COUNT(*) FROM report r ' +
+          '  JOIN app_user u ON u.id = r.user_id ' +
+          '  WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND u.banned = 0' +
+          ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
+        ).bind(targetUserId),
+        // Remove tombstone (item 1): same batch so the unban is atomic with tombstone removal.
+        env.DB.prepare('DELETE FROM banned_identity WHERE sub_hmac = ?').bind(subHmac),
       ])
     }
 

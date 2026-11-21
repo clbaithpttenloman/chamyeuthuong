@@ -176,7 +176,7 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
             'FROM teacher t ' +
             'JOIN teacher_profile tp ON tp.teacher_id = t.id ' +
             'WHERE t.id = ? AND tp.show_on_home = 1 ' +
-            '  AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1) ' +
+            '  AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1 AND campaign_id = 1) ' +
             '  AND (SELECT COUNT(*) FROM student_card WHERE status = \'pending\') < ? ' +
             '  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = t.id AND sc2.status = \'pending\') < ?',
           )
@@ -192,7 +192,7 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
             'SELECT ?, t.id, ?, ?, ?, ?, ?, \'pending\', ?, ?, ? ' +
             'FROM teacher t ' +
             'WHERE t.token = ? ' +
-            '  AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1) ' +
+            '  AND EXISTS (SELECT 1 FROM template WHERE id = ? AND active = 1 AND campaign_id = 1) ' +
             '  AND (SELECT COUNT(*) FROM student_card WHERE status = \'pending\') < ? ' +
             '  AND (SELECT COUNT(*) FROM student_card sc2 WHERE sc2.teacher_id = t.id AND sc2.status = \'pending\') < ?',
           )
@@ -223,10 +223,10 @@ export async function handleSubmit(request: Request, env: Env): Promise<Response
         if (teacherExists === 0) return error('not_found')
 
         const tmplRow = await env.DB
-          .prepare('SELECT active FROM template WHERE id = ?')
+          .prepare('SELECT active, campaign_id FROM template WHERE id = ?')
           .bind(templateId)
-          .first<{ active: number | null }>()
-        if (!tmplRow || tmplRow.active !== 1) return error('bad_request')
+          .first<{ active: number | null; campaign_id: number | null }>()
+        if (!tmplRow || tmplRow.active !== 1 || tmplRow.campaign_id !== 1) return error('bad_request')
         return error('conflict')
       }
 

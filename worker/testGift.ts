@@ -54,21 +54,26 @@ const fakeLimitFail = (): Limiter => ({ limit: async () => ({ success: false }) 
  * Env for handleGifts (worker/gifts.ts).
  *
  * Rate-limit bindings (plan API section):
- *   GIFT_LIMIT   — 6/60 s per user (namespace 2011 prod / 3011 staging)
- *   HEART_LIMIT  — 20/60 s per user (namespace 2012 / 3012)
- *   REPORT_LIMIT — 10/60 s per user (namespace 2013 / 3013)
- */export function giftsEnv(
+ *   GIFT_LIMIT        — 6/60 s per user (namespace 2011 prod / 3011 staging)
+ *   HEART_LIMIT       — 20/60 s per user (namespace 2012 / 3012)
+ *   REPORT_LIMIT      — 10/60 s per user (namespace 2013 / 3013)
+ *   USER_WRITE_LIMIT  — 10/60 s per user (plan API section; also covers owner delete)
+ */
+export function giftsEnv(
   db: D1,
   opts: {
     giftLimitFail?: boolean
     heartLimitFail?: boolean
     reportLimitFail?: boolean
+    userWriteLimitFail?: boolean
   } = {},
-): GiftsEnv {  return {
+): GiftsEnv {
+  return {
     DB: db,
     GIFT_LIMIT: opts.giftLimitFail ? fakeLimitFail() : fakeLimit(),
     HEART_LIMIT: opts.heartLimitFail ? fakeLimitFail() : fakeLimit(),
     REPORT_LIMIT: opts.reportLimitFail ? fakeLimitFail() : fakeLimit(),
+    USER_WRITE_LIMIT: opts.userWriteLimitFail ? fakeLimitFail() : fakeLimit(),
   }
 }
 
@@ -86,6 +91,8 @@ export type GiftModerationEnv = {
   ADMIN_LEGACY_LOGIN?: string
   BOOTSTRAP_EMAIL?: string
   ALLOW_FIRST_CLAIM?: string
+  /** Required for unban tombstone removal. Missing → fail closed. */
+  SUB_HMAC_KEY?: string
 }
 
 export function giftModerationEnv(
@@ -93,6 +100,7 @@ export function giftModerationEnv(
   opts: {
     failLimit?: boolean
     legacyLogin?: string
+    subHmacKey?: string
   } = {},
 ): GiftModerationEnv {
   return {
@@ -100,6 +108,7 @@ export function giftModerationEnv(
     ADMIN_FAIL_LIMIT: { limit: async () => ({ success: !opts.failLimit }) },
     // Keep the flag on so we can test that typed email is still rejected
     ADMIN_LEGACY_LOGIN: 'legacyLogin' in opts ? opts.legacyLogin : '1',
+    SUB_HMAC_KEY: 'subHmacKey' in opts ? opts.subHmacKey : TEST_SUB_HMAC_KEY,
   }
 }
 

@@ -95,7 +95,7 @@ export default {
         return await handleAdminCampaigns(request, env, auth.email)
       }
       // Gift moderation + user ban (stub; wired before handleAdmin so the route exists)
-      if (pathname.startsWith('/api/admin/gifts') || pathname.startsWith('/api/admin/users')) {
+      if (pathname.startsWith('/api/admin/gifts') || pathname.startsWith('/api/admin/users') || pathname.startsWith('/api/admin/tombstones')) {
         return await handleGiftModeration(request, env as never)
       }
       if (pathname.startsWith('/api/admin/')) return await handleAdmin(request, env)
