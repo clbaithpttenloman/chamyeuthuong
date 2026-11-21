@@ -193,15 +193,7 @@ On a Google admin's first sign-in, `admin.google_sub` is pinned to the verified 
    npx wrangler d1 execute cham-yeu-thuong --remote --command "UPDATE admin SET google_sub = NULL WHERE email = 'giao-vien@gmail.com'"
    ```
 
-**Removal timing:**
-
-Before **Phase 2 production deploy (by 5/12)**:
-
-1. Every admin must have signed in with Google on production
-2. Check logs: no `admin: legacy login used` lines in the last 48 h
-3. Remove `ADMIN_LEGACY_LOGIN` and `BOOTSTRAP_EMAIL` from the production `vars` in `wrangler.jsonc` (staging never had them)
-4. Deploy
-5. After deploy: legacy email header is rejected on all admin endpoints (401)
+**Typed-email login stays.** It is not removed as part of the campaign platform; that is a separate, later feature. Until Google sign-in is configured, admins use the typed email for the 20/11 sections only.
 
 ---
 
@@ -285,16 +277,9 @@ No ongoing action needed. Sessions are 14 days; signed-in users stay logged in.
 - [ ] Test admin: admin email → sign in → admin dashboard loads
 - [ ] Check logs: no `auth: misconfigured` on sign-in
 
-### Phase 2 Checklist (Remove Legacy Admin Login)
+### Before the Noel launch (10/12)
 
-By **5/12** (before Phase 2 production deploy):
-
-- [ ] All admins have signed in with Google on production
-- [ ] Logs show no `admin: legacy login used` for 48 h
-- [ ] Remove `ADMIN_LEGACY_LOGIN` and `BOOTSTRAP_EMAIL` from `wrangler.jsonc` `vars`
-- [ ] Deploy
-- [ ] Verify: the typed-email login on `/admin` now gets 401; Google sign-in works
-- [ ] Update admin runbook: remove legacy email path documentation
+- [ ] Google sign-in configured on production (client ID, `NONCE_KEY`) and every admin has signed in once with Google (pins their `google_sub`). Gift moderation, users and theme need Google.
 
 ---
 

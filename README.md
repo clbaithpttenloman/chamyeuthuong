@@ -8,7 +8,7 @@ A platform where students send personalized cards to teachers. Admins create car
 
 Phase 1 (campaigns + Google sign-in) adds:
 - **Campaigns:** `/admin` → Chiến dịch to create, edit, activate and close campaigns. `/` shows the active campaign's home text. See `docs/runbooks/admin.md` → "Campaigns (Phase 1)".
-- **Google sign-in** on `/admin`. Campaign management and adding/removing admins need Google; the typed-email login still works for the 20/11 sections until it is removed before the Phase 2 deploy. Setup: `docs/runbooks/google-signin.md`.
+- **Google sign-in** on `/admin`. Campaign management and adding/removing admins need Google; the typed-email login keeps working for the 20/11 sections (its removal is a separate, later feature). Google sign-in works once it is configured. Setup: `docs/runbooks/google-signin.md`.
 - **Staging** environment for pre-launch tests: `docs/runbooks/staging.md`.
 
 **Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.

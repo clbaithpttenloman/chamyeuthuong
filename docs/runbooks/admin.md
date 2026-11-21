@@ -765,11 +765,8 @@ Deploy **not before 23/11 and by 27/11**, outside event traffic. Production is c
 ### Rollback
 Roll forward with a fix. The previous code keeps working on the upgraded database (the new columns have defaults and the new tables are ignored), so redeploying `4cb51a3` is safe. Restoring the database (`npx wrangler d1 time-travel restore cham-yeu-thuong --bookmark=<restore point>`) is destructive: it loses everything written since.
 
-### Before the Phase 2 deploy (by 5/12): remove the typed-email login
-1. Every admin signs in once with Google on production (pins their `google_sub`).
-2. Logs show no `admin: legacy login used` for 48 h.
-3. Remove `ADMIN_LEGACY_LOGIN` and `BOOTSTRAP_EMAIL` from `wrangler.jsonc` vars and deploy.
-4. Check: the typed-email login on `/admin` now gets 401; Google sign-in still works.
+### Two admin login methods
+Both stay for the whole campaign platform: the typed email for the 20/11 sections, and Google for everything new (campaigns, admin list changes, and in Phase 2 gift moderation, users and theme). Google sign-in only works after the OAuth client and `NONCE_KEY` are set (`docs/runbooks/google-signin.md`), and **must be set up before the Noel launch** or nobody can moderate gifts. Removing the typed-email login is a separate, later feature.
 
 ### Schema & Tables
 

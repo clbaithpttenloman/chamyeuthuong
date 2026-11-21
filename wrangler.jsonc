@@ -4,9 +4,8 @@
   // Build before every deploy, so `npx wrangler deploy` works even when no build command is set in Cloudflare.
   "build": { "command": "npm run build" },
   // Admin auth (Phase 1): Google sign-in via session cookie is the primary path.
-  // Legacy X-Admin-Email path (ADMIN_LEGACY_LOGIN="1") is kept for 20/11 admin routes
-  // during the Phase 1 transition. Remove the flag before Phase 2 production deploy
-  // once every admin has signed in with Google and the log shows no legacy use for 48 h.
+  // Legacy X-Admin-Email path (ADMIN_LEGACY_LOGIN="1") stays on for the 20/11 admin routes
+  // for the whole campaign platform; removing it is a separate, later feature.
   //
   // Phase 1 secrets (set via `wrangler secret put`):
   //   NONCE_KEY    — 32+ byte random key for HMAC-signing sign-in nonces (required)
