@@ -123,15 +123,19 @@ export default function GiftSheet({
   useDialog({ dialogRef, onCloseRef, returnFocusRef })
 
   // ── Animation phase ───────────────────────────────────────────────────
+  // Phase is keyed per-gift so switching prev/next starts the animation fresh
+  // without a one-frame flash of the previous phase.
+  const [animKey, setAnimKey] = useState(() => gift.publicId)
   const [phase, setPhase] = useState<'animating' | 'card'>('animating')
   const boxRef   = useRef<HTMLDivElement>(null)
   const lidRef   = useRef<HTMLDivElement>(null)
   const sparksRef = useRef<HTMLDivElement>(null)
 
-  // Run box-open animation on mount (and when gift changes — same phase reset)
-  useEffect(() => {
+  // When the gift changes, reset the animation to 'animating' atomically.
+  if (animKey !== gift.publicId) {
+    setAnimKey(gift.publicId)
     setPhase('animating')
-  }, [gift.publicId])
+  }
 
   useEffect(() => {
     if (phase !== 'animating') return
@@ -141,14 +145,16 @@ export default function GiftSheet({
     if (!boxEl || !lidEl || !sparksEl) { setPhase('card'); return }
 
     let alive = true
-    // Bug #3 fix: safety timeout ensures we always reach 'card' within 2 s even
-    // if WAAPI animations are paused (hidden tab, reduced-motion, missing img).
+    // Safety timeout: a background tab's WAAPI timeline is paused by the browser,
+    // so the animation's `.finished` promise may never resolve until the tab is
+    // foregrounded. 2 s ensures we always reach 'card'.
     const safety = setTimeout(() => { if (alive) { setPhase('card') } }, 2000)
     animateBoxOpen({ box: boxEl, lid: lidEl, sparks: sparksEl }, reduced)
       .then(() => { clearTimeout(safety); if (alive) setPhase('card') })
       .catch(() => { clearTimeout(safety); if (alive) setPhase('card') })
     return () => { alive = false; clearTimeout(safety) }
-  }, [phase, reduced])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animKey, reduced])
 
   // ── Heart action ──────────────────────────────────────────────────────
   const [heartLoading, setHeartLoading] = useState(false)
@@ -162,13 +168,15 @@ export default function GiftSheet({
     setHeartError(null)
     try {
       await onHeart(gift.publicId)
-      burstHearts(x, y, reduced)
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'unknown'
       setHeartError(errorMessage(code))
-    } finally {
       setHeartLoading(false)
+      return
     }
+    // Burst only after a successful heart (outside the try so it never fires on error)
+    burstHearts(x, y, reduced)
+    setHeartLoading(false)
   }, [gift.publicId, onHeart, reduced])
 
   // ── Report flow ───────────────────────────────────────────────────────
@@ -325,9 +333,11 @@ export default function GiftSheet({
               <span className="gift-sheet-hearts" aria-label={`${gift.heartCount} tim`}>
                 ❤️ {gift.heartCount}
               </span>
-              <span className="gift-sheet-rank" aria-label={`Hạng ${gift.rank}`}>
-                #{gift.rank}
-              </span>
+              {gift.rank > 0 && (
+                <span className="gift-sheet-rank" aria-label={`Hạng ${gift.rank}`}>
+                  #{gift.rank}
+                </span>
+              )}
             </div>
 
             {/* Heart button */}

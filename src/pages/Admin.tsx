@@ -319,8 +319,7 @@ export default function Admin() {
             onReportedCountChange={(count) => setGiftReviewCount(count)}
             onAccessError={handleAccessError}
           />
-        )}
-        {section === 'templates' && (
+        )}        {section === 'templates' && (
           <TemplateSection onAccessError={handleAccessError} />
         )}
         {section === 'teachers' && (

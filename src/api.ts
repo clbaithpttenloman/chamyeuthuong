@@ -546,6 +546,8 @@ export type AdminGiftItem = {
   font: string
   ink: string
   backgroundTemplateId: number | null
+  /** True when the gift owner's account is currently banned. */
+  userBanned: boolean
   /** Unacknowledged reports by reason (banned reporters excluded). */
   reportReasons: { inappropriate: number; spam: number; other: number }
 }
@@ -588,6 +590,33 @@ export async function banAdminUser(userId: number, banned: boolean): Promise<voi
   }))
 }
 
+// ── Admin tombstones (ADR-8: ban evasion; decision 2026-11-21) ───────────────
+
+/** Tombstone entry returned by GET /api/admin/tombstones. */
+export type AdminTombstoneItem = {
+  id: number
+  createdAt: string
+}
+
+/**
+ * GET /api/admin/tombstones — list banned_identity tombstones (id + createdAt only).
+ * These are accounts that were deleted while banned; sign-in with the same Google sub
+ * is blocked. "Gỡ khóa" calls deleteAdminTombstone to allow the account to be recreated.
+ * Requires Google session.
+ */
+export async function listAdminTombstones(): Promise<AdminTombstoneItem[]> {
+  const data = await (await expectOk(await apiFetch('/api/admin/tombstones'))).json() as { tombstones: AdminTombstoneItem[] }
+  return data.tombstones
+}
+
+/**
+ * DELETE /api/admin/tombstones/<id> — remove a tombstone so the user can sign in again.
+ * Requires Google session.
+ */
+export async function deleteAdminTombstone(id: number): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/tombstones/${id}`, { method: 'DELETE' }))
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Noel player API — gift_tree campaign reads and writes
 // All writes need X-Requested-With: fetch (session cookie sent automatically).
@@ -617,6 +646,8 @@ export type NoelGiftFlat = Omit<NoelGift, 'rank' | 'place'>
 /** Response from GET /api/campaigns/<slug>/tree (ADR-7). */
 export type NoelTreeData = {
   asOf: string
+  /** Whether the campaign is currently accepting new gifts and hearts. */
+  open: boolean
   gifts: NoelGift[]
   totals: { visible: number }
 }
@@ -652,9 +683,9 @@ export type ReportReason = 'inappropriate' | 'spam' | 'other'
  * GET /api/campaigns/<slug>/tree — polled every ~15 s while visible (ADR-7).
  * Cache-Control: public, max-age=5 on the server.
  */
-export async function getNoelTree(slug: string): Promise<NoelTreeData> {
+export async function getNoelTree(slug: string, signal?: AbortSignal): Promise<NoelTreeData> {
   const url = `/api/campaigns/${encodeURIComponent(slug)}/tree?x=${Math.random().toString(36).slice(2)}`
-  return (await expectOk(await fetch(url))).json() as Promise<NoelTreeData>
+  return (await expectOk(await fetch(url, signal ? { signal } : undefined))).json() as Promise<NoelTreeData>
 }
 
 /**

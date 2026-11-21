@@ -77,70 +77,85 @@ const SPARK_DIST = 60
  * Animate the box opening: lid lifts while box shrinks/fades, then sparkles burst.
  * Returns Promise<void> that resolves when all animations complete.
  * Reduced motion: fade the box from opacity 0 → 1 only.
+ *
+ * Guard: Element.animate() may throw synchronously in environments that do not
+ * support WAAPI (old browsers, test runners). Any synchronous throw is caught and
+ * the returned promise rejects — callers must handle both rejection and resolution
+ * to reach the 'card' phase. The 2 s safety timeout in GiftSheet covers a background
+ * tab whose animation timeline does not advance (paused by the browser), so the
+ * animation's `.finished` promise may never resolve until the tab is foregrounded.
  */
 export function animateBoxOpen(stage: BoxOpenStage, reducedMotion: boolean): Promise<void> {
-  if (reducedMotion) {
-    return stage.box
-      .animate([{ opacity: 0 }, { opacity: 1 }], {
-        duration: 300,
-        easing: 'ease-out',
-        fill: 'forwards',
-      })
-      .finished.then(() => {}) as Promise<void>
+  try {
+    if (reducedMotion) {
+      return stage.box
+        .animate([{ opacity: 0 }, { opacity: 1 }], {
+          duration: 300,
+          easing: 'ease-out',
+          fill: 'forwards',
+        })
+        .finished.then(() => {}) as Promise<void>
+    }
+  } catch {
+    return Promise.reject(new Error('animateBoxOpen: WAAPI not available'))
   }
 
-  const boxClose = stage.box.animate(
-    [
-      { transform: 'scale(1)', opacity: 1, offset: 0 },
-      { transform: 'scale(0.85) translateY(8px)', opacity: 0.5, offset: 0.6 },
-      { transform: 'scale(0.6) translateY(16px)', opacity: 0, offset: 1 },
-    ],
-    { duration: 480, easing: 'cubic-bezier(0.22,1,0.36,1)', fill: 'forwards' },
-  )
-
-  const lidLift = stage.lid.animate(
-    [
-      {
-        transform: 'translateX(-50%) translateY(0) rotateX(0deg)',
-        opacity: 1,
-        offset: 0,
-      },
-      {
-        transform: 'translateX(-50%) translateY(-70px) rotateX(-30deg)',
-        opacity: 0,
-        offset: 1,
-      },
-    ],
-    { duration: 440, easing: 'cubic-bezier(0.22,1,0.36,1)', fill: 'forwards' },
-  )
-
-  const sparkPromises: Promise<void>[] = []
-  for (let i = 0; i < SPARK_COUNT; i++) {
-    const { tx, ty } = sparkleOffset(i, SPARK_COUNT, SPARK_DIST)
-    const spark = document.createElement('div')
-    spark.className = 'noel-spark'
-    stage.sparks.appendChild(spark)
-    const anim = spark.animate(
+  try {
+    const boxClose = stage.box.animate(
       [
-        { transform: 'translate(-50%,-50%) scale(0)', opacity: 1, offset: 0 },
+        { transform: 'scale(1)', opacity: 1, offset: 0 },
+        { transform: 'scale(0.85) translateY(8px)', opacity: 0.5, offset: 0.6 },
+        { transform: 'scale(0.6) translateY(16px)', opacity: 0, offset: 1 },
+      ],
+      { duration: 480, easing: 'cubic-bezier(0.22,1,0.36,1)', fill: 'forwards' },
+    )
+
+    const lidLift = stage.lid.animate(
+      [
         {
-          transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(0.5)`,
+          transform: 'translateX(-50%) translateY(0) rotateX(0deg)',
+          opacity: 1,
+          offset: 0,
+        },
+        {
+          transform: 'translateX(-50%) translateY(-70px) rotateX(-30deg)',
           opacity: 0,
           offset: 1,
         },
       ],
-      { duration: 650, delay: 80, easing: 'ease-out', fill: 'forwards' },
+      { duration: 440, easing: 'cubic-bezier(0.22,1,0.36,1)', fill: 'forwards' },
     )
-    sparkPromises.push(
-      anim.finished.then(() => { spark.remove() }).catch(() => { spark.remove() }),
-    )
-  }
 
-  return Promise.all([
-    boxClose.finished.then(() => {}).catch(() => {}),
-    lidLift.finished.then(() => {}).catch(() => {}),
-    ...sparkPromises,
-  ]).then(() => {}) as Promise<void>
+    const sparkPromises: Promise<void>[] = []
+    for (let i = 0; i < SPARK_COUNT; i++) {
+      const { tx, ty } = sparkleOffset(i, SPARK_COUNT, SPARK_DIST)
+      const spark = document.createElement('div')
+      spark.className = 'noel-spark'
+      stage.sparks.appendChild(spark)
+      const anim = spark.animate(
+        [
+          { transform: 'translate(-50%,-50%) scale(0)', opacity: 1, offset: 0 },
+          {
+            transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(0.5)`,
+            opacity: 0,
+            offset: 1,
+          },
+        ],
+        { duration: 650, delay: 80, easing: 'ease-out', fill: 'forwards' },
+      )
+      sparkPromises.push(
+        anim.finished.then(() => { spark.remove() }).catch(() => { spark.remove() }),
+      )
+    }
+
+    return Promise.all([
+      boxClose.finished.then(() => {}).catch(() => {}),
+      lidLift.finished.then(() => {}).catch(() => {}),
+      ...sparkPromises,
+    ]).then(() => {}) as Promise<void>
+  } catch {
+    return Promise.reject(new Error('animateBoxOpen: WAAPI not available'))
+  }
 }
 
 /**

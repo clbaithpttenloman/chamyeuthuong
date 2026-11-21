@@ -16,6 +16,7 @@ import { Link } from 'react-router-dom'
 import type { WallResponse } from '../../shared/api.ts'
 import { getActiveCampaign, getWall } from '../api'
 import type { CampaignData } from '../api'
+import ErrorBoundary from '../components/ErrorBoundary.tsx'
 import site from '../content/site.json'
 
 type HomeContent = { kicker: string; heading: string; body: string }
@@ -45,9 +46,10 @@ export default function Home() {
   const [homeContent, setHomeContent] = useState<HomeContent>(site.home)
 
   useEffect(() => {
-    // Update content from the active campaign (falls back to site.json init if this fails).
+    let cancelled = false
     getActiveCampaign()
       .then((c) => {
+        if (cancelled) return
         setCampaign(c)
         if (c.kind === 'teacher_cards') {
           const h = extractHomeContent(c.content)
@@ -55,7 +57,10 @@ export default function Home() {
         }
       })
       .catch(() => { /* keep site.json fallback */ })
+    return () => { cancelled = true }
+  }, [])
 
+  useEffect(() => {
     getWall()
       .then((data) => setTotals(data.totals))
       .catch(() => setTotals(null))
@@ -64,9 +69,11 @@ export default function Home() {
   // gift_tree active campaign → show Noel game page
   if (campaign?.kind === 'gift_tree') {
     return (
-      <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
-        <NoelPage slug={campaign.slug} />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
+          <NoelPage slug={campaign.slug} />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 

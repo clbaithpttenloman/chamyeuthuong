@@ -5,24 +5,29 @@
  *   "Bị báo cáo" — gifts with report_count ≥ 1 (not deleted).
  *   "Đã ẩn"      — gifts with status hidden_auto or hidden_admin.
  *
+ * Plus a tombstone sub-section: "Tài khoản đã xoá bị khoá" (banned_identity rows).
+ *
  * Each row shows:
- *   - CardView card preview (using available fields; "another engineer" adds optional props later).
+ *   - CardView card preview (Noel props: toLine=null, Noel stamp, from line).
  *   - Gift-specific detail: nickname · class · campaign · hearts · report count · status.
- *   - Actions: Khôi phục / Ẩn / Xoá (gift), Khoá / Mở khoá (user).
+ *   - Actions: Khôi phục / Ẩn / Xoá (gift), Khoá/Mở khoá (user) from gift.userBanned.
  *   - Each action requires a confirm dialog stating the consequence.
  *
  * Auth: requires Google session. Typed-email sessions → 401 → Google sign-in hint.
  *
- * FR-27; ADR-8; plan.md "Admin moderation queue"; decisions.md "Keep both admin login methods".
+ * FR-27; ADR-8; plan.md "Admin moderation queue"; decisions.md "Phase 2 review cycle 1".
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   type AdminCampaignRow,
   type AdminGiftItem,
+  type AdminTombstoneItem,
   banAdminUser,
+  deleteAdminTombstone,
   listAdminCampaigns,
   listAdminGifts,
+  listAdminTombstones,
   updateAdminGiftStatus,
 } from '../../api.ts'
 import CardView from '../../components/CardView.tsx'
@@ -34,6 +39,7 @@ import {
   userActionConfirmText,
   reportReasonsText,
 } from './moderationHelpers.ts'
+import site from '../../content/site.json'
 
 type FilterTab = 'reported' | 'hidden'
 
@@ -60,12 +66,18 @@ export default function GiftModerationSection({
   const [error, setError] = useState<string | null>(null)
   const [needsGoogle, setNeedsGoogle] = useState(false)
 
-  // Track banned user IDs locally so the button toggles correctly within the session.
-  const [bannedUsers, setBannedUsers] = useState<Set<number>>(new Set())
-
   // Campaign map: campaignId → name (loaded once).
   const [campaignNames, setCampaignNames] = useState<Map<number, string>>(new Map())
   const campaignsLoaded = useRef(false)
+
+  // Tombstones
+  const [tombstones, setTombstones] = useState<AdminTombstoneItem[]>([])
+  const [tombstonesLoading, setTombstonesLoading] = useState(false)
+  const [tombstonesError, setTombstonesError] = useState<string | null>(null)
+
+  // Stale-response guard: each loadGifts call gets a unique request id; responses
+  // from an older request (different tab) are discarded.
+  const currentRidRef = useRef(0)
 
   // Load campaigns for the name column (best-effort; not critical).
   useEffect(() => {
@@ -78,20 +90,31 @@ export default function GiftModerationSection({
       .catch(() => { /* non-critical; campaign name column shows id fallback */ })
   }, [])
 
+  // Load tombstones once
+  useEffect(() => {
+    setTombstonesLoading(true)
+    listAdminTombstones()
+      .then((rows) => { setTombstones(rows); setTombstonesLoading(false) })
+      .catch(() => { setTombstonesError('Không tải được danh sách tài khoản.'); setTombstonesLoading(false) })
+  }, [])
+
   const loadGifts = useCallback(async (filter: FilterTab) => {
+    const rid = ++currentRidRef.current
     setLoading(true)
     setError(null)
     setNeedsGoogle(false)
     try {
       const data = await listAdminGifts(filter)
+      // Stale-response guard: discard if a newer request was started
+      if (rid !== currentRidRef.current) return
       setGifts(data)
       if (filter === 'reported' && onReportedCountChange) {
         onReportedCountChange(data.length)
       }
     } catch (e) {
+      if (rid !== currentRidRef.current) return
       if (e instanceof ApiError && e.status === 401) {
         setNeedsGoogle(true)
-        // Also bubble up — Admin.tsx may reset the sign-in gate.
         onAccessError(e)
       } else if (!onAccessError(e)) {
         setError(giftModerationErrorMessage(
@@ -100,7 +123,7 @@ export default function GiftModerationSection({
         ))
       }
     } finally {
-      setLoading(false)
+      if (rid === currentRidRef.current) setLoading(false)
     }
   }, [onAccessError, onReportedCountChange])
 
@@ -110,11 +133,11 @@ export default function GiftModerationSection({
 
   // ── Action handlers ───────────────────────────────────────────────────────
 
-  async function handleGiftAction(
+  const handleGiftAction = useCallback(async (
     gift: AdminGiftItem,
     action: 'restore' | 'hide' | 'delete',
     buttonRef: React.RefObject<HTMLButtonElement | null>,
-  ) {
+  ) => {
     const confirmMsg = giftActionConfirmText(action)
     if (!window.confirm(confirmMsg)) {
       buttonRef.current?.focus()
@@ -130,11 +153,14 @@ export default function GiftModerationSection({
     setError(null)
     try {
       await updateAdminGiftStatus(gift.id, statusMap[action])
-      // Remove from list (the gift's status changed; reload will reconcile).
-      setGifts((prev) => prev.filter((g) => g.id !== gift.id))
-      if (tab === 'reported' && onReportedCountChange) {
-        onReportedCountChange(Math.max(0, gifts.length - 1))
-      }
+      // Remove from list immediately; use functional update for accurate count
+      setGifts((prev) => {
+        const next = prev.filter((g) => g.id !== gift.id)
+        if (tab === 'reported' && onReportedCountChange) {
+          onReportedCountChange(next.length)
+        }
+        return next
+      })
     } catch (e) {
       buttonRef.current?.focus()
       if (!onAccessError(e)) {
@@ -144,13 +170,13 @@ export default function GiftModerationSection({
         ))
       }
     }
-  }
+  }, [tab, onAccessError, onReportedCountChange])
 
-  async function handleUserAction(
+  const handleUserAction = useCallback(async (
     gift: AdminGiftItem,
     action: 'ban' | 'unban',
     buttonRef: React.RefObject<HTMLButtonElement | null>,
-  ) {
+  ) => {
     const confirmMsg = userActionConfirmText(action)
     if (!window.confirm(confirmMsg)) {
       buttonRef.current?.focus()
@@ -160,14 +186,13 @@ export default function GiftModerationSection({
     setError(null)
     try {
       await banAdminUser(gift.userId, action === 'ban')
-      // Update local banned state so the button toggles.
-      setBannedUsers((prev) => {
-        const next = new Set(prev)
-        if (action === 'ban') next.add(gift.userId)
-        else next.delete(gift.userId)
-        return next
-      })
-      // A ban hides the user's gifts — reload to reflect any removals from this list.
+      // Update the gift's userBanned field in the local list
+      setGifts((prev) =>
+        prev.map((g) =>
+          g.userId === gift.userId ? { ...g, userBanned: action === 'ban' } : g,
+        ),
+      )
+      // A ban hides the user's gifts — reload to reflect removals from this list
       if (action === 'ban') void loadGifts(tab)
     } catch (e) {
       buttonRef.current?.focus()
@@ -178,7 +203,17 @@ export default function GiftModerationSection({
         ))
       }
     }
-  }
+  }, [tab, loadGifts, onAccessError])
+
+  const handleRemoveTombstone = useCallback(async (id: number) => {
+    if (!window.confirm('Gỡ khóa tài khoản đã xoá này? Người dùng có thể đăng nhập lại bằng cùng tài khoản Google.')) return
+    try {
+      await deleteAdminTombstone(id)
+      setTombstones((prev) => prev.filter((t) => t.id !== id))
+    } catch {
+      setTombstonesError('Không thể gỡ khóa. Vui lòng thử lại.')
+    }
+  }, [])
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -236,7 +271,6 @@ export default function GiftModerationSection({
             <GiftModerationRow
               key={gift.id}
               gift={gift}
-              isBanned={bannedUsers.has(gift.userId)}
               campaignName={campaignNames.get(gift.campaignId)}
               onGiftAction={(action, ref) => { void handleGiftAction(gift, action, ref) }}
               onUserAction={(action, ref) => { void handleUserAction(gift, action, ref) }}
@@ -244,7 +278,62 @@ export default function GiftModerationSection({
           ))}
         </div>
       </div>
+
+      {/* Tombstone section */}
+      <TombstoneSection
+        tombstones={tombstones}
+        loading={tombstonesLoading}
+        error={tombstonesError}
+        onRemove={handleRemoveTombstone}
+      />
     </div>
+  )
+}
+
+// ── Tombstone section ─────────────────────────────────────────────────────────
+
+function TombstoneSection({
+  tombstones,
+  loading,
+  error,
+  onRemove,
+}: {
+  tombstones: AdminTombstoneItem[]
+  loading: boolean
+  error: string | null
+  onRemove: (id: number) => void
+}) {
+  return (
+    <section style={{ marginTop: '2rem' }}>
+      <h3 style={{ marginBottom: '0.5rem' }}>Tài khoản đã xoá bị khoá</h3>
+      <p className="admin-hint" style={{ fontSize: '0.875rem', color: '#78716c', marginBottom: '0.75rem' }}>
+        Những tài khoản này đã xoá tài khoản trong khi bị khoá. Người dùng không thể đăng nhập lại cho đến khi được gỡ khóa.
+      </p>
+      {error && <p className="admin-error" role="alert">{error}</p>}
+      {loading && <p className="admin-loading">Đang tải…</p>}
+      {!loading && tombstones.length === 0 && (
+        <p className="admin-empty">Không có tài khoản nào bị khoá sau khi xoá.</p>
+      )}
+      {tombstones.map((t) => (
+        <div
+          key={t.id}
+          className="mod-item"
+          style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0' }}
+        >
+          <span style={{ fontSize: '0.875rem', color: '#78716c' }}>
+            ID #{t.id} · {new Date(t.createdAt).toLocaleString('vi-VN')}
+          </span>
+          <button
+            type="button"
+            className="btn-warn"
+            onClick={() => onRemove(t.id)}
+            aria-label={`Gỡ khóa tài khoản tombstone ${t.id}`}
+          >
+            Gỡ khóa
+          </button>
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -252,7 +341,6 @@ export default function GiftModerationSection({
 
 type GiftModerationRowProps = {
   gift: AdminGiftItem
-  isBanned: boolean
   campaignName: string | undefined
   onGiftAction: (
     action: 'restore' | 'hide' | 'delete',
@@ -266,7 +354,6 @@ type GiftModerationRowProps = {
 
 function GiftModerationRow({
   gift,
-  isBanned,
   campaignName,
   onGiftAction,
   onUserAction,
@@ -275,22 +362,20 @@ function GiftModerationRow({
   const hideRef = useRef<HTMLButtonElement>(null)
   const deleteRef = useRef<HTMLButtonElement>(null)
   const banRef = useRef<HTMLButtonElement>(null)
-  const unbanRef = useRef<HTMLButtonElement>(null)
 
   const actions = availableGiftActions(gift.status as Parameters<typeof availableGiftActions>[0])
 
-  // Build the card preview with what the endpoint provides.
-  // CardView currently renders teacher-card semantics; "another engineer" will add optional props.
-  // We render as-is and place gift-specific lines beside it.
+  // Noel card preview props: use campaign name for card name line (matches giftToCardViewProps),
+  // toLine=null and subLine=null hide the teacher-card greeting/subject lines.
+  const campaignLabel = campaignName ?? `Chiến dịch ${gift.campaignId}`
   const previewCard = {
-    name: gift.nickname,          // gift sender nickname as the card name line
-    subject: gift.className,      // class as subject line (best available fit)
+    name: campaignLabel,
+    subject: '',
     message: gift.message,
     title: null as null,
   }
-
-  const campaignLabel = campaignName ?? `Chiến dịch ${gift.campaignId}`
   const statusLabel = giftStatusLabel(gift.status as Parameters<typeof giftStatusLabel>[0])
+  const isBanned = gift.userBanned
 
   return (
     <article
@@ -298,7 +383,7 @@ function GiftModerationRow({
       aria-label={`Quà của ${gift.nickname}, ${gift.className}`}
     >
       <div className="mod-item-layout">
-        {/* Card preview — CardView rendered as-is; gift info lines placed beside it */}
+        {/* Card preview with Noel semantics */}
         <div className="mod-card-thumb" aria-hidden="true">
           <div className="card-mini">
             <CardView
@@ -307,7 +392,10 @@ function GiftModerationRow({
               font={gift.font}
               ink={gift.ink}
               images={{}}
-              from={`${gift.nickname} · ${gift.className}`}
+              from={`${gift.nickname}${gift.className ? ` · ${gift.className}` : ''}`}
+              toLine={null}
+              subLine={null}
+              stamp={`${site.title} · Noel`}
               headingLevel="h2"
             />
           </div>
@@ -318,8 +406,7 @@ function GiftModerationRow({
           {/* Sender info */}
           <div className="mod-item-teacher">
             <strong>{gift.nickname}</strong>
-            {' · '}
-            {gift.className}
+            {gift.className ? <> · {gift.className}</> : null}
             {isBanned && (
               <span
                 className="pending-badge"
@@ -395,7 +482,7 @@ function GiftModerationRow({
             )}
           </div>
 
-          {/* User moderation actions */}
+          {/* User moderation: Khoá/Mở khoá chosen from gift.userBanned */}
           <div
             className="admin-actions"
             aria-label="Thao tác với người dùng"
@@ -413,10 +500,10 @@ function GiftModerationRow({
               </button>
             ) : (
               <button
-                ref={unbanRef}
+                ref={banRef}
                 type="button"
                 className="btn-warn"
-                onClick={() => onUserAction('unban', unbanRef)}
+                onClick={() => onUserAction('unban', banRef)}
                 aria-label={`Mở khoá tài khoản userId ${gift.userId}`}
               >
                 Mở khoá người dùng

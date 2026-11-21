@@ -16,6 +16,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { getCampaign, ApiError } from '../api'
+import ErrorBoundary from '../components/ErrorBoundary.tsx'
 import type { CampaignData } from '../api'
 
 // NoelPage is lazy so teacher-cards pages never load game code
@@ -25,18 +26,31 @@ export default function CampaignPage() {
   const { slug, publicId } = useParams<{ slug: string; publicId?: string }>()
   const [campaign, setCampaign] = useState<CampaignData | null>(null)
   const [notFound, setNotFound] = useState(false)
+  const [networkError, setNetworkError] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!slug) return
+    let cancelled = false
     setLoading(true)
     setNotFound(false)
+    setNetworkError(false)
     getCampaign(slug)
-      .then((c) => { setCampaign(c); setLoading(false) })
-      .catch((e) => {
-        if (e instanceof ApiError && e.status === 404) setNotFound(true)
+      .then((c) => {
+        if (cancelled) return
+        setCampaign(c)
         setLoading(false)
       })
+      .catch((e) => {
+        if (cancelled) return
+        if (e instanceof ApiError && e.status === 404) {
+          setNotFound(true)
+        } else {
+          setNetworkError(true)
+        }
+        setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [slug])
 
   if (loading) {
@@ -55,12 +69,22 @@ export default function CampaignPage() {
     )
   }
 
+  if (networkError) {
+    return (
+      <section className="wall-hero">
+        <p>Lỗi kết nối, vui lòng thử lại.</p>
+      </section>
+    )
+  }
+
   // gift_tree campaigns render the Noel page (lazy-loaded)
   if (campaign.kind === 'gift_tree') {
     return (
-      <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
-        <NoelPage slug={slug} focusPublicId={publicId} />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
+          <NoelPage slug={slug} focusPublicId={publicId} />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 

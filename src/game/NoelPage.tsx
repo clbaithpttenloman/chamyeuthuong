@@ -11,16 +11,23 @@
  *   Action bar — Treo quà / Bảng xếp hạng / Tất cả quà (closed state: hidden)
  *
  * Polling (ADR-7):
- *   GET /api/campaigns/<slug>/tree polled with nextPollDelay only while visible.
- *   Backoff: 1.5× per consecutive failure, capped at 120 s.
- *   Local heart override (mergeHeart) keeps optimistic counts until a later server
- *   response confirms (server.asOf > local.asOf && server.count >= local.count).
+ *   createPoller from ./poller.ts — single chain, in-flight/generation guard,
+ *   visibility pause/resume, backoff, abort/timeout, cleaned up on unmount/slug change.
+ *   pollNow() after gift create to surface the new gift promptly.
+ *   campaignOpen from each tree response's `open` field.
+ *
+ * Heart overrides (ADR-7):
+ *   Optimistic heart counts via heartOverrides.ts, keyed to server asOf (not client clock).
+ *   reconcileHeartRejection handles already_hearted/hearts_exhausted/campaign_closed errors.
+ *   heartsLeft refreshed at the next Vietnam midnight (msUntilVietnamMidnight).
+ *
+ * Solo gift (share link / AllGifts / Leaderboard):
+ *   Fetched once per openGiftId change when not in tree; closes only on 404;
+ *   override applied; rank 0 not shown (GiftSheet guards it).
  *
  * Closed state (FR-28, AC-3):
  *   When campaign.open is false, the action bar is hidden and "Chiến dịch đã kết thúc"
  *   is shown as a banner.  The tree remains viewable.
- *
- * Part B: CreateGift, Leaderboard, AllGifts, MyGifts dialogs wired.
  */
 import {
   lazy,
@@ -34,7 +41,16 @@ import {
 } from 'react'
 import { Scene, type TreeGift } from './Scene.tsx'
 import { focusGiftButton } from './focusReturn.ts'
-import { nextPollDelay, mergeHeart, type HeartState } from './poll.ts'
+import { nextPollDelay } from './poll.ts'
+import {
+  applyOverride,
+  addOverride,
+  reconcileOverrides,
+  type OverrideMap,
+} from './heartOverrides.ts'
+import { msUntilVietnamMidnight, reconcileHeartRejection } from './meRefresh.ts'
+import { createPoller, type Poller } from './poller.ts'
+import { useDialog } from './useDialog.ts'
 import {
   getNoelTree,
   getMeForCampaign,
@@ -45,6 +61,7 @@ import {
   getNoelTemplates,
   getGiftByPublicId,
   logout,
+  ApiError,
   type NoelTemplate,
   type NoelGift,
   type NoelGiftFlat,
@@ -87,18 +104,53 @@ function toTreeGift(g: NoelGift): TreeGift {
   }
 }
 
-/** Returns a gift with its heartCount overridden if a local heart is still pending. */
-function applyOverride(gift: NoelGift, overrides: Map<string, HeartState>, serverAsOf: number): NoelGift {
-  const local = overrides.get(gift.publicId)
-  if (!local) return gift
-  const merged = mergeHeart(local, { asOf: serverAsOf, count: gift.heartCount })
-  if (merged.count === gift.heartCount) return gift
-  return { ...gift, heartCount: merged.count }
-}
-
-/** Converts a NoelGiftFlat (no rank/place) to a NoelGift with rank=0 for solo display. */
+/** Converts a NoelGiftFlat (no rank/place) to a NoelGift with rank=0, place='ground'. */
 function flatToNoelGift(g: NoelGiftFlat): NoelGift {
   return { ...g, rank: 0, place: 'ground' }
+}
+
+// ── Sign-in dialog sub-component (uses useDialog for focus trap) ──────────────
+
+function SignInDialog({
+  onClose,
+  onSignedIn,
+  returnFocusRef,
+}: {
+  onClose: () => void
+  onSignedIn: () => void
+  returnFocusRef?: React.RefObject<HTMLElement | null>
+}): ReactNode {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose })
+  useDialog({ dialogRef, onCloseRef, returnFocusRef })
+
+  return (
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Đăng nhập"
+      className="noel-signin-backdrop"
+      tabIndex={-1}
+      onClick={onClose}
+    >
+      <div
+        className="noel-signin-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="noel-signin-header">
+          <h2>Đăng nhập để thả tim</h2>
+          <button type="button" aria-label="Đóng" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
+          <GoogleSignIn onSignedIn={onSignedIn} />
+        </Suspense>
+      </div>
+    </div>
+  )
 }
 
 // ── NoelPage component ────────────────────────────────────────────────────────
@@ -111,21 +163,38 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   const [groundSlots, setGroundSlots] = useState(10)
   const [giftsPerUser, setGiftsPerUser] = useState(3)
 
-  // Card backgrounds of this campaign (loaded once; gifts reference them by template id)
+  // Templates: load error state so user can retry (review finding)
   const [templates, setTemplates] = useState<NoelTemplate[]>([])
-  useEffect(() => {
+  const [templatesLoadError, setTemplatesLoadError] = useState(false)
+
+  const loadTemplates = useCallback(() => {
     let alive = true
-    getNoelTemplates(slug).then((t) => { if (alive) setTemplates(t) }).catch(() => { /* cards render without a background */ })
+    setTemplatesLoadError(false)
+    getNoelTemplates(slug)
+      .then((t) => { if (alive) setTemplates(t) })
+      .catch(() => { if (alive) setTemplatesLoadError(true) })
     return () => { alive = false }
   }, [slug])
 
+  useEffect(() => loadTemplates(), [loadTemplates])
+
   // Tree data (from polling)
   const [treeData, setTreeData] = useState<NoelTreeData | null>(null)
+  // Store the most recent server asOf (ms) for override keying; ref for use in heart handler
+  const serverAsOfRef = useRef<number>(0)
 
   // Per-user state
   const [user, setUser] = useState<MeUser | null>(null)
   const [heartsLeft, setHeartsLeft] = useState(5)
   const [heartedIds, setHeartedIds] = useState<Set<string>>(new Set())
+
+  // Refs for heart reconciliation (read in handleHeart without depending on state values)
+  const heartsLeftRef = useRef(heartsLeft)
+  heartsLeftRef.current = heartsLeft
+  const heartedIdsRef = useRef(heartedIds)
+  heartedIdsRef.current = heartedIds
+  const campaignOpenRef = useRef(campaignOpen)
+  campaignOpenRef.current = campaignOpen
 
   // My gifts (loaded after sign-in and after create/delete)
   const [myGifts, setMyGifts] = useState<Array<NoelGift & { status: string }>>([])
@@ -141,8 +210,8 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
     [myGifts],
   )
 
-  // Optimistic heart overrides (publicId → HeartState), ADR-7
-  const [localOverrides, setLocalOverrides] = useState<Map<string, HeartState>>(new Map())
+  // Optimistic heart overrides (publicId → HeartOverride), ADR-7
+  const [localOverrides, setLocalOverrides] = useState<OverrideMap>(new Map())
 
   // Open gift ID (null = sheet closed)
   const [openGiftId, setOpenGiftId] = useState<string | null>(focusPublicId ?? null)
@@ -151,9 +220,12 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
 
   // Solo gift: for gifts opened from AllGifts/Leaderboard that aren't in the tree
   const [soloGift, setSoloGift] = useState<NoelGift | null>(null)
+  // Track which ID was last fetched so we don't refetch on every poll
+  const soloFetchedForRef = useRef<string | null>(null)
 
   // Sign-in dialog
   const [signInVisible, setSignInVisible] = useState(false)
+  const signinReturnRef = useRef<HTMLButtonElement | null>(null)
 
   // Dialog states for Part B flows
   const [showCreateGift, setShowCreateGift] = useState(false)
@@ -164,6 +236,12 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   // User menu dropdown
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
+
+  // Logout error message
+  const [logoutError, setLogoutError] = useState<string | null>(null)
+
+  // Poller ref so pollNow() can be called from anywhere
+  const pollerRef = useRef<Poller | null>(null)
 
   // ── Fetch campaign metadata ─────────────────────────────────────────────
   useEffect(() => {
@@ -196,6 +274,15 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
     refreshMe().catch(() => { /* anonymous defaults stay */ })
   }, [refreshMe])
 
+  // ── Refresh me at Vietnam midnight (heartsLeft resets at 00:00 ICT) ──────
+  useEffect(() => {
+    const ms = msUntilVietnamMidnight(Date.now())
+    const timer = setTimeout(() => {
+      refreshMe().catch(() => {})
+    }, ms)
+    return () => clearTimeout(timer)
+  }, [refreshMe])
+
   // ── Load my gifts ─────────────────────────────────────────────────────────
   const refreshMyGifts = useCallback(async () => {
     if (!user) return
@@ -211,59 +298,33 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
     }
   }, [refreshMyGifts, user])
 
-  // ── Poll tree while visible (ADR-7) ──────────────────────────────────────
+  // ── Poll tree while visible (ADR-7) via createPoller ─────────────────────
   useEffect(() => {
-    let alive = true
-    let failures = 0
-    let timer: ReturnType<typeof setTimeout> | null = null
-
-    const doPoll = async () => {
-      if (!alive || document.visibilityState === 'hidden') return
-      try {
-        const data = await getNoelTree(slug)
-        if (!alive) return
-        failures = 0
-        const serverAsOf = Date.parse(data.asOf)
-        setLocalOverrides((prev) => {
-          if (prev.size === 0) return prev
-          const next = new Map(prev)
-          for (const [pid, local] of next) {
-            const serverGift = data.gifts.find((g) => g.publicId === pid)
-            if (!serverGift) continue
-            const merged = mergeHeart(local, { asOf: serverAsOf, count: serverGift.heartCount })
-            if (merged === local) {
-              // local still wins: keep it
-            } else {
-              next.delete(pid)
-            }
-          }
-          return next.size === prev.size && [...next.entries()].every(([k, v]) => prev.get(k) === v)
-            ? prev
-            : next
-        })
+    const poller = createPoller<NoelTreeData>({
+      fetch: (signal) => getNoelTree(slug, signal),
+      schedule: (fn, ms) => setTimeout(fn, ms),
+      clearSchedule: (id) => clearTimeout(id),
+      isVisible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
+      onData: (data) => {
+        const newAsOf = Date.parse(data.asOf)
+        serverAsOfRef.current = newAsOf
+        // Update campaignOpen from each tree response
+        setCampaignOpen(data.open)
+        // Reconcile overrides: drop for absent gifts or confirmed by server
+        setLocalOverrides((prev) => reconcileOverrides(prev, data.gifts, newAsOf))
         setTreeData(data)
-      } catch {
-        if (!alive) return
-        failures = Math.min(failures + 1, 10)
-      }
-      if (!alive) return
-      const delay = nextPollDelay(() => Math.random(), failures)
-      timer = setTimeout(() => { doPoll().catch(() => {}) }, delay)
-    }
+      },
+      onError: () => { /* use defaults; next poll will retry */ },
+      nextDelay: (failures) => nextPollDelay(() => Math.random(), failures),
+    })
+    pollerRef.current = poller
 
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        if (timer) { clearTimeout(timer); timer = null }
-        doPoll().catch(() => {})
-      }
-    }
-
-    doPoll().catch(() => {})
+    const handleVisibility = () => poller.handleVisibilityChange()
     document.addEventListener('visibilitychange', handleVisibility)
 
     return () => {
-      alive = false
-      if (timer) clearTimeout(timer)
+      poller.stop()
+      pollerRef.current = null
       document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [slug])
@@ -272,15 +333,22 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   const mergedGifts = useMemo<NoelGift[]>(() => {
     if (!treeData) return []
     if (localOverrides.size === 0) return treeData.gifts
-    const serverAsOf = Date.parse(treeData.asOf)
-    return treeData.gifts.map((g) => applyOverride(g, localOverrides, serverAsOf))
+    return treeData.gifts.map((g) => ({
+      ...g,
+      heartCount: applyOverride(g.publicId, g.heartCount, localOverrides),
+    }))
   }, [treeData, localOverrides])
+
+  // Ref for checking inTree in solo fetch without adding mergedGifts to deps
+  const mergedGiftsRef = useRef(mergedGifts)
+  mergedGiftsRef.current = mergedGifts
 
   const sceneGifts = useMemo<TreeGift[]>(() => mergedGifts.map(toTreeGift), [mergedGifts])
 
   // ── Open / close gift sheet ───────────────────────────────────────────────
   const handleOpen = useCallback((publicId: string) => {
     setSoloGift(null)
+    soloFetchedForRef.current = null
     setOpenGiftId(publicId)
   }, [])
 
@@ -288,12 +356,14 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
     const shown = openGiftIdRef.current
     setOpenGiftId(null)
     setSoloGift(null)
+    soloFetchedForRef.current = null
     // After the dialog unmounts, put keyboard focus back on that gift (or the "Tất cả quà" button).
     requestAnimationFrame(() => focusGiftButton(document, shown, allGiftsBtnRef.current))
   }, [])
 
   const handleNavigate = useCallback((publicId: string) => {
     setSoloGift(null)
+    soloFetchedForRef.current = null
     setOpenGiftId(publicId)
   }, [])
 
@@ -303,37 +373,71 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
       setShowLeaderboard(false)
       setShowAllGifts(false)
       setSoloGift(null)
+      soloFetchedForRef.current = null
       setOpenGiftId(publicId)
     },
     [],
   )
 
-  // If openGiftId is set but not in mergedGifts, fetch the gift individually
+  // ── Solo gift fetch: once per openGiftId when not in tree ────────────────
+  // Split into two effects:
+  // Effect A: responds to openGiftId change — fetches the gift if not in tree.
+  // Effect B: responds to mergedGifts change — clears soloGift if it arrived in tree.
   useEffect(() => {
-    if (!openGiftId) { setSoloGift(null); return }
-    if (mergedGifts.some((g) => g.publicId === openGiftId)) {
+    if (!openGiftId) {
       setSoloGift(null)
+      soloFetchedForRef.current = null
       return
     }
-    // Gift not in tree — fetch it individually
+    // If the gift is already in the current tree, no fetch needed
+    if (mergedGiftsRef.current.some((g) => g.publicId === openGiftId)) {
+      setSoloGift(null)
+      soloFetchedForRef.current = null
+      return
+    }
+    // Already fetched for this id — don't re-fetch
+    if (soloFetchedForRef.current === openGiftId) return
+
+    soloFetchedForRef.current = openGiftId
     let alive = true
     getGiftByPublicId(openGiftId)
-      .then((g: NoelGiftFlat) => {
-        if (alive) setSoloGift(flatToNoelGift(g))
-      })
-      .catch(() => {
-        // Gift unavailable (hidden/deleted) — close the sheet
-        if (alive) setOpenGiftId(null)
+      .then((g: NoelGiftFlat) => { if (alive) setSoloGift(flatToNoelGift(g)) })
+      .catch((err: unknown) => {
+        if (!alive) return
+        // Close only on 404 (gift hidden/deleted); leave open on transient errors
+        if (err instanceof ApiError && err.status === 404) {
+          setOpenGiftId(null)
+          setSoloGift(null)
+          soloFetchedForRef.current = null
+        }
+        // For other errors: soloGift stays null; sheet remains open with no content
       })
     return () => { alive = false }
-  }, [openGiftId, mergedGifts])
+  }, [openGiftId]) // intentionally excludes mergedGifts — effect A only on id change
 
-  const openGift = useMemo(
-    () =>
-      mergedGifts.find((g) => g.publicId === openGiftId) ??
-      (soloGift?.publicId === openGiftId ? soloGift : undefined),
-    [mergedGifts, openGiftId, soloGift],
-  )
+  // Effect B: when a solo gift appears in the tree, clear soloGift
+  useEffect(() => {
+    if (!soloGift) return
+    if (mergedGifts.some((g) => g.publicId === soloGift.publicId)) {
+      setSoloGift(null)
+      soloFetchedForRef.current = null
+    }
+  }, [mergedGifts, soloGift])
+
+  // ── Computed: open gift for the GiftSheet ────────────────────────────────
+  const openGift = useMemo(() => {
+    if (!openGiftId) return undefined
+    // Check in merged tree first
+    const inTree = mergedGifts.find((g) => g.publicId === openGiftId)
+    if (inTree) return inTree
+    // Apply override to solo gift too
+    if (soloGift?.publicId === openGiftId) {
+      const count = applyOverride(soloGift.publicId, soloGift.heartCount, localOverrides)
+      if (count === soloGift.heartCount) return soloGift
+      return { ...soloGift, heartCount: count }
+    }
+    return undefined
+  }, [mergedGifts, openGiftId, soloGift, localOverrides])
 
   // The allGifts list for GiftSheet navigation:
   // If the opened gift is a soloGift (not in tree), only it is in the list (no prev/next).
@@ -345,11 +449,27 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
 
   // ── Heart handler ─────────────────────────────────────────────────────────
   const handleHeart = useCallback(async (publicId: string): Promise<void> => {
-    const result = await heartGift(publicId)
-    setHeartsLeft(result.heartsLeft)
-    setHeartedIds((prev) => new Set([...prev, publicId]))
-    setLocalOverrides((prev) => new Map([...prev, [publicId, { asOf: Date.now(), count: result.heartCount }]]))
-  }, [])
+    try {
+      const result = await heartGift(publicId)
+      setHeartsLeft(result.heartsLeft)
+      setHeartedIds((prev) => new Set([...prev, publicId]))
+      setLocalOverrides((prev) => addOverride(prev, publicId, result.heartCount, serverAsOfRef.current))
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'unknown'
+      const reconciled = reconcileHeartRejection(
+        code,
+        publicId,
+        heartedIdsRef.current,
+        heartsLeftRef.current,
+        campaignOpenRef.current,
+      )
+      setHeartedIds(reconciled.heartedIds as Set<string>)
+      setHeartsLeft(reconciled.heartsLeft)
+      setCampaignOpen(reconciled.campaignOpen)
+      if (reconciled.needsRefreshMe) refreshMe().catch(() => {})
+      throw err
+    }
+  }, [refreshMe])
 
   // ── Report handler ────────────────────────────────────────────────────────
   const handleReport = useCallback(async (publicId: string, reason: ReportReason): Promise<void> => {
@@ -357,13 +477,21 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   }, [])
 
   // ── Sign-in ───────────────────────────────────────────────────────────────
-  const handleSignIn = useCallback(() => setSignInVisible(true), [])
+  // The sign-in button ref is used for focus return
+  const signinBtnRef = useRef<HTMLButtonElement | null>(null)
+  const handleSignIn = useCallback(() => {
+    signinReturnRef.current = signinBtnRef.current
+    setSignInVisible(true)
+  }, [])
 
   // ── After sign-in ─────────────────────────────────────────────────────────
   const handleSignedIn = useCallback(() => {
     setSignInVisible(false)
     refreshMe().catch(() => {})
   }, [refreshMe])
+
+  // ── Close sign-in ─────────────────────────────────────────────────────────
+  const handleCloseSignIn = useCallback(() => setSignInVisible(false), [])
 
   // ── Sign-out ──────────────────────────────────────────────────────────────
   const handleSignOut = useCallback(() => {
@@ -383,18 +511,31 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   const handleLeaderboard = useCallback(() => setShowLeaderboard(true), [])
   const handleAllGifts = useCallback(() => setShowAllGifts(true), [])
 
+  // ── Stable onClose handlers for each dialog ───────────────────────────────
+  const handleCloseCreateGift = useCallback(() => setShowCreateGift(false), [])
+  const handleCloseLeaderboard = useCallback(() => setShowLeaderboard(false), [])
+  const handleCloseAllGifts = useCallback(() => setShowAllGifts(false), [])
+  const handleCloseMyGifts = useCallback(() => setShowMyGifts(false), [])
+
   // ── After gift created ────────────────────────────────────────────────────
   const handleGiftCreated = useCallback(
     (publicId: string) => {
       setShowCreateGift(false)
-      // Force a fresh tree poll to pick up the new gift
       setSoloGift(null)
+      soloFetchedForRef.current = null
       setOpenGiftId(publicId)
+      // Poll immediately to surface the new gift
+      pollerRef.current?.pollNow()
       // Refresh my gifts so quota is updated
       refreshMyGifts().catch(() => {})
     },
     [refreshMyGifts],
   )
+
+  // ── User updated callback ─────────────────────────────────────────────────
+  const handleUserUpdated = useCallback((nickname: string, className: string) => {
+    setUser((prev) => prev ? { ...prev, nickname, className } : prev)
+  }, [])
 
   // ── After gift deleted from MyGifts ──────────────────────────────────────
   const handleGiftDeleted = useCallback(
@@ -416,6 +557,18 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [userMenuOpen])
+
+  // ── Logout handler ────────────────────────────────────────────────────────
+  const handleLogout = useCallback(async () => {
+    setLogoutError(null)
+    try {
+      await logout()
+    } catch {
+      setLogoutError('Đăng xuất thất bại. Vui lòng thử lại.')
+      return
+    }
+    handleSignOut()
+  }, [handleSignOut])
 
   // ── in-app browser detection ──────────────────────────────────────────────
   const isInApp = typeof navigator !== 'undefined' && isInAppBrowser(navigator.userAgent)
@@ -464,7 +617,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
                   <button
                     type="button"
                     role="menuitem"
-                    ref={myGiftsBtnRef}
+                    ref={myGiftsBtnRef as React.RefObject<HTMLButtonElement>}
                     className="noel-user-menu-item"
                     onClick={() => {
                       setShowMyGifts(true)
@@ -473,14 +626,16 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
                   >
                     🎁 Quà của tôi
                   </button>
+                  {logoutError && (
+                    <p className="noel-logout-error" role="alert" style={{ fontSize: '0.8rem', color: '#ef4444', padding: '0 0.5rem' }}>
+                      {logoutError}
+                    </p>
+                  )}
                   <button
                     type="button"
                     role="menuitem"
                     className="noel-user-menu-item"
-                    onClick={async () => {
-                      await logout()
-                      handleSignOut()
-                    }}
+                    onClick={() => { void handleLogout() }}
                   >
                     Đăng xuất
                   </button>
@@ -492,6 +647,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
           ) : (
             <button
               type="button"
+              ref={signinBtnRef}
               className="noel-page-signin-btn"
               onClick={handleSignIn}
             >
@@ -572,34 +728,13 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
         </Suspense>
       )}
 
-      {/* ── Sign-in dialog */}
+      {/* ── Sign-in dialog (focus-managed via useDialog) */}
       {signInVisible && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Đăng nhập"
-          className="noel-signin-backdrop"
-          onClick={() => setSignInVisible(false)}
-        >
-          <div
-            className="noel-signin-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="noel-signin-header">
-              <h2>Đăng nhập để thả tim</h2>
-              <button
-                type="button"
-                aria-label="Đóng"
-                onClick={() => setSignInVisible(false)}
-              >
-                ✕
-              </button>
-            </div>
-            <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
-              <GoogleSignIn onSignedIn={handleSignedIn} />
-            </Suspense>
-          </div>
-        </div>
+        <SignInDialog
+          onClose={handleCloseSignIn}
+          onSignedIn={handleSignedIn}
+          returnFocusRef={signinReturnRef as React.RefObject<HTMLElement | null>}
+        />
       )}
 
       {/* ── Create Gift dialog */}
@@ -613,13 +748,13 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
             myGiftCount={myGiftCount}
             giftsPerUser={giftsPerUser}
             templates={templates}
+            templatesLoadError={templatesLoadError}
+            onRetryTemplates={loadTemplates}
             isInApp={isInApp}
             onSignIn={handleSignIn}
             onSuccess={handleGiftCreated}
-            onUserUpdated={(nickname, className) => {
-              setUser((prev) => prev ? { ...prev, nickname, className } : prev)
-            }}
-            onClose={() => setShowCreateGift(false)}
+            onUserUpdated={handleUserUpdated}
+            onClose={handleCloseCreateGift}
             returnFocusRef={createGiftBtnRef}
           />
         </Suspense>
@@ -630,7 +765,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
         <Suspense fallback={null}>
           <Leaderboard
             gifts={mergedGifts}
-            onClose={() => setShowLeaderboard(false)}
+            onClose={handleCloseLeaderboard}
             onOpenGift={handleOpenExternalGift}
             returnFocusRef={leaderboardBtnRef}
           />
@@ -642,7 +777,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
         <Suspense fallback={null}>
           <AllGifts
             slug={slug}
-            onClose={() => setShowAllGifts(false)}
+            onClose={handleCloseAllGifts}
             onOpenGift={handleOpenExternalGift}
             returnFocusRef={allGiftsBtnRef}
           />
@@ -654,7 +789,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
         <Suspense fallback={null}>
           <MyGifts
             slug={slug}
-            onClose={() => setShowMyGifts(false)}
+            onClose={handleCloseMyGifts}
             onSignOut={handleSignOut}
             onOpenGift={handleOpenExternalGift}
             onGiftDeleted={handleGiftDeleted}

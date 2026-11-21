@@ -84,6 +84,10 @@ export interface CreateGiftProps {
   /** Maximum gifts per user from campaign settings. */
   giftsPerUser: number
   templates: ReadonlyArray<NoelTemplate>
+  /** True when the template fetch failed (shows an error with a retry button). */
+  templatesLoadError?: boolean
+  /** Called to retry loading templates. */
+  onRetryTemplates?: () => void
   /** Whether the user is using an in-app browser. */
   isInApp: boolean
   onSignIn: () => void
@@ -133,6 +137,8 @@ export default function CreateGift({
   myGiftCount,
   giftsPerUser,
   templates,
+  templatesLoadError,
+  onRetryTemplates,
   isInApp,
   onSignIn,
   onSuccess,
@@ -211,6 +217,7 @@ export default function CreateGift({
   // ── Navigation helpers ────────────────────────────────────────────────
   const goBack = useCallback(() => {
     setStepError(null)
+    setWrapError(null)
     setStep((s) => {
       const idx = WIZARD_STEPS.indexOf(s)
       return idx > 0 ? WIZARD_STEPS[idx - 1]! : s
@@ -223,7 +230,10 @@ export default function CreateGift({
     switch (step) {
       case 'box':      err = validateBox(draft.boxStyle); break
       case 'ornament': err = validateOrnament(draft.ornamentStyle); break
-      case 'card':     err = validateCard(draft); break
+      case 'card':     err = validateCard({
+        ...draft,
+        availableTemplateIds: templates.length > 0 ? templates.map((t) => t.id) : undefined,
+      }); break
       case 'name':     err = validateName(draft); break
       case 'preview':  break
     }
@@ -232,14 +242,17 @@ export default function CreateGift({
     if (idx < WIZARD_STEPS.length - 1) {
       setStep(WIZARD_STEPS[idx + 1]!)
     }
-  }, [step, draft])
+  }, [step, draft, templates])
 
   // ── Gift submission ───────────────────────────────────────────────────
   const handleSubmit = useCallback(async () => {
     // Final validation
     const nameErr = validateName(draft)
     if (nameErr) { setStepError(nameErr); setStep('name'); return }
-    const cardErr = validateCard(draft)
+    const cardErr = validateCard({
+      ...draft,
+      availableTemplateIds: templates.length > 0 ? templates.map((t) => t.id) : undefined,
+    })
     if (cardErr) { setStepError(cardErr); setStep('card'); return }
 
     setStep('wrap')
@@ -247,11 +260,16 @@ export default function CreateGift({
     const start = Date.now()
     const MIN_MS = reduced ? 300 : 1400
 
+    // Trim text fields before sending (matches server-side NFC + trim behaviour)
+    const trimmedNickname = draft.nickname.normalize('NFC').trim()
+    const trimmedClassName = draft.className.normalize('NFC').trim()
+    const trimmedMessage = draft.message.normalize('NFC').trim()
+
     try {
       // Onboarding: save profile if nickname was blank
-      if (needsOnboarding && draft.nickname) {
-        await updateMe(draft.nickname, draft.className)
-        onUserUpdated?.(draft.nickname, draft.className)
+      if (needsOnboarding && trimmedNickname) {
+        await updateMe(trimmedNickname, trimmedClassName)
+        onUserUpdated?.(trimmedNickname, trimmedClassName)
       }
 
       const result = await createGift(slug, {
@@ -261,9 +279,9 @@ export default function CreateGift({
         backgroundTemplateId: draft.backgroundTemplateId!,
         font: draft.font,
         ink: draft.ink,
-        message: draft.message,
-        nickname: draft.nickname,
-        className: draft.className,
+        message: trimmedMessage,
+        nickname: trimmedNickname,
+        className: trimmedClassName,
       })
 
       // Ensure the wrap animation plays for at least MIN_MS
@@ -279,7 +297,7 @@ export default function CreateGift({
       setWrapError(errorMessage(code))
       setStep('preview')
     }
-  }, [slug, draft, reduced, needsOnboarding, onUserUpdated, onSuccess])
+  }, [slug, draft, templates, reduced, needsOnboarding, onUserUpdated, onSuccess])
 
   // ── Render helpers ────────────────────────────────────────────────────
   const remaining = giftsPerUser - myGiftCount
@@ -440,6 +458,8 @@ export default function CreateGift({
               <CardEditor
                 draft={draft}
                 templates={templates}
+                templatesLoadError={!!templatesLoadError}
+                onRetryTemplates={onRetryTemplates}
                 onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
               />
             )}
@@ -527,6 +547,7 @@ export default function CreateGift({
                   <button
                     type="button"
                     className="create-gift-next-btn noel-action-btn"
+                    disabled={step === 'card' && !!templatesLoadError}
                     onClick={validateAndAdvance}
                   >
                     Tiếp theo →
@@ -592,10 +613,14 @@ function StylePicker({
 function CardEditor({
   draft,
   templates,
+  templatesLoadError,
+  onRetryTemplates,
   onChange,
 }: {
   draft: Draft
   templates: ReadonlyArray<NoelTemplate>
+  templatesLoadError: boolean
+  onRetryTemplates?: () => void
   onChange: (patch: Partial<Draft>) => void
 }): ReactNode {
   return (
@@ -622,9 +647,18 @@ function CardEditor({
       </section>
 
       {/* Background template */}
-      {templates.length > 0 && (
-        <section className="create-gift-editor-section">
-          <p className="create-gift-editor-label">Ảnh nền</p>
+      <section className="create-gift-editor-section">
+        <p className="create-gift-editor-label">Ảnh nền</p>
+        {templatesLoadError ? (
+          <div className="create-gift-template-error" role="alert">
+            <span>Không tải được ảnh nền.</span>
+            {onRetryTemplates && (
+              <button type="button" className="create-gift-retry-btn" onClick={onRetryTemplates}>
+                Thử lại
+              </button>
+            )}
+          </div>
+        ) : templates.length > 0 ? (
           <div className="create-gift-bg-row">
             {templates.map((t) => (
               <button
@@ -650,8 +684,10 @@ function CardEditor({
               </button>
             ))}
           </div>
-        </section>
-      )}
+        ) : (
+          <p className="create-gift-editor-hint">Đang tải ảnh nền…</p>
+        )}
+      </section>
 
       {/* Font */}
       <section className="create-gift-editor-section">

@@ -143,3 +143,72 @@ describe('validateName', () => {
     expect(validateName({ nickname: thirtyOneEmoji, className: '' })).not.toBeNull()
   })
 })
+
+// ── New tests: shared/gift.ts rules applied (code points, whitespace-only, control chars) ──
+
+describe('validateCard — shared/gift.ts rules for message', () => {
+  it('rejects whitespace-only message', () => {
+    expect(validateCard({ ...VALID_CARD, message: '   ' })).not.toBeNull()
+  })
+
+  it('accepts 300-codepoint message (emoji) — counts code points not UTF-16', () => {
+    // 300 emoji = 300 code points but 600 UTF-16 code units
+    expect(validateCard({ ...VALID_CARD, message: '😊'.repeat(300) })).toBeNull()
+  })
+
+  it('rejects 301-codepoint message (emoji)', () => {
+    expect(validateCard({ ...VALID_CARD, message: '😊'.repeat(301) })).not.toBeNull()
+  })
+
+  it('rejects message with control character (\\x01)', () => {
+    expect(validateCard({ ...VALID_CARD, message: 'hello\x01world' })).not.toBeNull()
+  })
+
+  it('allows newlines in message (multiline allowed)', () => {
+    expect(validateCard({ ...VALID_CARD, message: 'line1\nline2' })).toBeNull()
+  })
+})
+
+describe('validateCard — availableTemplateIds check', () => {
+  it('passes when backgroundTemplateId is in availableTemplateIds', () => {
+    expect(validateCard({ ...VALID_CARD, availableTemplateIds: [1, 2, 3] })).toBeNull()
+  })
+
+  it('fails when backgroundTemplateId is NOT in availableTemplateIds', () => {
+    expect(validateCard({ ...VALID_CARD, backgroundTemplateId: 99, availableTemplateIds: [1, 2, 3] })).not.toBeNull()
+  })
+
+  it('passes when availableTemplateIds is empty (no list to validate against)', () => {
+    expect(validateCard({ ...VALID_CARD, availableTemplateIds: [] })).toBeNull()
+  })
+
+  it('passes when availableTemplateIds is undefined (no list provided)', () => {
+    expect(validateCard({ ...VALID_CARD, availableTemplateIds: undefined })).toBeNull()
+  })
+})
+
+describe('validateName — shared/gift.ts rules (NFC + trim, control chars)', () => {
+  it('rejects nickname with control character', () => {
+    expect(validateName({ nickname: 'Lan\x01', className: '' })).not.toBeNull()
+  })
+
+  it('accepts 30-codepoint emoji nickname', () => {
+    expect(validateName({ nickname: '😊'.repeat(30), className: '' })).toBeNull()
+  })
+
+  it('rejects 31-codepoint emoji nickname', () => {
+    expect(validateName({ nickname: '😊'.repeat(31), className: '' })).not.toBeNull()
+  })
+
+  it('rejects className with control character', () => {
+    expect(validateName({ nickname: 'Lan', className: '12A\x01' })).not.toBeNull()
+  })
+
+  it('accepts 10-codepoint emoji className', () => {
+    expect(validateName({ nickname: 'Lan', className: '😊'.repeat(10) })).toBeNull()
+  })
+
+  it('rejects 11-codepoint emoji className', () => {
+    expect(validateName({ nickname: 'Lan', className: '😊'.repeat(11) })).not.toBeNull()
+  })
+})
