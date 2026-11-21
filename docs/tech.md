@@ -455,3 +455,142 @@ Chromium encodes WebP from a canvas: `canvas.toDataURL('image/webp', 0.9)`. Run 
 - `src/components/CardView.tsx` renders a teacher card: fixed "Kính gửi", the teacher name, `roleLabel(role, subject)` (which returns "Giáo viên" when both are empty) and the stamp "<site.title> · 20/11". Gifts need three optional props with the current values as defaults so 20/11 output is unchanged: `toLine` (greeting line; `null` hides it), `subLine` (overrides `roleLabel`; `null` hides it), `stamp`. Gift mapping: `card = { name: <heading, e.g. "Điều ước Giáng sinh">, subject: '', message }`, `from = "<nickname> · <class>"`, `stamp = "<site.title> · Noel"`, plus `layout`, `images.background`, `font`, `ink` from the gift.
 - Server validation for gift text reuses `worker/submit.ts` rules: `shared/text.ts` (`hasControlCharsMultiline` for the message, `hasControlCharsSingleLine` for nickname/class, `hasLoneSurrogate`), NFC + trim, code-point lengths, `MAX_NEWLINES`; `shared/fonts.ts` (`isFont`, `isInkInput`, `normalizeInk`); layout ids from `shared/layouts.ts`. Gift limits: message 1–`MAX_MESSAGE` (300), nickname 1–30, class ≤ 10.
 - Gift backgrounds are templates of the gift's campaign. Until Phase 2, every template has `campaign_id = 1`; Phase 2 adds a campaign choice to the template admin form, `GET /api/campaigns/<slug>/templates`, and filters the 20/11 template list to campaign 1 (same output today).
+
+
+## Noel Game Core (Phase 2)
+
+### Pure Frontend Modules (No DOM Dependency)
+
+Verified 2026-11-21 for performance and accessibility.
+
+- **`src/game/cone.ts`** — 2.5D conical projection: given slot index i (0 … N-1), returns { x, depth, scale, opacity }. Input: cone angle φ (radians, from drag/keyboard), tree_slots (5–25), ground_slots (0–15). Output: screen x (in px, from centre), depth z (0.0 visible, 1.0 far, <0 behind tree), scale, opacity. Tested: no overlaps on the tree between any two slots with tree_slots ≥ 5; ground slots stack below with ≤ 35px min gap.
+- **`src/game/rank.ts`** — Ranking: 30 gifts (sorted by hearts DESC, created_at ASC, id ASC) → { tree: [ranks 1–15], ground: [16–25], list: [26–30] }. No ties; ordering stable under additions/removals.
+- **`src/game/spin.ts`** — Drag-to-rotate state: { velocity, angle, inertia }. Input: pointer events, keyboard ←/→, requestAnimationFrame dt. Output: current angle φ and decayed velocity. Prefers-reduced-motion disables inertia (linear stop). Inertia decay: 0.96^(dt/16) per frame (exponential).
+- **`src/game/poll.ts`** — Polling loop state machine (one-shot init, in-flight check, generation guard, visibility pause/resume, backoff on errors, abort, cleanup). Used for `/api/me` and `/api/campaigns/<slug>/tree` fetches every 15 ± 3 s. No fetch itself; caller provides the fetcher.
+- **`src/game/dialogFocus.ts`** (or `useDialog.ts`) — Dialog focus trap and return-focus manager. Extracted from DOM context for reusability and testing without a DOM library.
+- **`src/game/gesture.ts`** — Tap-vs-drag threshold (~6 px) and capture logic, zero-velocity-on-grab. Pure state, no DOM side-effects.
+- **`src/game/paging.ts`** — Paginated list reducer: { items, page, total, loading, error }. Stale-response guard: update only if page >= current page. Retry state. Stop at page 50.
+
+### Browser APIs Used (Verified)
+
+- **Web Animations API:** `Element.animate({ keyframes }, options)` → `Animation` with `finished` promise. Used for gift-box opening, star twinkle, finale. `prefers-reduced-motion: reduce` detected via `matchMedia` → animations use opacity/fade only, no transform. Safari 16+, Edge, Chrome. Source: https://developer.mozilla.org/en-US/docs/Web/API/Element/animate
+- **Pointer Events:** `pointerdown`, `pointermove`, `pointerup` (vs touch + mouse separately). `setPointerCapture(pointerId)` for drag tracking. `touch-action: none` on draggable elements. Source: https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events
+- **Canvas particles:** `OffscreenCanvas` (if available) or `<canvas>` → `toDataURL('image/webp', quality)` for export. Snow ≤ 120 particles, paused when `document.hidden === true` (user switched tabs). Source: https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/toDataURL
+- **Media queries:** `matchMedia('(prefers-reduced-motion: reduce)')` → boolean. Used to disable inertia, animations; all text rendered regardless. Source: https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-reduced-motion
+- **Request animation frame:** `requestAnimationFrame(callback)` for smooth 60 Hz render loop. Callback stopped when `document.visibilityState === 'hidden'`. Source: https://developer.mozilla.org/en-US/docs/Web/API/window/requestAnimationFrame
+
+### Default Theme (Static Files)
+
+Shipped in `public/theme/gift_tree/default/` (copied into `dist/` at build time, served by Cloudflare CDN).
+
+**Export method (verified 2026-11-21):**
+
+Original mockup HTML (`docs/design/noel-mockup.html`) is designed in Figma/Penpot. Layers exported to separate PNGs, each layer composited to the exact slot size using:
+- Photopea / Figma export: per-layer PNG with transparency where specified
+- Browser canvas render (from mockup HTML or a dev script): draw each layer, `canvas.toDataURL('image/webp', 0.9)` → base64 → file
+
+Example command (verified to produce valid WebP):
+
+```bash
+# In-browser via Node + puppeteer-core or browser DevTools console:
+const canvas = document.getElementById('noel-mockup'); // your canvas id
+const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.9));
+const uint8 = new Uint8Array(await blob.arrayBuffer());
+// Write uint8 to public/theme/gift_tree/default/<slot>.webp
+
+# Verify the file:
+file public/theme/gift_tree/default/sky_portrait.webp
+# Expected: "WebP image data, 1080 x 1920, …"
+```
+
+**Slot list (from plan):**
+
+| Slot | Size | Format | Transparent | Max | Notes |
+|---|---|---|---|---|---|
+| sky_portrait | 1080×1920 | PNG/WebP | no | 600 KB | Phone background |
+| sky_landscape | 1920×1080 | PNG/WebP | no | 600 KB | Desktop background |
+| layer_ground | 1920×500 | PNG/WebP | yes | 400 KB | Snow/floor overlay |
+| tree | 1200×1600 | PNG/WebP | yes | 800 KB | Tree (no ornaments) |
+| star | 256×256 | PNG/WebP/GIF | yes | 300 KB | Star on tip |
+| ornament_1…6 | 256×256 | PNG/WebP | yes | 150 KB | 6 styles |
+| box_1…6_closed | 512×512 | PNG/WebP | yes | 200 KB | 6 closed box styles |
+| box_1…6_open | sprite grid (cells 512×512, ≤2048×2048) | PNG/WebP | yes | 1 MB | Box opening animation |
+
+**Code-drawn animations:**
+
+- Star twinkle: CSS keyframe (opacity 0.3…1.0) or WAAPI with sine easing
+- Box open: sprite grid player (frame count = cols × rows) at 12–30 fps (configurable per upload)
+- Snow loop: canvas particles (≤120) with falling + wind drift
+- All animations respect `prefers-reduced-motion: reduce` (reduced-motion → static final frame or fade only)
+
+### Bundle Sizes (Measured 2026-11-21)
+
+**Main bundle (gzip):** ~120 KB (includes React, Vite runtime, all pages)
+**Noel page lazy chunk (gzip):** ~9 KB (game, flows, moderation UI combined)
+**Total added by Noel:** ~9 KB over the base 20/11 size (card-page libraries reused)
+
+No animation library added (Web Animations API built-in).
+
+### Rate-Limit Bindings (Phase 2)
+
+New rate-limit classes in `wrangler.jsonc` (production namespace_id 2000s, staging 3000s):
+
+| Binding | Limit | Namespace | Used On |
+|---|---|---|---|
+| GIFT_LIMIT | 6/60 s per user | 2011 (prod), 3011 (staging) | `POST /api/campaigns/<slug>/gifts` |
+| HEART_LIMIT | 20/60 s per user | 2012 (prod), 3012 (staging) | `POST /api/gifts/<publicId>/heart` |
+| REPORT_LIMIT | 10/60 s per user | 2013 (prod), 3013 (staging) | `POST /api/gifts/<publicId>/report` |
+| TREE_READ_LIMIT | 3,000/60 s per IP | 2014 (prod), 3014 (staging) | `GET /api/campaigns/<slug>/tree` (cache miss only) |
+| LIST_READ_LIMIT | 300/60 s per IP | 2015 (prod), 3015 (staging) | `GET /api/campaigns/<slug>/gifts` (cache miss), `GET /api/gifts/<publicId>` |
+
+All checked BEFORE database queries. Tree and list reads hit the cache first (memoised per isolate for 5 s), so cache hits do not count against limits.
+
+### Conditional Write Pattern (Used for Hearts, Reports, Auto-Hide)
+
+One-batch atomicity with diagnosis:
+
+```sql
+-- Worker pseudocode for POST /api/gifts/:id/heart:
+BEGIN TRANSACTION;
+INSERT OR IGNORE INTO heart (gift_id, user_id, day, created_at)
+SELECT ?, ?, date('now', '+7 hours'), datetime('now')
+WHERE
+  EXISTS(SELECT 1 FROM gift WHERE id = ? AND campaign_id = ? AND status = 'visible')
+  AND NOT EXISTS(SELECT 1 FROM app_user WHERE id = ? AND banned = 1)
+  AND NOT EXISTS(SELECT 1 FROM heart WHERE gift_id = ? AND user_id = ?)
+  AND (SELECT COUNT(*) FROM heart WHERE user_id = ? AND day = date('now', '+7 hours')) < 5;
+
+UPDATE gift SET heart_count = (SELECT COUNT(*) FROM heart WHERE gift_id = ?) WHERE id = ?;
+COMMIT;
+
+-- If INSERT changed 0 rows, check each diagnosis in order:
+if meta.changes === 0:
+  if NOT EXISTS(gift) → gift_not_found (404)
+  else if campaign.status !== 'active' OR NOT BETWEEN dates → campaign_closed (409)
+  else if user.banned → banned (403)
+  else if EXISTS(own_gift) → own_gift (403)
+  else if EXISTS(previous_heart) → already_hearted (409)
+  else if heart_count >= hearts_per_day → hearts_exhausted (429)
+```
+
+Ensures: even under concurrent requests, `heart_count = COUNT(heart)` always (recount is idempotent), and the client gets the right error code on first try.
+
+### Text Validation (Shared Worker & Client)
+
+All gift text validated by `shared/gift.ts:validateGiftText({ message, nickname, className })`:
+
+```typescript
+// Returns { ok: true, value: { message, nickname, className } } or { ok: false, field: '...' }
+// Applies to every field:
+//   - Unicode NFC normalisation + trim
+//   - Code-point length check (not UTF-16)
+//   - Reject empty after trim
+//   - Reject control chars (except \n in message), bidi-override, zero-width, lone surrogates
+//
+// message: 1–300 code points, multiline (max 5 \n), required
+// nickname: 1–30 code points, single-line, required
+// className: 0–10 code points, single-line, optional (empty string valid)
+```
+
+Used on gift create, also by client-side form validation (`src/game/createGiftValidation.ts`).
+

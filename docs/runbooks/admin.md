@@ -1,8 +1,190 @@
-# Admin Operations Runbook — Student Cards Platform
+# Admin Operations Runbook — Campaigns, Moderation & Deployment
 
 ---
 
-## Privacy Model: Private Cards, Private QR Tokens
+## Noel Campaign Setup (Phase 2, Launch 10/12/2026)
+
+### Step 1: Create the Campaign
+
+In `/admin`, go to **Chiến dịch** → **Tạo chiến dịch**:
+
+- **Tên:** Noel 2026
+- **Tên ngắn:** noel-2026 (lowercase, alphanumeric + hyphen only)
+- **Loại:** Gift tree
+- **Ngày bắt đầu:** 10/12/2026 00:00, entered in Vietnam time in the editor (stored as `2026-12-09T17:00:00Z`)
+- **Ngày kết thúc:** 24/12/2026 23:59 Vietnam time (stored as `2026-12-24T16:59:59Z`; Vietnam is UTC+7)
+- **Trạng thái:** Draft (will activate on launch day)
+- **Nội dung:** Campaign home text; example: "🎄 Cây Thông Điều Ước. Treo những lời chúc cho bạn bè, thầy cô. Chúng ta chọn những phần quà (Tim) cho nhau."
+- **Màu chủ đề:** Set theme colors (defaults OK for now; Phase 3 adds a theme editor)
+
+Save as draft.
+
+### Step 2: Configure Gift Tree Settings
+
+Go to **Mẫu thiệp** (Templates) → select the Noel campaign:
+
+Create or assign templates that will be available for students to choose backgrounds when creating gifts. Each template is a layout + background image. Templates are now per-campaign.
+
+**Gift tree campaign settings** (API-configurable, no UI yet):
+- `tree_slots`: 15 (gifts ranked 1–15 displayed on the tree, near the star first)
+- `ground_slots`: 10 (gifts ranked 16–25 on the ground below the tree)
+- `hearts_per_day`: 5 (each player gets 5 hearts per Vietnam day)
+- `gifts_per_user`: 3 (each player can create 3 non-deleted gifts in the campaign)
+- `report_threshold`: 3 (when 3 distinct users report a gift, it auto-hides)
+
+You can set these via SQL after the campaign is created:
+
+```sql
+UPDATE campaign SET settings = json_object(
+  'tree_slots', 15,
+  'ground_slots', 10,
+  'hearts_per_day', 5,
+  'gifts_per_user', 3,
+  'report_threshold', 3
+) WHERE slug = 'noel-2026';
+```
+
+### Step 3: Activate on Launch Day
+
+On 10/12 at 00:00 local time:
+
+1. In `/admin` → **Chiến dịch**, select the draft Noel 2026
+2. Click **Kích hoạt**
+3. The 20/11 campaign automatically becomes **Closed** (only one active campaign at a time)
+4. Students can now create gifts, see the tree, and give hearts
+
+### Step 4: Manage on-Call Moderation
+
+See `docs/runbooks/moderation.md`.
+
+### Rollback
+
+If Noel 2026 needs to be taken offline before 24/12 23:59:
+
+1. In `/admin` → **Chiến dịch**, click **Đóng** on the Noel campaign
+2. (Optional) **Kích hoạt** the 20/11 campaign again
+
+**Important:** Previous code (before Phase 2) does not know about `gift`, `heart`, `report`, `banned_identity` tables. A true rollback via Time Travel should be taken **before** deploying Phase 2. After Phase 2 deploy, all DB changes are forward-only; reverting the code leaves the new tables in place but orphaned. Rolling back the entire site requires a Time Travel restore to a pre-Phase 2 timestamp.
+
+---
+
+## Schema Changes (Phase 2)
+
+### New Tables
+
+Automatically created on first Phase 2 request; no manual SQL needed:
+
+```sql
+-- User accounts (Google ID tokens)
+app_user (
+  id, google_sub UNIQUE, email, nickname, class_name, hd, banned, created_at, last_seen_at
+)
+
+-- Session tokens (HttpOnly cookies, SHA-256 hashed)
+session (
+  token_hash PRIMARY KEY, user_id FK, expires_at, created_at, ip_hash
+)
+
+-- Wish tree gifts
+gift (
+  id, public_id UNIQUE, campaign_id FK, user_id FK, box_style, ornament_style, layout,
+  background_template_id FK, font, ink, message, nickname, class_name, heart_count, report_count,
+  status (visible|hidden_auto|hidden_admin|deleted), status_before_ban, created_at
+)
+
+-- Daily hearts (unique per user per gift per day)
+heart (
+  gift_id FK, user_id FK, day, created_at, PRIMARY KEY (gift_id, user_id)
+)
+
+-- Gift reports
+report (
+  gift_id FK, user_id FK, reason (inappropriate|spam|other), acknowledged, created_at,
+  PRIMARY KEY (gift_id, user_id)
+)
+
+-- Banned account tombstones (user deletion + ban evasion prevention)
+banned_identity (
+  sub_hmac, created_at
+  -- sub_hmac = HMAC(SUB_HMAC_KEY, google_sub); no email, no content
+)
+```
+
+### Existing Tables — New Columns
+
+```sql
+ALTER TABLE campaign ADD COLUMN … (if not exists)
+  -- Noel campaigns use this table; created by admin API
+
+ALTER TABLE template ADD COLUMN campaign_id INTEGER NOT NULL DEFAULT 1
+  -- Associates templates with campaigns; 20/11 templates get campaign_id = 1
+
+ALTER TABLE wish ADD COLUMN campaign_id INTEGER NOT NULL DEFAULT 1
+  -- Unused in Phase 2 but added for consistency
+
+ALTER TABLE student_card ADD COLUMN campaign_id INTEGER NOT NULL DEFAULT 1
+  -- Unused in Phase 2 but added for consistency
+
+ALTER TABLE admin ADD COLUMN google_sub TEXT
+  -- Stores the Google sub of the admin's first Google sign-in; never updated after
+```
+
+### Indexes
+
+```sql
+CREATE INDEX idx_gift_rank ON gift (campaign_id, status, heart_count DESC, created_at)
+CREATE INDEX idx_heart_user_day ON heart (user_id, day)
+CREATE INDEX idx_report_user ON report (user_id)
+CREATE INDEX idx_template_campaign_id ON template (campaign_id)
+CREATE INDEX idx_wish_campaign_id ON wish (campaign_id)
+CREATE INDEX idx_student_card_campaign_id ON student_card (campaign_id)
+```
+
+---
+
+## Deploy & Launch Checklist
+
+### Pre-Deploy (5–7 days before 10/12)
+
+- [ ] **Time Travel bookmark:** Go to Cloudflare → D1 → select `cham-yeu-thuong` (production) → **Time Travel** tab → set bookmark for the latest backup before Phase 2 deploy. Name it `pre-noel-rollback`. This is your "undo" if Phase 2 needs to be reverted.
+- [ ] **Production custom domain ready** (or fallback to `*.workers.dev`). Custom domain is needed for Cache API to work; on `*.workers.dev` the per-isolate LRU memo is the only cache.
+- [ ] **Google OAuth:** Verify the production OAuth client is created and configured:
+  - Client ID in `wrangler.jsonc` `vars` GOOGLE_CLIENT_ID
+  - Authorized JavaScript origins: production custom domain (e.g., `https://noel.truongtenloman.edu.vn`) and localhost for dev
+  - No redirect URIs (using the popup flow)
+- [ ] **Secrets set** on production: `NONCE_KEY` and `SUB_HMAC_KEY` (required), `IP_HMAC_KEY` (optional, not read yet), each with `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put <NAME>`
+
+### Deploy Day (10/12, before 00:00)
+
+- [ ] Code is reviewed (all gates passed; no outstanding issues)
+- [ ] Staging load test passed (see `docs/runbooks/staging.md`)
+- [ ] Real-phone performance checked: ≥ 50 fps on a mid-range Android with 25 gifts and snow
+- [ ] All admins sign in once with Google to verify OAuth is working and their email is in the admin list
+- [ ] Run: `git push && npx wrangler deploy`
+- [ ] Verify: `/` loads and shows Noel campaign home (or 20/11 if Noel is still draft); `/noel-2026` redirects to `/` (or shows draft page if not activated)
+- [ ] Activate the Noel campaign in `/admin` → **Chiến dịch** (sets status='active', closes 20/11)
+- [ ] Test: create a gift, give a heart, report a gift, view the tree, check the leaderboard
+- [ ] Monitor: check Cloudflare analytics dashboard for errors, latency spikes, rate-limit triggers
+
+### Post-Launch Checks (10/12–11/12)
+
+- [ ] **On-call admin:** Every few hours, spot-check `/admin` → **Kiểm duyệt quà** for reported gifts. Expect 0–5 in the first day; respond within 2 hours.
+- [ ] **Real-world load:** Monitor `/api/campaigns/noel-2026/tree` cache hit rate (should be >95% if tree updates every 5 s but students poll every 15 s). Check Cloudflare Analytics for 429 rate-limit responses; if any, raise limits in `wrangler.jsonc`.
+- [ ] **Error rates:** Check Cloudflare Logs for 5xx errors. If any appear, investigate and rollback if needed (see Rollback below).
+- [ ] **Real phones:** Ask a few students to test on their phones (especially Android) and report any UI glitches.
+
+### Campaign Close (24/12 23:59 UTC)
+
+No action needed; the campaign automatically becomes "closed" at the `ends_at` timestamp. Students can no longer create gifts, give hearts, or report. Moderation (hide, ban, delete) continues to work so admins can manage the final leaderboard.
+
+### Rollback (if needed)
+
+1. **Immediate** (code issue, not data): `git revert <commit>` and redeploy with `git push && npx wrangler deploy`
+2. **Full rollback** (corruption, data loss): Use Cloudflare Time Travel to restore the DB to the pre-Phase-2 bookmark. This requires access to Cloudflare Dashboard. **Destructive:** all Phase 2 data (gifts, hearts, reports) from the current live environment are lost.
+
+---
+
+## Privacy Model: Private QR Tokens (20/11 Legacy)
 
 **The problem:** student cards are personal messages to teachers. They should not be discoverable via public searches or browsing.
 
@@ -743,7 +925,7 @@ Deploy **not before 23/11 and by 27/11**, outside event traffic. Production is c
   ```bash
   printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put NONCE_KEY
   ```
-  `SUB_HMAC_KEY` and `IP_HMAC_KEY` are reserved for Phase 2 and not read yet.
+  `SUB_HMAC_KEY` is required from Phase 2 (ban tombstones): without it Google sign-in fails closed (503) and unbanning or deleting a banned account fails. `IP_HMAC_KEY` is not read yet.
 - [ ] Staging deployed and checked (`docs/runbooks/staging.md`), including one 429 per new limit class.
 - [ ] Upgrade smoke **locally**: a git worktree of `4cb51a3` with `wrangler dev --persist-to <tmp>`, create data, then this branch on the same `--persist-to` state (method in `.kiro/delivery/2026-11-18-campaign-platform/phases/phase-1-campaigns-signin/smoke.md`). Never restore the production database for a test.
 - [ ] Note the restore point: `npx wrangler d1 time-travel info cham-yeu-thuong`

@@ -2,35 +2,61 @@
 
 **Mission:** Technology creates wishes; emotion creates meaning.  
 **Built by:** CLB AI — THPT Ten Lơ Man  
-**Campaigns:** the site runs one event at a time. 20/11 (teacher cards) is campaign 1; Noel 2026 (wish tree) comes next.
+**Active Campaign:** Noel 2026 (gift tree, 10/12–24/12). Past: 20/11 (teacher cards).
 
-A platform where students send personalized cards to teachers. Admins create card **templates** (layout + images); students pick a template, choose a teacher, and write a wish. Every card is pending until approved. Teachers access their cards via a private QR code.
+A platform that runs different campaigns. **Phase 2** (Noel) is a 2.5D wish tree: students sign in with Google, create gifts (card inside a decorative box on the tree), and give hearts to others' gifts. Gifts are ranked by hearts and placed on the tree. Admins moderate reports and manage a gift queue.
 
-Phase 1 (campaigns + Google sign-in) adds:
-- **Campaigns:** `/admin` → Chiến dịch to create, edit, activate and close campaigns. `/` shows the active campaign's home text. See `docs/runbooks/admin.md` → "Campaigns (Phase 1)".
-- **Google sign-in** on `/admin`. Campaign management and adding/removing admins need Google; the typed-email login keeps working for the 20/11 sections (its removal is a separate, later feature). Google sign-in works once it is configured. Setup: `docs/runbooks/google-signin.md`.
-- **Staging** environment for pre-launch tests: `docs/runbooks/staging.md`.
+**Phase 1** (campaigns + Google sign-in) remains for campaign setup and 20/11 admin routes (cards, templates, teachers).
 
 **Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
 
-## Site Structure (Phase 1)
+**Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
+
+## Site Structure
+
+**Routes (Phase 2 — Noel):**
 
 | Route | Purpose |
 |---|---|
-| `/` | Home — intro from campaign content, teacher count, card count, and the "Gửi thiệp" button. No teacher list: students find a teacher inside `/gui-thiep` (step 2) |
-| `/gui-thiep` | Send flow — pick teacher → pick template → write message → submit (4 steps). From query `?thay=<id>` or `?t=<token>` |
-| `/t/:token` | QR page — teacher's private QR token; shows a random approved card + "View all" + empty state. One link per teacher, distributed privately |
-| `/ve-clb-ai` | About — club timeline, members, stats from database |
-| `/admin` | Admin dashboard — moderation, templates, teachers, wishes, images, admins, campaigns |
-| `/:slug` | A campaign page by slug (e.g. `/noel-2026`); drafts and unknown slugs show not found. Reserved: admin, api, t, gui-thiep, ve-clb-ai, assets, theme, g |
+| `/` | Home — Noel intro, player sign-in button, "Treo quà" (create gift), "Bảng xếp hạng" (leaderboard), "Tất cả quà" (all gifts). No sign-in required to view. |
+| `/:slug` | Campaign home by slug (e.g., `/noel-2026`). Kind determines component: `gift_tree` → Noel scene, `teacher_cards` → 20/11 home (legacy). Drafts and unknown slugs show 404. Reserved: `admin`, `api`, `t`, `gui-thiep`, `ve-clb-ai`, `assets`, `theme`, `g` |
+| `/:slug/g/:publicId` | Share link — opens the tree with that gift already opened. Sign-out users can view; actions (heart, report) prompt sign-in. |
+| `/admin` | Admin dashboard — campaigns, gift moderation, users (ban/unban), tombstones. Google sign-in required for all new admin routes. |
 
-Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About content (timeline, members) is stored in D1 and edited via `/admin`.
+**(Phase 1 legacy routes — still working):**
+
+| Route | Purpose |
+|---|---|
+| `/gui-thiep` | Send flow — 20/11 campaign only (backwards-compat). Pick teacher → template → write → submit. Uses typed-email admin for post-approval. |
+| `/t/:token` | QR page — teacher's private link; shows their cards. 20/11 campaign only. |
+| `/ve-clb-ai` | About — club info, timeline, members. |
+
+**Default theme files:** Static assets regenerated from the approved mockup, served from `public/theme/gift_tree/default/` (built into `dist/`, CDN-cached). New templates can be uploaded by admins; Phase 3 feature.
 
 ---
 
 ## How It Works
 
-### Student Journey
+### Noel Player Journey (Phase 2)
+
+1. **Visit home** (`/`) — read the intro, view leaderboard preview; no sign-in required to browse
+2. **Sign in with Google** — to create gifts, give hearts, or report
+3. **Create a gift** — "Treo quà": choose box style → ornament style → write a card (message, nickname, class) → see preview → hang it on the tree (slot auto-assigned by hearts after creation)
+4. **View the tree** — 3D tree that spins (drag/swipe or ←/→ keys). Top 15 gifts by hearts on the tree; next 10 on the ground; rest in "Tất cả quà"
+5. **Open a gift** — tap/click or keyboard; shows card, sender, hearts, rank, and action buttons
+6. **Give hearts** — up to 5 per day; hearts refresh at Vietnam midnight; locked in once given
+7. **Report or delete** — report inappropriate gifts (needs 3 reports to auto-hide); delete your own visible gifts to free a slot
+8. **Share** — each gift has a share link (`/:slug/g/:publicId`) that opens it directly
+9. **My gifts** — view your own gifts and delete them individually
+10. **Account** — delete your account and all gifts (admin moderation queue must be empty first)
+
+**Admin moderation** (on-call during 10/12–24/12):
+- Queue: gifts awaiting review (auto-hidden by 3 reports, or admin-hidden)
+- Actions: restore (acknowledges reports), hide, delete, or ban the user
+- User ban: hides all their gifts, removes their hearts (recounted), signs them out; ban can be undone
+- Banned users: staying permanently banned (a deleted banned account leaves a tombstone; a new sign-in with that Google account stays banned)
+
+### 20/11 Student Journey (Phase 1 legacy)
 
 1. **Visit home** (`/`) — read the intro and press "Gửi thiệp" (or open `/gui-thiep?thay=<id>` to preselect a teacher)
 2. **Pick a template** — from active templates (layout + background)
@@ -148,11 +174,373 @@ Home `/` and About `/ve-clb-ai` text is in `/src/content/site.json`; About conte
 
 ---
 
-## Public API
+## Public API — Phase 2 (Noel)
 
 All JSON endpoints; rate limit first, before DB.
 
-### GET /api/wall
+### GET /api/campaigns/active
+Rate limit: **3,000/60 s per IP** (after memo cache miss)
+
+Returns the active campaign metadata (public fields only).
+
+```json
+{
+  "id": 2,
+  "slug": "noel-2026",
+  "kind": "gift_tree",
+  "name": "Noel 2026",
+  "tagline": "Cây Thông Điều Ước",
+  "open": true,
+  "starts_at": "2026-12-10T00:00:00Z",
+  "ends_at": "2026-12-24T16:59:59Z",
+  "settings": {
+    "tree_slots": 15,
+    "ground_slots": 10,
+    "hearts_per_day": 5,
+    "gifts_per_user": 3,
+    "report_threshold": 3
+  }
+}
+```
+
+- `open`: true if campaign status='active' AND now BETWEEN starts_at and ends_at
+- Unknown slug or no active campaign → 404
+
+### GET /api/campaigns/:slug
+Returns campaign by slug (public fields only; drafts → 404).
+
+### GET /api/campaigns/:slug/tree
+Rate limit: **3,000/60 s per IP** (cache miss only)
+
+Memoised gift-tree snapshot: top ranked gifts for rendering.
+
+```json
+{
+  "asOf": "2026-12-10T12:34:56Z",
+  "gifts": [
+    {
+      "id": "a1b2c3d4e5f6g7h8",
+      "rank": 1,
+      "hearts": 5,
+      "nickname": "Tester",
+      "class": "11A",
+      "created_at": "2026-12-10T12:30:00Z"
+    }
+  ],
+  "totals": {
+    "tree": 15,
+    "ground": 10
+  },
+  "open": true
+}
+```
+
+- `id`: public gift ID (16 chars, safe for URLs)
+- `rank`: 1–25 (tree + ground); higher rank = more hearts
+- First 15 gifts are on tree, next 10 on ground
+- `asOf`: timestamp of the memo snapshot; clients keep local heart overrides until a response with later `asOf`
+- `open`: false if campaign is closed (hearts frozen, but moderation continues)
+- Memoised for 5 seconds; `Cache-Control: public, max-age=5`
+
+### GET /api/campaigns/:slug/gifts?sort=hearts|new&page=1…50
+Rate limit: **300/60 s per IP** (`LIST_READ_LIMIT`, cache misses only; pages are cached 5 s per slug + sort + page; any `sort` other than `new` means `hearts`)
+
+Paginated gift list (offset pagination, 24 per page).
+
+```json
+{
+  "gifts": [
+    {
+      "id": "a1b2c3d4e5f6g7h8",
+      "rank": 1,
+      "hearts": 5,
+      "nickname": "Tester",
+      "class": "11A",
+      "created_at": "2026-12-10T12:30:00Z"
+    }
+  ],
+  "page": 1,
+  "total": 87
+}
+```
+
+- `sort=hearts` (default) or `sort=new` (oldest first)
+- Memoised per slug+sort+page for 5 seconds
+- `page` 1…50 (page 51+ → 400); each page shows up to 24 gifts
+
+### GET /api/gifts/:publicId
+Rate limit: **300/60 s per IP** (`LIST_READ_LIMIT`, every request; not cached because owners and admins may see hidden gifts)
+
+Single gift by public ID (share link target).
+
+```json
+{
+  "id": "a1b2c3d4e5f6g7h8",
+  "rank": 1,
+  "hearts": 5,
+  "nickname": "Tester",
+  "class": "11A",
+  "message": "Chúc mừng.",
+  "font": "patrick-hand",
+  "ink": "#1d3fa6",
+  "layout": "doc-giua",
+  "backgroundImage": "xxxxxxxx",
+  "created_at": "2026-12-10T12:30:00Z"
+}
+```
+
+- 404 if hidden/deleted (except owner and admin)
+- Memoised for 5 seconds
+
+### POST /api/campaigns/:slug/gifts
+Rate limit: **6/60 s per user** (GIFT_LIMIT)
+
+Create a gift and hang it on the tree.
+
+**Request:**
+```json
+{
+  "box_style": 1,
+  "ornament_style": 2,
+  "layout": "doc-giua",
+  "background_template_id": 1,
+  "font": "patrick-hand",
+  "ink": "#1d3fa6",
+  "message": "Chúc bạn Noel vui vẻ!",
+  "nickname": "Tester",
+  "class_name": "11A"
+}
+```
+
+**Response (201):**
+```json
+{
+  "publicId": "a1b2c3d4e5f6g7h8",
+  "rank": 26
+}
+```
+
+- Requires session cookie (signed-in user)
+- `message`: 1–300 code points, required, no control chars
+- `nickname`: 1–30 code points, required
+- `class_name`: 0–10 code points, optional
+- `box_style`, `ornament_style`: 1–6, required
+- `layout`: must exist in this campaign's templates, required
+- `font`: one of FONTS list; defaults patrick-hand
+- `ink`: lowercase `#rrggbb`; defaults `#1d3fa6`
+- **409** `limit_reached` if user has 3 non-deleted gifts already
+- **429** `daily_limit` if user created 6 gifts today (Vietnam day)
+- **409** `campaign_closed` if campaign not open
+- **403** `banned` if user is banned
+- **401** if signed out
+
+### DELETE /api/gifts/:publicId
+Rate limit: **10/60 s per user** (USER_WRITE_LIMIT)
+
+Delete a gift (owner only).
+
+- Own visible gift → 200; the gift becomes `deleted` and its message, nickname and class are blanked
+- Own hidden gift, or a visible gift with open counted reports → **409** `pending_review` (an admin reviews it first)
+- Someone else's or unknown → **404**
+- **409** `campaign_closed` after the campaign ends (the final order changes only through moderation)
+- **403** `banned`
+
+### POST /api/gifts/:publicId/heart
+Rate limit: **20/60 s per user** (HEART_LIMIT)
+
+Give a heart to a gift (once per gift, max 5 per day).
+
+**Request:** empty body `{}`
+
+**Response (200):**
+```json
+{
+  "heartCount": 6,
+  "heartsLeft": 2,
+  "rank": 3
+}
+```
+
+- Requires session cookie
+- **404** `gift_not_found` (hidden, deleted, or unknown)
+- **409** `campaign_closed` if campaign closed
+- **403** `own_gift` if it's the user's own gift
+- **409** `already_hearted` if user already gave a heart to this gift
+- **429** `hearts_exhausted` if user gave 5 hearts today already
+- **403** `banned` if user is banned
+- Error diagnosis in order (check that order for priority)
+
+### POST /api/gifts/:publicId/report
+Rate limit: **10/60 s per user** (REPORT_LIMIT)
+
+Report a gift as inappropriate.
+
+**Request:**
+```json
+{
+  "reason": "inappropriate"
+}
+```
+
+- `reason`: `inappropriate` | `spam` | `other`, required
+- **404** `gift_not_found` (hidden, deleted, unknown)
+- **409** `campaign_closed`
+- **403** `banned`
+- **403** `own_gift` (you cannot report your own gift)
+- **409** `already_reported` if user already reported this gift
+- **429** `reports_exhausted` after 10 reports in one Vietnam day
+- When the campaign's `report_threshold` (default 3) counted reports is reached, the gift is hidden (`hidden_auto`) and appears in the admin queue
+- Reports from accounts younger than 24 h at report time, or from banned users, are stored but not counted
+
+### GET /api/me?campaign=:slug
+Rate limit: **120/60 s per user or IP** (USER_READ_LIMIT)
+
+Get signed-in user profile for a campaign.
+
+```json
+{
+  "user": {
+    "id": 1,
+    "nickname": "Tester",
+    "class_name": "11A"
+  },
+  "isAdmin": false,
+  "heartsLeft": 3,
+  "heartedGiftIds": ["a1b2c3d4", "e5f6g7h8"],
+  "open": true
+}
+```
+
+- `isAdmin`: true if user's email is in the admin list and Google is authoritative
+- `heartsLeft`: 5 - (hearts given today); resets at Vietnam midnight
+- `heartedGiftIds`: public IDs of gifts this user has hearted
+- `open`: campaign is effectively open
+- Signed out → `user: null`, `isAdmin: false`
+- No cache; `Cache-Control: no-store`
+
+### GET /api/me/gifts?campaign=:slug
+Rate limit: **120/60 s per user or IP** (USER_READ_LIMIT)
+
+Get signed-in user's gifts in a campaign.
+
+```json
+[
+  {
+    "id": "a1b2c3d4e5f6g7h8",
+    "rank": 1,
+    "hearts": 5,
+    "status": "visible",
+    "message": "…",
+    "created_at": "…"
+  }
+]
+```
+
+- `status`: `visible` | `hidden_auto` | `hidden_admin` | `deleted`
+- Ordered by hearts DESC, created_at ASC
+- Signed out → 401
+- No cache; `Cache-Control: no-store`
+
+### PUT /api/me
+Rate limit: **10/60 s per user** (USER_WRITE_LIMIT)
+
+Update user profile (nickname, class_name).
+
+**Request:**
+```json
+{
+  "nickname": "New Nickname",
+  "class_name": "12B"
+}
+```
+
+- Requires session cookie
+- Updates immediately
+
+### DELETE /api/me
+Rate limit: **10/60 s per user** (USER_WRITE_LIMIT)
+
+Delete user account and all gifts, hearts, reports.
+
+**Response (200):**
+```json
+{
+  "deleted": true
+}
+```
+
+- Requires session cookie
+- **409** `pending_review` if user has any hidden gift (awaiting moderation)
+- Sessions are revoked
+- If user is banned: `banned_identity` row created; next sign-in stays banned
+- **503** if `SUB_HMAC_KEY` not set (no tombstone can be written)
+
+### Admin Endpoints (Google Sign-In Required)
+
+#### GET /api/admin/gifts?status=reported|hidden
+Google admin only (the typed-email login gets 401). Returns at most 200 gifts; the header `X-Truncated: 1` means the list was cut.
+
+```json
+[
+  {
+    "id": 1,
+    "publicId": "a1b2c3d4e5f6g7h8",
+    "campaignId": 2,
+    "userId": 7,
+    "userBanned": false,
+    "status": "hidden_auto",
+    "reportCount": 3,
+    "heartCount": 5,
+    "nickname": "Minh",
+    "className": "11A",
+    "message": "…",
+    "createdAt": "2026-12-11T02:00:00.000Z",
+    "layout": "doc-giua",
+    "font": "patrick-hand",
+    "ink": "#1d3fa6",
+    "backgroundTemplateId": 4,
+    "reportReasons": { "inappropriate": 2, "spam": 1, "other": 0 },
+    "reportsFromNewAccounts": 0
+  }
+]
+```
+
+Reporter identities are never returned.
+
+#### PATCH /api/admin/gifts/:id
+Change gift status.
+
+**Request:**
+```json
+{
+  "status": "visible"
+}
+```
+
+- Status: `visible` (restore; acknowledges the gift's reports) | `hidden_admin` | `deleted`
+- **404** unknown or already deleted gift; **409** `owner_banned` when restoring a gift whose owner is banned (unban the owner instead)
+
+#### PATCH /api/admin/users/:id
+Ban or unban a user.
+
+**Request:**
+```json
+{
+  "banned": 1
+}
+```
+
+#### GET /api/admin/tombstones
+Get banned-account tombstones.
+
+#### DELETE /api/admin/tombstones/:id
+Remove a tombstone.
+
+---
+
+## Public API — Phase 1 (20/11)
+
+All JSON endpoints; rate limit first, before DB.
 Rate limit: **120/60 s per IP**
 
 Returns: `{ teachers: [...], totals: {...} }`

@@ -97,7 +97,129 @@ printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put SUB_HMAC_KEY --e
 printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put IP_HMAC_KEY --env staging
 ```
 
+### Step 4: Set Staging Secrets & Vars
+
+```jsonc
+{
+  "env": {
+    "staging": {
+      "vars": {
+        "GOOGLE_CLIENT_ID": "<staging-oauth-client-id>"
+        // ADMIN_LEGACY_LOGIN and BOOTSTRAP_EMAIL intentionally absent
+      }
+    }
+  }
+}
+```
+
+Commit this change:
+
+```bash
+git add wrangler.jsonc
+git commit -m "Add staging environment config"
+```
+
+**Set secrets** (Phase 2 requires all three):
+
+```bash
+printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put NONCE_KEY --env staging
+printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put SUB_HMAC_KEY --env staging
+printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put IP_HMAC_KEY --env staging
+```
+
 (These are separate from production secrets.)
+
+### Step 5: Deploy and Test
+
+```bash
+npx wrangler deploy --env staging
+```
+
+Verify staging is working:
+```bash
+curl https://cham-yeu-thuong-staging.<account>.workers.dev/api/campaigns/active
+# Should return 200 with campaign info (or empty if none created yet)
+```
+
+---
+
+## Seed Users for Load Testing (Phase 2)
+
+### Seed load-test users (staging only)
+
+`scripts/staging-seed-users.ts` writes SQL for N test users with one session each and prints the command to apply it. It never runs SQL itself, and it refuses to run while `env.staging` still has `PLACEHOLDER_STAGING_D1_DATABASE_ID` or the production database id.
+
+```bash
+node scripts/staging-seed-users.ts --users 600 --hours 6
+# prints: <tmp>/seed.sql, <tmp>/tokens.txt (one session token per line, mode 0600)
+# and the command to apply it, for example:
+npx wrangler d1 execute cham-yeu-thuong-staging --env staging --remote --file <tmp>/seed.sql
+```
+
+Users are `loadtest-…` with accounts dated 2 days back (so their reports count). Remove them afterwards:
+
+```bash
+node scripts/staging-seed-users.ts --cleanup   # prints the SQL and the command; review, then run it
+```
+
+The cleanup deletes the test users' reports, hearts, gifts, sessions and accounts. Gifts of real staging users that the test users hearted keep a stale `heart_count`; staging only, acceptable.
+
+### Load test: hearts (NFR-3)
+
+Goal: about **50 requests/s for 60 s on the staging Worker + D1 with 0 × 5xx**. Business answers (`already_hearted` 409, `hearts_exhausted` 429) are expected and are not errors; count them separately. Each account may give 5 hearts per Vietnam day and 20 heart requests per minute, so spread the load over many accounts: 600 accounts × 5 hearts = 3,000 requests.
+
+1. Seed 600 users (above) and activate the Noel campaign on staging with dates covering now.
+2. Give each test account one gift so there is something to heart (the k6 script below does it in its setup, 6 gifts per minute per account is the limit, so one each is fine).
+3. Run k6 (install k6 separately; it is not a project dependency). Save as a local file outside the repo, e.g. `<tmp>/hearts.js`:
+
+```javascript
+import http from 'k6/http'
+import { check } from 'k6'
+const BASE = __ENV.BASE                  // https://cham-yeu-thuong-staging.<account-subdomain>.workers.dev
+const SLUG = __ENV.SLUG || 'noel-2026'
+const TOKENS = open(__ENV.TOKENS).trim().split('\n')
+const H = (t) => ({ headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch', Cookie: `__Host-cyt_s=${t}` } })
+export const options = { scenarios: { hearts: { executor: 'constant-arrival-rate', rate: 50, timeUnit: '1s', duration: '60s', preAllocatedVUs: 100 } } }
+export function setup() {
+  const t = JSON.parse(http.get(`${BASE}/api/campaigns/${SLUG}/templates`).body)[0]
+  for (const tok of TOKENS) http.post(`${BASE}/api/campaigns/${SLUG}/gifts`, JSON.stringify({ boxStyle: 1, ornamentStyle: 1, layout: t.layout, backgroundTemplateId: t.id, font: 'patrick-hand', ink: '#1d3fa6', message: 'Thử tải', nickname: 'Thử', className: 'LT' }), H(tok))
+  const ids = []
+  for (let p = 1; p <= 25; p++) { const g = JSON.parse(http.get(`${BASE}/api/campaigns/${SLUG}/gifts?sort=new&page=${p}`).body); if (!g.gifts || !g.gifts.length) break; ids.push(...g.gifts.map((x) => x.publicId)) }
+  return { ids }
+}
+export default function (data) {
+  const i = (__VU * 1000 + __ITER) % TOKENS.length
+  const gift = data.ids[Math.floor(Math.random() * data.ids.length)]
+  const r = http.post(`${BASE}/api/gifts/${gift}/heart`, '{}', H(TOKENS[i]))
+  check(r, { 'no 5xx': (x) => x.status < 500 })
+}
+```
+
+```bash
+k6 run -e BASE=https://cham-yeu-thuong-staging.<account-subdomain>.workers.dev -e TOKENS=<tmp>/tokens.txt <tmp>/hearts.js
+```
+
+Field names match `POST /api/campaigns/<slug>/gifts` and the list response `{ gifts }` (checked against `worker/gifts.ts` and `worker/tree.ts`, 2026-11-21). Pass: the `no 5xx` check is 100 %. Afterwards confirm in D1 that counters did not drift:
+
+```bash
+npx wrangler d1 execute cham-yeu-thuong-staging --env staging --remote --command "SELECT COUNT(*) AS drift FROM gift g WHERE g.heart_count != (SELECT COUNT(*) FROM heart h WHERE h.gift_id = g.id)"
+# expect drift = 0
+```
+
+### Load test: tree reads from one IP
+
+Goal: 1,200 requests/minute from one IP for 2 minutes, **0 × 429** (a whole school behind one IP). Tree reads are answered from a 5 s per-instance cache and only cache misses count against `TREE_READ_LIMIT` (3,000/min per IP).
+
+```bash
+# 20 requests/s for 120 s (hey: -q is per worker, so 1 worker × 20 qps)
+hey -z 120s -c 1 -q 20 https://cham-yeu-thuong-staging.<account-subdomain>.workers.dev/api/campaigns/noel-2026/tree
+```
+
+Pass: every response is 200 (hey prints the status-code distribution).
+
+---
+
+## Pre-Launch Verification
 
 ### Step 5: Deploy Staging
 
