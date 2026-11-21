@@ -175,3 +175,48 @@ describe('public/_headers — actual file verification', () => {
     expect(content).toContain('https://accounts.google.com/gsi/')
   })
 })
+
+// ===================================================================
+// Fix Group 6a — Item 9: extend wildcard/bare-scheme check to default-src and img-src
+// ===================================================================
+
+describe('Fix Group 6a — Item 9: wildcard and bare-scheme checks extend to default-src and img-src', () => {
+  it('rejects wildcard * in default-src', () => {
+    const content = VALID.replace("default-src 'self'", 'default-src *')
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
+  })
+
+  it('rejects wildcard * in img-src', () => {
+    const content = VALID.replace("img-src 'self' data:", 'img-src *')
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('wildcard'))).toBe(true)
+  })
+
+  it('rejects bare https: in default-src', () => {
+    const content = VALID.replace("default-src 'self'", 'default-src https:')
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('bare scheme'))).toBe(true)
+  })
+
+  it('rejects bare http: in img-src', () => {
+    const content = VALID.replace("img-src 'self' data:", 'img-src http:')
+    const errors = checkHeaders(content)
+    expect(errors.some((e) => e.includes('bare scheme'))).toBe(true)
+  })
+
+  it('valid CSP with self-only default-src and img-src passes (no false positive)', () => {
+    expect(checkHeaders(VALID)).toEqual([])
+  })
+})
+
+describe('checkHeaders — bare scheme vs full origin', () => {
+  it('still rejects a bare https: in img-src', () => {
+    const csp = VALID.replace("img-src 'self' data:", "img-src 'self' data: https:")
+    expect(checkHeaders(csp).some((e) => e.startsWith('forbidden'))).toBe(true)
+  })
+  it('allows a full https origin in img-src (only a bare scheme is rejected)', () => {
+    const csp = VALID.replace("img-src 'self' data:", "img-src 'self' data: https://cdn.example.com")
+    expect(checkHeaders(csp).filter((e) => e.startsWith('forbidden'))).toEqual([])
+  })
+})

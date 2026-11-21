@@ -89,9 +89,10 @@ function campaignResponse(data: CampaignData): Response {
 // ---- Per-isolate memo (WeakMap keyed by D1 binding) ----
 
 type MemoEntry = { data: CampaignData; expiresAt: number }
-type MemoStore = { hits: Map<string, MemoEntry>; miss404: Map<string, number> }
+type MemoStore = { hits: Map<string, MemoEntry>; miss404: Map<string, number>; active?: MemoEntry }
 
 const MEMO_TTL_MS = 5_000
+const MEMO_404_TTL_MS = 30_000  // Security item 2: 30 s TTL for 404s (design-specified)
 const MEMO_MAX = 32
 const MEMO_404_MAX = 64
 
@@ -105,28 +106,51 @@ function getStore(db: D1): MemoStore {
 }
 
 function memoGet(db: D1, key: string): CampaignData | null | 'miss' {
-  const { hits, miss404 } = getStore(db)
+  const store = getStore(db)
   const now = Date.now()
-  const hit = hits.get(key)
+
+  if (key === 'active') {
+    // Check pinned active slot (never evicted by other slug entries)
+    if (store.active) {
+      if (store.active.expiresAt > now) return store.active.data
+      store.active = undefined
+    }
+    // Check 404 for active
+    const exp = store.miss404.get('active')
+    if (exp !== undefined) {
+      if (exp > now) return null
+      store.miss404.delete('active')
+    }
+    return 'miss'
+  }
+
+  // Slug path: check FIFO hits map
+  const hit = store.hits.get(key)
   if (hit) {
     if (hit.expiresAt > now) return hit.data
-    hits.delete(key)
+    store.hits.delete(key)
   }
-  const exp = miss404.get(key)
+  const exp = store.miss404.get(key)
   if (exp !== undefined) {
-    if (exp > now) return null   // cached 404
-    miss404.delete(key)
+    if (exp > now) return null
+    store.miss404.delete(key)
   }
   return 'miss'
 }
 
 function memoSet(db: D1, key: string, data: CampaignData): void {
-  const { hits } = getStore(db)
-  if (hits.size >= MEMO_MAX) {
-    const oldest = hits.keys().next().value
-    if (oldest !== undefined) hits.delete(oldest)
+  const store = getStore(db)
+  if (key === 'active') {
+    // Store in the pinned active slot — never evicted by other slug entries.
+    store.active = { data, expiresAt: Date.now() + MEMO_TTL_MS }
+    return
   }
-  hits.set(key, { data, expiresAt: Date.now() + MEMO_TTL_MS })
+  // Non-active slugs go in the 32-entry FIFO
+  if (store.hits.size >= MEMO_MAX) {
+    const oldest = store.hits.keys().next().value
+    if (oldest !== undefined) store.hits.delete(oldest)
+  }
+  store.hits.set(key, { data, expiresAt: Date.now() + MEMO_TTL_MS })
 }
 
 function memoSet404(db: D1, key: string): void {
@@ -135,7 +159,7 @@ function memoSet404(db: D1, key: string): void {
     const oldest = miss404.keys().next().value
     if (oldest !== undefined) miss404.delete(oldest)
   }
-  miss404.set(key, Date.now() + MEMO_TTL_MS)
+  miss404.set(key, Date.now() + MEMO_404_TTL_MS)  // 30 s TTL (security item 2)
 }
 
 // ---- Public read handler ----
@@ -161,12 +185,26 @@ export async function handleCampaigns(
   // Accept #9: only GET is allowed for public campaign reads
   if (request.method !== 'GET') return error('method')
 
-  // Accept #9: only /api/campaigns/active or /api/campaigns/<slug> — no extra segments
-  const pathParts = pathname.split('/').filter(Boolean)
-  if (pathParts.length !== 3) return error('not_found')
+  // Security item 2: validate canonical path and extract memo key BEFORE memo, limiter, or DB.
+  // Non-canonical paths (trailing slash, //, extra segments, invalid slug) → 404 immediately.
+  let memoKey: string
+  let slug = ''
+  if (pathname === '/api/campaigns/active') {
+    memoKey = 'active'
+  } else {
+    const slugPart = pathname.startsWith('/api/campaigns/')
+      ? pathname.slice('/api/campaigns/'.length)
+      : ''
+    if (!slugPart || slugPart.includes('/') || !isValidSlug(slugPart)) {
+      return error('not_found')
+    }
+    // Prefixed so a campaign whose slug is literally "active" cannot share the pinned slot.
+    slug = slugPart
+    memoKey = `s:${slugPart}`
+  }
 
-  // Memo key is the pathname; query string is ignored.
-  const hit = memoGet(db, pathname)
+  // Memo key = 'active' or the validated slug (query string is ignored by URL parsing).
+  const hit = memoGet(db, memoKey)
   if (hit === null) return error('not_found')
   if (hit !== 'miss') return campaignResponse(hit)
 
@@ -181,7 +219,7 @@ export async function handleCampaigns(
 
   const now = new Date()
 
-  if (pathname === '/api/campaigns/active') {
+  if (memoKey === 'active') {
     // Try active first
     let row = await db
       .prepare(`${SELECT_CAMPAIGN} WHERE status = 'active' LIMIT 1`)
@@ -195,41 +233,33 @@ export async function handleCampaigns(
     }
 
     if (!row) {
-      memoSet404(db, pathname)
+      memoSet404(db, 'active')
       return error('not_found')
     }
     const data = toCampaignData(row, now)
-    memoSet(db, pathname, data)
+    memoSet(db, 'active', data)
     return campaignResponse(data)
   }
 
-  // /api/campaigns/<slug>
-  // pathname is /api/campaigns/<slug>  → split gives ['', 'api', 'campaigns', '<slug>']
-  const slug = pathname.split('/')[3] ?? ''
-
-  // Validate slug before hitting D1; invalid slugs are not cached (they never become valid).
-  if (!isValidSlug(slug)) {
-    return error('not_found')
-  }
-
+  // /api/campaigns/<slug> — memoKey is `s:` + the validated slug
   const row = await db
     .prepare(`${SELECT_CAMPAIGN} WHERE slug = ? LIMIT 1`)
     .bind(slug)
     .first<CampaignRow>()
 
   if (!row) {
-    memoSet404(db, pathname)
+    memoSet404(db, memoKey)
     return error('not_found')
   }
 
   // Draft campaigns are not publicly readable (decisions.md 2026-11-16 item 4).
   if (row.status === 'draft') {
-    memoSet404(db, pathname)
+    memoSet404(db, memoKey)
     return error('not_found')
   }
 
   const data = toCampaignData(row, now)
-  memoSet(db, pathname, data)
+  memoSet(db, memoKey, data)
   return campaignResponse(data)
 }
 
@@ -277,9 +307,13 @@ function parseJsonObj(s: unknown): Record<string, unknown> | null {
   } catch { return null }
 }
 
-/** Returns true when s is a valid ISO date string (parseable, non-NaN). */
+/** ISO 8601 UTC regex: YYYY-MM-DDTHH:MM:SS[.ms]Z — rejects date-only and timezone offsets. */
+const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
+
+/** Returns true when s is a valid ISO 8601 UTC datetime string (YYYY-MM-DDTHH:MM:SS[.ms]Z). */
 function isValidIso(s: unknown): s is string {
   if (typeof s !== 'string') return false
+  if (!ISO_UTC_RE.test(s)) return false
   const d = new Date(s)
   return !isNaN(d.getTime())
 }
@@ -346,8 +380,15 @@ function validateCampaignBody(
   // Date validation
   const hasStart = 'starts_at' in body
   const hasEnd = 'ends_at' in body
-  if (hasStart && !isValidIso(body.starts_at)) return error('bad_request')
-  if (hasEnd && !isValidIso(body.ends_at)) return error('bad_request')
+  if (hasStart) {
+    if (!isValidIso(body.starts_at)) return error('bad_request')
+    // Normalise: canonical toISOString() without milliseconds (security item 6)
+    body.starts_at = new Date(body.starts_at as string).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  }
+  if (hasEnd) {
+    if (!isValidIso(body.ends_at)) return error('bad_request')
+    body.ends_at = new Date(body.ends_at as string).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  }
   if (!isPatch) {
     // For POST: both dates are required and end must be after start
     if (!hasStart || !hasEnd) return error('bad_request')
@@ -536,9 +577,16 @@ export async function handleAdminCampaigns(
     }
 
     if (request.method === 'DELETE') {
+      // Security item 7: refuse deletion of campaign 1 (foundation campaign, always protected).
+      if (id === 1) return json({ error: 'campaign_protected' }, 409)
+
       // Accept #2: check campaign exists first (return 404 for unknown ids)
-      const existing = await db.prepare('SELECT id FROM campaign WHERE id = ?').bind(id).first<{ id: number }>()
+      const existing = await db.prepare('SELECT id, status FROM campaign WHERE id = ?').bind(id).first<{ id: number; status: string }>()
       if (!existing) return error('not_found')
+
+      // Security item 7: refuse deletion of the active campaign.
+      if (existing.status === 'active') return json({ error: 'campaign_protected' }, 409)
+
       // Refuse deletion if any legacy-table rows reference this campaign (FR-7).
       if (await campaignHasRows(db, id)) {
         return json({ error: 'campaign_has_rows' }, 409)

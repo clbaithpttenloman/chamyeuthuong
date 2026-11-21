@@ -851,19 +851,20 @@ describe('Fix Group 5a — Accept #7: AUTH_LIMIT counts failures only', () => {
     expect(r.status).toBe(429)
   })
 
-  it('GET /api/auth/nonce is rate-limited per IP via AUTH_LIMIT', async () => {
+  it('GET /api/auth/nonce is rate-limited per IP via PUBLIC_READ_LIMIT (not AUTH_LIMIT)', async () => {
     const { db, sqlite } = testDb()
     createNewTables(sqlite)
     const env = {
       DB: db,
       GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
       NONCE_KEY: TEST_NONCE_KEY,
-      AUTH_LIMIT: { limit: async () => ({ success: false }) },  // always blocked
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },      // must NOT block nonce
+      PUBLIC_READ_LIMIT: { limit: async () => ({ success: false }) },  // blocks nonce
       ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
     }
     const req = new Request('https://x/api/auth/nonce', { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
-    const r = await handleAuth(req, env)
-    // Nonce endpoint should be rate-limited
+    const r = await handleAuth(req, env as never)
+    // Nonce endpoint should be rate-limited via PUBLIC_READ_LIMIT
     expect(r.status).toBe(429)
   })
 })
@@ -1073,5 +1074,183 @@ describe('POST /api/auth/google — unparseable body', () => {
     const open = { limit: async () => ({ success: true }) }
     expect((await handleAuth(req(), { ...meEnv({ db }), AUTH_LIMIT: limited } as never)).status).toBe(429)
     expect((await handleAuth(req(), { ...meEnv({ db }), AUTH_LIMIT: open } as never)).status).toBe(400)
+  })
+})
+
+// ===================================================================
+// Fix Group 6a — Security fixes
+// ===================================================================
+
+// ---- Item 1: nonce uses PUBLIC_READ_LIMIT, not AUTH_LIMIT ----
+
+describe('Fix Group 6a — Item 1: nonce uses PUBLIC_READ_LIMIT, not AUTH_LIMIT', () => {
+  it('1,000 nonce requests from one IP leave AUTH_LIMIT uncharged', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    let authLimitCalls = 0
+    const env = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => { authLimitCalls++; return { success: true } } },
+      PUBLIC_READ_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    for (let i = 0; i < 1000; i++) {
+      await handleAuth(
+        new Request('https://x/api/auth/nonce', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+        env as never,
+      )
+    }
+    expect(authLimitCalls).toBe(0)
+  })
+
+  it('nonce is blocked by PUBLIC_READ_LIMIT (not AUTH_LIMIT)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: TEST_NONCE_KEY,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },     // allows all — must NOT block nonce
+      PUBLIC_READ_LIMIT: { limit: async () => ({ success: false }) },  // blocks nonce
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const r = await handleAuth(
+      new Request('https://x/api/auth/nonce', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      env as never,
+    )
+    expect(r.status).toBe(429)
+  })
+})
+
+// ---- Item 3: DELETE /api/me ----
+
+describe('Fix Group 6a — Item 3: DELETE /api/me', () => {
+  it('DELETE /api/me → 200 { ok: true } and session cookie cleared', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = meEnv({ db })
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const req = new Request('https://x/api/me', {
+      method: 'DELETE',
+      headers: {
+        'CF-Connecting-IP': '1.2.3.4',
+        'X-Requested-With': 'fetch',
+        Cookie: `${SESSION_COOKIE_NAME}=${rawToken}`,
+      },
+    })
+    const r = await handleMe(req, env)
+    expect(r.status).toBe(200)
+    expect((await r.json() as { ok?: boolean }).ok).toBe(true)
+    const cookies = getSetCookies(r)
+    expect(cookies.some((c) => c.startsWith(`${SESSION_COOKIE_NAME}=`) && c.includes('Max-Age=0'))).toBe(true)
+  })
+
+  it('DELETE /api/me deletes the app_user row', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = meEnv({ db })
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    await handleMe(new Request('https://x/api/me', {
+      method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+    }), env)
+
+    const user = sqlite.prepare('SELECT id FROM app_user WHERE id = ?').get(userId)
+    expect(user).toBeUndefined()
+  })
+
+  it('DELETE /api/me deletes ALL sessions for the user (not just the presented one)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = meEnv({ db })
+    const userId = await seedUser(db)
+    const token1 = makeRawToken()
+    const token2 = makeRawToken()
+    await seedSession(db, userId, token1)
+    await seedSession(db, userId, token2)
+
+    await handleMe(new Request('https://x/api/me', {
+      method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch', Cookie: `${SESSION_COOKIE_NAME}=${token1}` },
+    }), env)
+
+    const count = sqlite.prepare('SELECT COUNT(*) AS n FROM session WHERE user_id = ?').get(userId) as { n: number }
+    expect(count.n).toBe(0)
+  })
+
+  it('DELETE /api/me without session cookie → 401', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = meEnv({ db })
+    const r = await handleMe(new Request('https://x/api/me', {
+      method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+    }), env)
+    expect(r.status).toBe(401)
+  })
+
+  it('DELETE /api/me without X-Requested-With → 403 (CSRF guard)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const env = meEnv({ db })
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+    const r = await handleMe(new Request('https://x/api/me', {
+      method: 'DELETE',
+      headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+    }), env)
+    expect(r.status).toBe(403)
+  })
+})
+
+// ---- Item 4: NONCE_KEY guard on POST /api/auth/google ----
+
+describe('Fix Group 6a — Item 4: NONCE_KEY guard on POST /api/auth/google', () => {
+  it('NONCE_KEY unset → 401 (fail closed, before JWT verification)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+    const envNoNonce = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: undefined as unknown as string,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const r = await handleAuth(makeSignInReq(credential, nonceValue), envNoNonce, { keys: await localJwks() })
+    expect(r.status).toBe(401)
+  })
+
+  it('NONCE_KEY unset → logs auth: misconfigured (not email/sub)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
+    const credential = await validToken({ nonce: nonceValue })
+    const envNoNonce = {
+      DB: db,
+      GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
+      NONCE_KEY: undefined as unknown as string,
+      AUTH_LIMIT: { limit: async () => ({ success: true }) },
+      ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await handleAuth(makeSignInReq(credential, nonceValue), envNoNonce, { keys: await localJwks() })
+    const logs = spy.mock.calls.map((a) => a.join(' '))
+    spy.mockRestore()
+    expect(logs.some((l) => l.includes('misconfigured'))).toBe(true)
+    for (const log of logs) {
+      expect(log).not.toContain(TEST_EMAIL)
+      expect(log).not.toContain(TEST_SUB)
+    }
   })
 })

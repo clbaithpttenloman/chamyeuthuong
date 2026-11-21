@@ -15,10 +15,10 @@
   //   ADMIN_TOKEN  — existing admin token (unchanged)
   //
   // First-admin bootstrap (email header, one-time):
-  //   BOOTSTRAP_EMAIL lets only that exact address claim an EMPTY admin table.
-  //   It may stay set; it is inert once the table is non-empty.
-  //   ALLOW_FIRST_CLAIM=1 lets ANY email claim the first admin slot (temporary only, delete after).
-  //   Set only via `wrangler secret put`, never in "vars".
+  //   BOOTSTRAP_EMAIL in "vars" lets only that exact address claim an EMPTY admin table.
+  //   It is inert once the table is non-empty, so it may remain set indefinitely.
+  //   ALLOW_FIRST_CLAIM=1 lets ANY email claim the first admin slot — temporary only,
+  //   must be removed immediately after use. Set via `wrangler secret put`, never in "vars".
   //
   // Local dev: add secrets to .dev.vars (never commit). See docs/runbooks/admin.md.
   //
@@ -55,8 +55,9 @@
   // CARD_IP_LIMIT (60/60 s): guards /api/qr/:token; blunts token scanners.
   // ADMIN_FAIL_LIMIT (60/60 s): guards /api/admin/* (all requests).
   // IMAGE_IP_LIMIT (300/60 s): guards /api/image/:token (GET only).
-  // AUTH_LIMIT (300/60 s per IP): guards /api/auth/nonce (all) and /api/auth/google FAILURES only.
-  //   On successful sign-in, AUTH_LIMIT is NOT charged — only failure attempts count.
+  // AUTH_LIMIT (300/60 s per IP): guards /api/auth/google FAILURES only (not nonces, not successes).
+  //   On POST /api/auth/google: charged only when sign-in fails (bad token, wrong nonce, etc.).
+  //   On GET /api/auth/nonce: use PUBLIC_READ_LIMIT instead.
   // AUTH_SUB_LIMIT (10/60 s per sub): guards /api/auth/google successful sign-ins; namespace 2009.
   // USER_READ_LIMIT (120/60 s per user id, IP when signed out): guards GET /api/me; namespace 2007.
   // USER_WRITE_LIMIT (10/60 s per user id, IP when signed out): guards PUT /api/me and logout; namespace 2008.
@@ -88,10 +89,11 @@
         }
       ],
       "vars": {
-        "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com",
         // Replace with the staging OAuth client ID (add staging hostname as an authorised origin).
-        "GOOGLE_CLIENT_ID": "",
-        "ADMIN_LEGACY_LOGIN": "1"
+        "GOOGLE_CLIENT_ID": ""
+        // ADMIN_LEGACY_LOGIN and BOOTSTRAP_EMAIL are intentionally absent from staging.
+        // Staging admins are seeded with: wrangler d1 execute cham-yeu-thuong-staging --command
+        //   "INSERT INTO admin (email, created_at, created_by) VALUES ('you@gmail.com', datetime('now'), 'seed')"
       },
       "ratelimits": [
         { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "3004", "simple": { "limit": 120,  "period": 60 } },

@@ -76,10 +76,17 @@ export function checkHeaders(content: string): string[] {
     )
   }
 
-  // 3. Wildcard (*) in any of these directives is forbidden.
-  if (/(script|frame|connect|style)-src[^;]*\*/.test(content)) {
+  // 3. Wildcard (*) in script/frame/connect/style/default/img-src is forbidden.
+  if (/(default|script|img|frame|connect|style)-src[^;]*\*/.test(content)) {
     errors.push(
-      `forbidden: wildcard (*) source in script-src / frame-src / connect-src / style-src`,
+      `forbidden: wildcard (*) source in default-src / img-src / script-src / frame-src / connect-src / style-src`,
+    )
+  }
+
+  // 3b. Bare scheme (https: or http:) in default-src or img-src is overly permissive.
+  if (/(default|img)-src[^;]*\shttps?:(?=[\s;]|$)/m.test(content)) {
+    errors.push(
+      `forbidden: bare scheme (https: or http:) in default-src / img-src — overly permissive`,
     )
   }
 

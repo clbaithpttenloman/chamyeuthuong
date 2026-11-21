@@ -1310,3 +1310,161 @@ describe('handleCampaigns — PUBLIC_READ_LIMIT on cache misses only', () => {
     expect(((await r.json()) as { error: string }).error).toBe('rate_limited')
   })
 })
+
+// ===================================================================
+// Fix Group 6a — Security fixes
+// ===================================================================
+
+// ---- Item 2: active slot pinned, non-canonical paths rejected before memo ----
+
+describe('Fix Group 6a — Item 2: active slot is never evicted by other entries', () => {
+  it('40 distinct campaign reads do not evict active from the memo', async () => {
+    // Use an isolated db so memo state is fresh and unaffected by other tests.
+    const { db, state } = testDb()
+    // Seed active campaign (overrides testDb's default campaign 1 via INSERT OR REPLACE)
+    await seedCampaign(db, { id: 1, slug: '20-11', status: 'active' })
+    // Seed 40 more closed campaigns with distinct slugs
+    for (let i = 2; i <= 41; i++) {
+      await db.prepare(
+        `INSERT OR REPLACE INTO campaign (id, slug, kind, name, tagline, content, theme_colors, settings,` +
+        ` starts_at, ends_at, status, created_at, created_by) VALUES` +
+        ` (?, ?, 'teacher_cards', 'C', '', '{}', '{}', '{}',` +
+        ` '2000-01-01T00:00:00Z', '2099-12-31T23:59:59Z', 'closed', datetime('now'), 'test')`,
+      ).bind(i, `evict-${i.toString().padStart(3, '0')}-slug`).run()
+    }
+    const env = campaignsEnv(db)
+
+    // Prime the active memo slot
+    await handleCampaigns(new Request('https://x/api/campaigns/active'), env)
+
+    // Fetch all 40 closed campaigns — with the CURRENT code these fill the FIFO and evict 'active'
+    for (let i = 2; i <= 41; i++) {
+      await handleCampaigns(new Request(`https://x/api/campaigns/evict-${i.toString().padStart(3, '0')}-slug`), env)
+    }
+
+    // Active must still be a memo hit: no DB read, no limiter charge
+    const readsBeforeCheck = state.reads
+    const limiterCalls: string[] = []
+    const envWithLimiter = {
+      DB: db,
+      PUBLIC_READ_LIMIT: { limit: async ({ key }: { key: string }) => { limiterCalls.push(key); return { success: true } } },
+    }
+    const r = await handleCampaigns(new Request('https://x/api/campaigns/active'), envWithLimiter)
+    expect(r.status).toBe(200)
+    expect(state.reads).toBe(readsBeforeCheck)
+    expect(limiterCalls).toHaveLength(0)
+  })
+})
+
+// ---- Item 6: strict ISO UTC date format (YYYY-MM-DDTHH:MM:SSZ) ----
+
+describe('Fix Group 6a — Item 6: dates must be YYYY-MM-DDTHH:MM:SSZ', () => {
+  it('POST with starts_at as date-only "2026-01-01" (no time) → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'iso-date-only',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('POST with starts_at with non-UTC timezone offset → 400', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'iso-tz-offset',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00+07:00',
+        ends_at: '2026-12-31T00:00:00Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(400)
+  })
+
+  it('POST with starts_at as "2026-01-01T00:00:00Z" → 201 (valid format)', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'iso-valid-utc',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T23:59:59Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(201)
+  })
+
+  it('POST date is stored as normalised toISOString() without milliseconds', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', {
+        slug: 'iso-norm-ms',
+        kind: 'teacher_cards',
+        name: 'Test',
+        starts_at: '2026-01-01T00:00:00Z',
+        ends_at: '2026-12-31T23:59:59Z',
+      }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(201)
+    const { id } = await r.json() as { id: number }
+    const row = await db.prepare('SELECT starts_at FROM campaign WHERE id = ?').bind(id).first<{ starts_at: string }>()
+    expect(row?.starts_at).toBe('2026-01-01T00:00:00Z')
+    expect(row?.starts_at).not.toContain('.000')
+  })
+})
+
+// ---- Item 7: DELETE refuses id 1 and the active campaign ----
+
+describe('Fix Group 6a — Item 7: DELETE refuses id 1 and the active campaign', () => {
+  it('DELETE id 1 → 409 campaign_protected', async () => {
+    // id 1 always exists (testDb seeds it)
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/1', { method: 'DELETE' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(409)
+    expect((await r.json() as { error: string }).error).toBe('campaign_protected')
+  })
+
+  it('DELETE active campaign with id > 1 → 409 campaign_protected', async () => {
+    await seedCampaign(db, { id: 2, slug: 'noel-2026', kind: 'gift_tree', status: 'active' })
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/2', { method: 'DELETE' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(409)
+    expect((await r.json() as { error: string }).error).toBe('campaign_protected')
+  })
+
+  it('DELETE draft campaign with no rows (id > 1) → 200 { ok: true }', async () => {
+    await seedCampaign(db, { id: 2, slug: 'noel-draft', kind: 'gift_tree', status: 'draft' })
+    const r = await handleAdminCampaigns(
+      new Request('https://x/api/admin/campaigns/2', { method: 'DELETE' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(200)
+  })
+})
+
+describe('handleCampaigns — a campaign slugged "active" does not collide with /active', () => {
+  it('/api/campaigns/active returns the active campaign, /api/campaigns/active-like slug stays separate', async () => {
+    await db.prepare("INSERT INTO campaign (slug, kind, name, tagline, content, theme_colors, settings, starts_at, ends_at, status, created_at, created_by) VALUES ('active', 'gift_tree', 'Tên lạ', '', '{}', '{}', '{}', '2026-01-01T00:00:00Z', '2026-12-31T00:00:00Z', 'closed', 'x', 'test')").run()
+    const env = { DB: db }
+    const bySlug = (await (await handleCampaigns(new Request('https://x/api/campaigns/active'), env)).json()) as { slug: string }
+    expect(bySlug.slug).toBe('20-11')
+  })
+})

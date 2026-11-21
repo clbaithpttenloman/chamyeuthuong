@@ -919,3 +919,23 @@ describe('requireAdmin — Google-only routes never accept the email header', ()
     expect(sqlite.prepare('SELECT COUNT(*) AS n FROM admin').get()).toEqual({ n: 0 })
   })
 })
+
+// ===================================================================
+// Fix Group 6a — Item 5: bootstrap requires ADMIN_LEGACY_LOGIN = "1"
+// ===================================================================
+
+describe('Fix Group 6a — Item 5: bootstrap blocked when ADMIN_LEGACY_LOGIN is not "1"', () => {
+  it('flag off + BOOTSTRAP_EMAIL set + empty table → 401 (no bootstrap, no row)', async () => {
+    const { db } = testDb()
+    // admin table is empty; BOOTSTRAP_EMAIL set; ADMIN_LEGACY_LOGIN is explicitly undefined
+    const env = adminEnv({ db, bootstrapEmail: 'bootstrap@example.com', legacyLogin: undefined })
+    const r = await requireAdminHeader(
+      makeReq('bootstrap@example.com', { xrw: true }),
+      env,
+    )
+    expect((r as Response).status).toBe(401)
+    // No row inserted
+    const count = await db.prepare('SELECT COUNT(*) AS n FROM admin').first<{ n: number }>()
+    expect(count?.n).toBe(0)
+  })
+})

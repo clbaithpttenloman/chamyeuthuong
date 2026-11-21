@@ -129,6 +129,9 @@ export async function requireAdmin(
   if ((check?.total_admins ?? 0) > 0) return error('unauthorized')
 
   // ── Bootstrap path: table is empty ──────────────────────────────────────
+  // Security item 5: bootstrap also requires ADMIN_LEGACY_LOGIN = "1" (staging has it unset).
+  if (env.ADMIN_LEGACY_LOGIN !== '1') return error('unauthorized')
+
   // Bootstrap write requires X-Requested-With: fetch on every method (including GET).
   if (request.headers.get('X-Requested-With') !== 'fetch') return error('forbidden')
 

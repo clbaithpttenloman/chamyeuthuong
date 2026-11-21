@@ -31,7 +31,9 @@ export type Env = {
   ADMIN_FAIL_LIMIT: RateLimit
   /** Rate limit for public image fetches: 300 req/60 s per IP, namespace 2003. */
   IMAGE_IP_LIMIT: RateLimit
-  /** Rate limit for auth endpoints (failures): 300 req/60 s per IP. Auth_LIMIT counts failures only on sign-in; counts all requests on nonce. */
+  /** Rate limit for auth endpoints (failures): 300 req/60 s per IP, namespace 2006.
+   * Charged on POST /api/auth/google FAILURES only (not on success, not on nonces).
+   * GET /api/auth/nonce is rate-limited via PUBLIC_READ_LIMIT instead. */
   AUTH_LIMIT?: RateLimit
   /** Per-sub rate limit on successful sign-ins: 10 req/60 s per sub, namespace 2009. */
   AUTH_SUB_LIMIT?: RateLimit

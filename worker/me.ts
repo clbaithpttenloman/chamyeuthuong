@@ -37,17 +37,18 @@ type MeEnv = {
   DB: D1
   GOOGLE_CLIENT_ID?: string
   NONCE_KEY: string
+  /** AUTH_LIMIT counts failed sign-in attempts only (not nonces). 300/60 s per IP. */
   AUTH_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
-  /** Per-sub rate limit on successful sign-ins: 10/60 s. Key = HMAC(sub) or sub. */
+  /** Per-sub rate limit on successful sign-ins: 10/60 s. Key = raw sub (never logged). */
   AUTH_SUB_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_FAIL_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   /** GET /api/me: 120/60 s, keyed by user id (IP when signed out). */
   USER_READ_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
-  /** PUT /api/me and logout: 10/60 s, keyed by user id (IP when signed out). */
+  /** PUT /api/me, DELETE /api/me and logout: 10/60 s, keyed by user id (IP when signed out). */
   USER_WRITE_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
+  /** GET /api/auth/nonce: 3,000/60 s per IP (PUBLIC_READ_LIMIT namespace). */
+  PUBLIC_READ_LIMIT?: { limit(opts: { key: string }): Promise<{ success: boolean }> }
   ADMIN_LEGACY_LOGIN?: string
-  /** Used to hash the sub for AUTH_SUB_LIMIT key (privacy-preserving). */
-  IP_HMAC_KEY?: string
 }
 
 /** Security headers for all /api/auth/* and /api/me responses (no CORS). */
@@ -196,8 +197,8 @@ export async function handleAuth(
 
   // GET /api/auth/nonce — no CSRF needed, no auth needed
   if (request.method === 'GET' && pathname === '/api/auth/nonce') {
-    // Accept #7: rate limit nonce requests per IP (reuses AUTH_LIMIT namespace)
-    const rl = await env.AUTH_LIMIT?.limit({ key: ip }) ?? { success: true }
+    // Security item 1: nonce uses PUBLIC_READ_LIMIT per IP; AUTH_LIMIT counts failures only.
+    const rl = await env.PUBLIC_READ_LIMIT?.limit({ key: ip }) ?? { success: true }
     if (!rl.success) return failResp('rate_limited', 429)
     const { nonce, cookie } = await issueNonce(env)
     return resp({ nonce, clientId: env.GOOGLE_CLIENT_ID ?? '' }, 200, [cookie])
@@ -220,7 +221,13 @@ export async function handleAuth(
       return failResp('unauthorized', 401, [nonceClear])
     }
 
-    // Rate limit on IP (Accept #7: AUTH_LIMIT counts failures only — charged below on failure)
+    // Security item 4: fail closed when NONCE_KEY is not configured.
+    if (!env.NONCE_KEY) {
+      console.error('auth: misconfigured')
+      return failResp('unauthorized', 401, [nonceClear])
+    }
+
+    // Rate limit on IP (AUTH_LIMIT counts failures only — charged below on failure)
 
     // Read and validate nonce cookie
     const nonceCookieVal = getCookieValue(request, NONCE_COOKIE) ?? ''
@@ -254,8 +261,8 @@ export async function handleAuth(
     }
 
     // Accept #7: per-sub rate limit on successful sign-ins (AUTH_SUB_LIMIT, 10/60 s)
-    // Key is the sub (or its hash if IP_HMAC_KEY is available, for dashboard privacy)
-    const subKey = claims.sub  // SHORTCUT: use raw sub as key — HMAC with IP_HMAC_KEY if dashboard privacy required
+    // Key is the raw sub (never logged or returned; decisions.md "Security cycle 1").
+    const subKey = claims.sub
     const subRl = await env.AUTH_SUB_LIMIT?.limit({ key: subKey }) ?? { success: true }
     if (!subRl.success) return failResp('rate_limited', 429, [nonceClear])
 
@@ -326,6 +333,21 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
     }
 
     return resp({ user: publicUser(userRow, isAdmin), isAdmin }, 200)
+  }
+
+  if (request.method === 'DELETE') {
+    // Security item 3: account deletion. Deletes all sessions + user row in one batch.
+    if (!csrfGuard(request)) return failResp('forbidden', 403)
+    const session = await readSession(request, env.DB)
+    if (!session) return failResp('unauthorized', 401)
+    if (!(await withinUserLimit(env.USER_WRITE_LIMIT, request, session.userId))) return failResp('rate_limited', 429)
+    // Delete sessions and user row explicitly in the same batch (do not rely on CASCADE state).
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM session WHERE user_id = ?').bind(session.userId),
+      env.DB.prepare('DELETE FROM app_user WHERE id = ?').bind(session.userId),
+    ])
+    const cleared = clearCookie(SESSION_COOKIE)
+    return resp({ ok: true }, 200, [cleared])
   }
 
   if (request.method === 'PUT') {
