@@ -164,3 +164,41 @@ describe('matchCampaignSlug — invalid slugs → null', () => {
     expect(matchCampaignSlug?.('')).toBeNull()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2: share-link route /:slug/g/:publicId (FR-25a)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ROUTES — /:slug/g/:publicId share-link route (Phase 2)', () => {
+  it('has /:slug/g/:publicId route', () => {
+    const paths = ROUTES.map((r: { path: string }) => r.path)
+    expect(paths).toContain('/:slug/g/:publicId')
+  })
+
+  it('/:slug/g/:publicId comes before /:slug in the array (more specific first)', () => {
+    const paths = ROUTES.map((r: { path: string }) => r.path)
+    const shareIdx = paths.indexOf('/:slug/g/:publicId')
+    const slugIdx  = paths.indexOf('/:slug')
+    expect(shareIdx).toBeGreaterThanOrEqual(0)
+    expect(slugIdx).toBeGreaterThanOrEqual(0)
+    expect(shareIdx).toBeLessThan(slugIdx)
+  })
+
+  it('/:slug/g/:publicId sits after all named routes (admin, gui-thiep, etc.)', () => {
+    const paths = ROUTES.map((r: { path: string }) => r.path)
+    const shareIdx = paths.indexOf('/:slug/g/:publicId')
+    expect(shareIdx).toBeGreaterThan(paths.indexOf('/'))
+    expect(shareIdx).toBeGreaterThan(paths.indexOf('/admin'))
+    expect(shareIdx).toBeGreaterThan(paths.indexOf('/gui-thiep'))
+    expect(shareIdx).toBeGreaterThan(paths.indexOf('/t/:token'))
+    expect(shareIdx).toBeGreaterThan(paths.indexOf('/ve-clb-ai'))
+  })
+
+  // Regression guards — still-present Phase 1 routes
+  it('still has / route', () => {
+    expect(ROUTES.map((r: { path: string }) => r.path)).toContain('/')
+  })
+  it('still has /:slug route', () => {
+    expect(ROUTES.map((r: { path: string }) => r.path)).toContain('/:slug')
+  })
+})

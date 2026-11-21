@@ -380,3 +380,28 @@ describe('GET /api/templates — 20/11 compat returns campaign 1 templates only'
     expect(body.map((t) => t.name)).not.toContain('Inactive C1')
   })
 })
+
+// Orchestrator addition: gift cards need the background image, and the endpoint needs a limit class.
+describe('GET /api/campaigns/<slug>/templates — images and rate limit', () => {
+  it('returns { id, name, layout, images } like /api/templates, with the background token', async () => {
+    const { db, sqlite } = testDb()
+    const noelId = seedGiftTreeCampaign(sqlite)
+    const tplId = seedTemplate(sqlite, { name: 'Noel BG', layout: 'doc-giua', campaignId: noelId })
+    sqlite.prepare("INSERT INTO image (token, name, mime, size, data, created_at, created_by) VALUES ('bgnoel0000000001', 'bg', 'image/webp', 10, 'AA==', 'x', 'test')").run()
+    const imgId = (sqlite.prepare("SELECT id FROM image WHERE token = 'bgnoel0000000001'").get() as { id: number }).id
+    sqlite.prepare("INSERT INTO template_image (template_id, slot, image_id) VALUES (?, 'background', ?)").run(tplId, imgId)
+    const r = await handleTree(new Request('https://x/api/campaigns/noel/templates', { headers: { 'CF-Connecting-IP': '9.9.9.9' } }), makeTemplatesEnv(db) as never)
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual([{ id: tplId, name: 'Noel BG', layout: 'doc-giua', images: { background: 'bgnoel0000000001' } }])
+  })
+
+  it('is charged to PUBLIC_READ_LIMIT per IP; exhausted → 429 before any campaign lookup', async () => {
+    const { db, sqlite } = testDb()
+    seedGiftTreeCampaign(sqlite)
+    const keys: string[] = []
+    const env = { ...makeTemplatesEnv(db), PUBLIC_READ_LIMIT: { limit: async ({ key }: { key: string }) => { keys.push(key); return { success: false } } } }
+    const r = await handleTree(new Request('https://x/api/campaigns/noel/templates', { headers: { 'CF-Connecting-IP': '9.9.9.9' } }), env as never)
+    expect(r.status).toBe(429)
+    expect(keys).toEqual(['9.9.9.9'])
+  })
+})

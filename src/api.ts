@@ -587,3 +587,133 @@ export async function banAdminUser(userId: number, banned: boolean): Promise<voi
     body: JSON.stringify({ banned }),
   }))
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Noel player API — gift_tree campaign reads and writes
+// All writes need X-Requested-With: fetch (session cookie sent automatically).
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** A gift item returned as part of the tree response. */
+export type NoelGift = {
+  rank: number
+  place: 'tree' | 'ground'
+  publicId: string
+  heartCount: number
+  nickname: string
+  className: string
+  boxStyle: number
+  ornamentStyle: number
+  layout: string
+  backgroundTemplateId: number | null
+  font: string
+  ink: string
+  message: string
+  createdAt: string
+}
+
+/** A gift item without rank/place (from gift-by-id and gift-list endpoints). */
+export type NoelGiftFlat = Omit<NoelGift, 'rank' | 'place'>
+
+/** Response from GET /api/campaigns/<slug>/tree (ADR-7). */
+export type NoelTreeData = {
+  asOf: string
+  gifts: NoelGift[]
+  totals: { visible: number }
+}
+
+/** Response from GET /api/me?campaign=<slug> — includes per-campaign state. */
+export type MeForCampaign = {
+  user: MeUser | null
+  isAdmin: boolean
+  heartsLeft: number
+  heartedGiftIds: string[]
+}
+
+/** Active template as returned by GET /api/campaigns/<slug>/templates. */
+export type NoelTemplate = {
+  id: number
+  name: string
+  layout: string
+  /** slot → image token, as in the 20/11 template list (background only today). */
+  images: Record<string, string>
+}
+
+/** Response from POST /api/gifts/<publicId>/heart. */
+export type HeartResponse = {
+  heartCount: number
+  heartsLeft: number
+  rank: number
+}
+
+/** Report reason enum. */
+export type ReportReason = 'inappropriate' | 'spam' | 'other'
+
+/**
+ * GET /api/campaigns/<slug>/tree — polled every ~15 s while visible (ADR-7).
+ * Cache-Control: public, max-age=5 on the server.
+ */
+export async function getNoelTree(slug: string): Promise<NoelTreeData> {
+  const url = `/api/campaigns/${encodeURIComponent(slug)}/tree?x=${Math.random().toString(36).slice(2)}`
+  return (await expectOk(await fetch(url))).json() as Promise<NoelTreeData>
+}
+
+/**
+ * GET /api/me?campaign=<slug> — returns user, heartsLeft, heartedGiftIds.
+ * Falls back gracefully (returns anonymous state) on network errors.
+ */
+export async function getMeForCampaign(slug: string): Promise<MeForCampaign> {
+  const res = await fetch(`/api/me?campaign=${encodeURIComponent(slug)}`, {
+    headers: { 'X-Requested-With': 'fetch' },
+  })
+  if (!res.ok) return { user: null, isAdmin: false, heartsLeft: 5, heartedGiftIds: [] }
+  return res.json() as Promise<MeForCampaign>
+}
+
+/**
+ * GET /api/campaigns/<slug>/templates — returns active templates for the campaign.
+ * Used to look up template names for gift cards.
+ */
+export async function getNoelTemplates(slug: string): Promise<NoelTemplate[]> {
+  return (await expectOk(await fetch(`/api/campaigns/${encodeURIComponent(slug)}/templates`))).json() as Promise<NoelTemplate[]>
+}
+
+/**
+ * GET /api/gifts/<publicId> — fetch a single gift by public id.
+ * Returns 404 for hidden/deleted gifts (except to owner/admin).
+ */
+export async function getGiftByPublicId(publicId: string): Promise<NoelGiftFlat> {
+  return (await expectOk(await fetch(`/api/gifts/${encodeURIComponent(publicId)}`))).json() as Promise<NoelGiftFlat>
+}
+
+/**
+ * POST /api/gifts/<publicId>/heart — give a heart to a gift (ADR-7).
+ * Throws ApiError on failure (codes: gift_not_found, campaign_closed, banned,
+ * own_gift, already_hearted, hearts_exhausted, rate_limited).
+ */
+export async function heartGift(publicId: string): Promise<HeartResponse> {
+  return (await sessionExpectOk(await sessionFetch(`/api/gifts/${encodeURIComponent(publicId)}/heart`, { method: 'POST' }))).json() as Promise<HeartResponse>
+}
+
+/**
+ * POST /api/gifts/<publicId>/report — report a gift (ADR-8).
+ * Throws ApiError on failure (codes: gift_not_found, campaign_closed, banned,
+ * already_reported, rate_limited).
+ */
+export async function reportGift(publicId: string, reason: ReportReason): Promise<void> {
+  await sessionExpectOk(await sessionFetch(`/api/gifts/${encodeURIComponent(publicId)}/report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  }))
+}
+
+/**
+ * GET /api/me/gifts?campaign=<slug> — returns the signed-in user's own gifts with rank.
+ * Extension point for Part B (my-gifts flow).
+ */
+export async function getMyGifts(slug: string): Promise<Array<NoelGift & { status: string }>> {
+  const res = await sessionFetch(`/api/me/gifts?campaign=${encodeURIComponent(slug)}`)
+  if (!res.ok) return []
+  const data = await res.json() as { gifts: Array<NoelGift & { status: string }> }
+  return data.gifts ?? []
+}

@@ -755,3 +755,535 @@ button:disabled { opacity: 0.5; cursor: default; }
     filter: none;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   NoelPage — full-screen container + header / actions (Phase 2)
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Full-screen overlay so the game covers the global App header + footer */
+.noel-page {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow: hidden;
+  background: #060d1f;
+}
+
+/* ── Top header bar ───────────────────────────────────────────────── */
+.noel-page-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: rgba(6, 13, 31, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.noel-page-title {
+  color: #f0e6ff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+}
+
+.noel-page-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.noel-page-signin-btn,
+.noel-page-menu-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f0e6ff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.noel-page-signin-btn:hover,
+.noel-page-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.noel-page-user-name {
+  color: #fca5a5;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.noel-page-inapp-note {
+  color: #fde68a;
+  font-size: 0.72rem;
+}
+
+/* ── Hearts indicator (top-right) ────────────────────────────────── */
+.noel-page-hearts {
+  position: absolute;
+  top: 50px;
+  right: 12px;
+  z-index: 20;
+  background: rgba(6, 13, 31, 0.72);
+  color: #fca5a5;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+/* ── Action bar (bottom) ─────────────────────────────────────────── */
+.noel-page-actions {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  gap: 8px;
+}
+
+.noel-page-action-btn {
+  background: rgba(6, 13, 31, 0.80);
+  color: #f0e6ff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 24px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.1s;
+}
+.noel-page-action-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  transform: translateY(-2px);
+}
+.noel-page-action-btn:active {
+  transform: translateY(0);
+}
+
+/* ── Closed campaign banner ──────────────────────────────────────── */
+.noel-page-closed-banner {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: rgba(239, 68, 68, 0.85);
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 24px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* ── Coming-soon dialog ───────────────────────────────────────────── */
+.noel-coming-soon-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.noel-coming-soon-dialog {
+  background: #1a223d;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 16px;
+  padding: 28px 32px;
+  text-align: center;
+  max-width: 300px;
+}
+
+.noel-coming-soon-text {
+  color: #f0e6ff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+.noel-coming-soon-dialog button {
+  background: rgba(255,255,255,0.15);
+  color: #f0e6ff;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 12px;
+  padding: 6px 20px;
+  cursor: pointer;
+}
+
+/* ── Sign-in dialog inside NoelPage ──────────────────────────────── */
+.noel-signin-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.noel-signin-dialog {
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 340px;
+  width: 90%;
+}
+
+.noel-signin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.noel-signin-header h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+}
+
+.noel-signin-header button {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 4px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GiftSheet — dialog for opening a gift (Phase 2)
+   ══════════════════════════════════════════════════════════════════ */
+
+.gift-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.gift-sheet-dialog {
+  background: #fff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 420px;
+  max-height: 92vh;
+  overflow-y: auto;
+  outline: none;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+.gift-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  flex-shrink: 0;
+}
+
+.gift-sheet-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gift-sheet-close {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.gift-sheet-close:hover { color: #475569; background: #f1f5f9; }
+
+/* ── Animation phase ────────────────────────────────────────────── */
+.gift-sheet-anim {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 32px;
+  min-height: 220px;
+}
+
+.gift-sheet-box {
+  position: relative;
+  z-index: 2;
+}
+
+.gift-sheet-box-img {
+  display: block;
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+}
+
+.gift-sheet-lid {
+  position: absolute;
+  left: 50%;
+  top: 32px;
+  width: 100px;
+  height: 36px;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  border-radius: 8px 8px 0 0;
+  z-index: 3;
+}
+
+.gift-sheet-sparks {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+/* ── Body (card + actions) ─────────────────────────────────────── */
+.gift-sheet-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: gift-sheet-fadein 0.3s ease;
+}
+
+@keyframes gift-sheet-fadein {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gift-sheet-body { animation: none; }
+}
+
+.gift-sheet-card {
+  /* Container for CardView; fixed height + overflow hidden */
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
+  /* CardView uses container queries; give it a defined height */
+  aspect-ratio: 3 / 4;
+  container-type: size;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+}
+
+/* ── Meta info ──────────────────────────────────────────────────── */
+.gift-sheet-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gift-sheet-nickname {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 0.9rem;
+}
+
+.gift-sheet-hearts {
+  color: #ef4444;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.gift-sheet-rank {
+  color: #64748b;
+  font-size: 0.8rem;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* ── Heart button ───────────────────────────────────────────────── */
+.gift-sheet-heart-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.gift-sheet-heart-btn {
+  background: #fef2f2;
+  color: #ef4444;
+  border: 1.5px solid #fca5a5;
+  border-radius: 24px;
+  padding: 8px 20px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.gift-sheet-heart-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.gift-sheet-heart-btn:not(:disabled):hover {
+  background: #fee2e2;
+}
+.gift-sheet-heart-btn[aria-pressed="true"] {
+  background: #fca5a5;
+  border-color: #ef4444;
+}
+
+.gift-sheet-heart-reason {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.gift-sheet-error {
+  font-size: 0.78rem;
+  color: #ef4444;
+  margin: 0;
+}
+
+/* ── Report ─────────────────────────────────────────────────────── */
+.gift-sheet-report-toggle {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.gift-sheet-report-picker {
+  background: #fafafa;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.gift-sheet-report-label {
+  font-weight: 600;
+  color: #475569;
+  margin: 0 0 4px;
+}
+
+.gift-sheet-report-picker label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #334155;
+  cursor: pointer;
+}
+
+.gift-sheet-report-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.gift-sheet-report-actions button {
+  flex: 1;
+  padding: 6px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border: 1px solid #e2e8f0;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.gift-sheet-report-actions button:first-child {
+  background: #ef4444;
+  color: #fff;
+  border-color: #ef4444;
+}
+
+.gift-sheet-report-done {
+  font-size: 0.8rem;
+  color: #22c55e;
+  font-weight: 600;
+  margin: 0;
+}
+
+/* ── Share ──────────────────────────────────────────────────────── */
+.gift-sheet-share-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gift-sheet-share-btn {
+  background: #f0f9ff;
+  color: #0369a1;
+  border: 1.5px solid #bae6fd;
+  border-radius: 24px;
+  padding: 7px 18px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gift-sheet-share-btn:hover { background: #e0f2fe; }
+
+.gift-sheet-share-feedback {
+  font-size: 0.75rem;
+  color: #22c55e;
+  font-weight: 600;
+}
+
+/* ── Navigation ─────────────────────────────────────────────────── */
+.gift-sheet-nav {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 16px 16px;
+  flex-shrink: 0;
+  border-top: 1px solid #f1f5f9;
+  gap: 8px;
+}
+
+.gift-sheet-nav-btn {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 7px 18px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.gift-sheet-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.gift-sheet-nav-btn:not(:disabled):hover { background: #f1f5f9; }

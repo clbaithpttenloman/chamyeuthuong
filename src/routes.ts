@@ -2,9 +2,13 @@
  * src/routes.ts — React Router route definitions.
  *
  * Exported as ROUTES so App.tsx and tests can reference them directly.
- * Routes: / | /gui-thiep | /t/:token | /ve-clb-ai | /admin | /:slug | * (not-found)
+ * Routes: / | /gui-thiep | /t/:token | /ve-clb-ai | /admin | /:slug/g/:publicId | /:slug | * (not-found)
  *
- * /:slug is placed AFTER all named routes so it never shadows them.
+ * /:slug/g/:publicId — share link (FR-25a); renders CampaignPage which passes focusPublicId
+ *   to NoelPage, rotating the tree to that gift and opening the GiftSheet on mount.
+ *   Placed before /:slug so it matches the more-specific two-segment path first.
+ *
+ * /:slug is placed AFTER all named routes and /:slug/g/:publicId.
  * Reserved slugs (admin, api, t, gui-thiep, ve-clb-ai, assets, theme, g) are
  * rejected by isValidSlug and never match the /:slug route.
  *
@@ -52,7 +56,10 @@ export const ROUTES: RouteEntry[] = [
   { path: '/t/:token', element: createElement(QrPage) },
   { path: '/ve-clb-ai', element: createElement(About) },
   { path: '/admin', element: createElement(Admin) },
-  // /:slug must come after all named routes so it never shadows them (see test)
+  // Share link: /:slug/g/:publicId — more specific than /:slug, so placed first
+  // CampaignPage reads both params; passes focusPublicId to NoelPage (FR-25a)
+  { path: '/:slug/g/:publicId', element: createElement(CampaignPage) },
+  // /:slug must come after all named routes and the share link so it never shadows them
   { path: '/:slug', element: createElement(CampaignPage) },
   { path: '*', element: createElement('p', { className: 'notfound' }, 'Không tìm thấy trang.') },
 ]

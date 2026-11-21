@@ -149,3 +149,90 @@ describe('CardView — chức vụ / môn line', () => {
     expect(out).not.toContain('Giáo viên')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2: toLine / subLine / stamp optional props (Noel gift card support)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('CardView — toLine prop (greeting line)', () => {
+  it('undefined (default) → renders "Kính gửi" (20/11 unchanged)', () => {
+    expect(html()).toContain('Kính gửi')
+  })
+
+  it('null → "Kính gửi" line is hidden', () => {
+    const out = html({ toLine: null })
+    expect(out).not.toContain('Kính gửi')
+    // Other content still present
+    expect(out).toContain('Nguyễn Văn A')
+  })
+
+  it('custom string → custom greeting shown, "Kính gửi" absent', () => {
+    const out = html({ toLine: 'Điều ước của' })
+    expect(out).toContain('Điều ước của')
+    expect(out).not.toContain('Kính gửi')
+  })
+
+  it('empty string → renders an empty <p class="to"> (not hidden)', () => {
+    const out = html({ toLine: '' })
+    // empty string is truthy for `toLine !== null`, so the element renders
+    expect(out).toContain('class="to"')
+  })
+})
+
+describe('CardView — subLine prop (sub-heading / role line)', () => {
+  it('undefined (default) → roleLabel() used (20/11 unchanged)', () => {
+    expect(html()).toContain('Giáo viên: Toán')
+  })
+
+  it('null → role/subject line is hidden', () => {
+    const out = html({ subLine: null })
+    expect(out).not.toContain('Giáo viên')
+    expect(out).not.toContain('Toán')
+    // Name and message still present
+    expect(out).toContain('Nguyễn Văn A')
+    expect(out).toContain('Chúc mừng!')
+  })
+
+  it('custom string → custom sub-line shown, roleLabel absent', () => {
+    const out = html({ subLine: 'Khối 11 · 11A1' })
+    expect(out).toContain('Khối 11 · 11A1')
+    expect(out).not.toContain('Giáo viên')
+  })
+
+  it('empty string → subLine="" is falsy; sub-line element not rendered', () => {
+    // Empty string is falsy in React JSX conditional `{resolvedSubLabel && <p>…</p>}`,
+    // so an empty subLine produces no element — same behaviour as the original null guard.
+    const out = html({ subLine: '' })
+    expect(out).not.toContain('class="sub"')
+  })
+})
+
+describe('CardView — stamp prop (footer)', () => {
+  it('undefined (default) → site.title + 20/11 (20/11 unchanged)', () => {
+    expect(html()).toContain('AI - Chạm yêu thương')
+    expect(html()).toContain('20/11')
+  })
+
+  it('custom stamp → custom stamp shown, 20/11 absent', () => {
+    const out = html({ stamp: 'AI - Chạm yêu thương · Noel' })
+    expect(out).toContain('AI - Chạm yêu thương · Noel')
+    expect(out).not.toContain('20/11')
+  })
+
+  it('stamp="" → empty stamp shown', () => {
+    const out = html({ stamp: '' })
+    expect(out).toContain('class="card-stamp"')
+  })
+})
+
+describe('CardView — toLine + subLine + stamp together (Noel gift card scenario)', () => {
+  it('gift card: toLine=null, subLine=null, custom stamp → no greeting, no sub, custom stamp', () => {
+    const out = html({ toLine: null, subLine: null, stamp: 'AI - Chạm yêu thương · Noel' })
+    expect(out).not.toContain('Kính gửi')
+    expect(out).not.toContain('Giáo viên')
+    expect(out).toContain('AI - Chạm yêu thương · Noel')
+    // Core message + name still present
+    expect(out).toContain('Nguyễn Văn A')
+    expect(out).toContain('Chúc mừng!')
+  })
+})

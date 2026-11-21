@@ -1,17 +1,21 @@
 /**
  * Home page — `/`
  *
- * Renders the active campaign's home content (kicker, heading, body).
+ * Renders the active campaign's home content by kind:
+ *   teacher_cards → existing 20/11 wall (kicker, heading, body, counters, send button)
+ *   gift_tree     → NoelPage (lazy-loaded; FR-19–28)
+ *
  * Falls back to src/content/site.json synchronously on first render and on
- * any fetch error — no flash, no blank screen.
+ * any fetch error — no flash, no blank screen for teacher_cards.
  *
  * Data source: GET /api/campaigns/active → campaign.content (JSON seeded from site.json).
- * FR-3; plan.md § Frontend "/ renders the 20/11 home from the active campaign's content".
+ * FR-3; plan.md § Frontend.
  */
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { WallResponse } from '../../shared/api.ts'
 import { getActiveCampaign, getWall } from '../api'
+import type { CampaignData } from '../api'
 import site from '../content/site.json'
 
 type HomeContent = { kicker: string; heading: string; body: string }
@@ -31,7 +35,11 @@ export function extractHomeContent(content: unknown): HomeContent | null {
   return { kicker, heading, body }
 }
 
+// NoelPage is lazy so teacher-cards home never loads game code (NFR-2)
+const NoelPage = lazy(() => import('../game/NoelPage.tsx'))
+
 export default function Home() {
+  const [campaign, setCampaign] = useState<CampaignData | null>(null)
   const [totals, setTotals] = useState<WallResponse['totals'] | null>(null)
   // Initialise from site.json so the first render is instant (no flash).
   const [homeContent, setHomeContent] = useState<HomeContent>(site.home)
@@ -40,8 +48,11 @@ export default function Home() {
     // Update content from the active campaign (falls back to site.json init if this fails).
     getActiveCampaign()
       .then((c) => {
-        const h = extractHomeContent(c.content)
-        if (h) setHomeContent(h)
+        setCampaign(c)
+        if (c.kind === 'teacher_cards') {
+          const h = extractHomeContent(c.content)
+          if (h) setHomeContent(h)
+        }
       })
       .catch(() => { /* keep site.json fallback */ })
 
@@ -50,6 +61,16 @@ export default function Home() {
       .catch(() => setTotals(null))
   }, [])
 
+  // gift_tree active campaign → show Noel game page
+  if (campaign?.kind === 'gift_tree') {
+    return (
+      <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
+        <NoelPage slug={campaign.slug} />
+      </Suspense>
+    )
+  }
+
+  // teacher_cards (or not yet loaded) → existing 20/11 home (unchanged behavior)
   return (
     <section className="wall-hero">
       <p className="kicker">{homeContent.kicker}</p>

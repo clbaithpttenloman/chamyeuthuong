@@ -15,6 +15,8 @@
  *   - TREE_READ_LIMIT charged on cache misses only; slug validated BEFORE any DB/limiter call
  *   - Response never reads Cookie; body byte-identical for anonymous vs signed-in
  */
+import { fetchTemplateImages } from './publicSql.ts'
+import { resolveLayout } from '../shared/layouts.ts'
 import { error, json } from './http.ts'
 import { ensureSchema } from './schema.ts'
 import { isValidSlug } from '../shared/campaign.ts'
@@ -335,10 +337,16 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
 
 // ── GET /api/campaigns/<slug>/templates ───────────────────────────────────────
 
-async function handleCampaignTemplates(slug: string, env: TreeEnv): Promise<Response> {
+async function handleCampaignTemplates(slug: string, request: Request, env: TreeEnv): Promise<Response> {
   const db = env.DB
 
   if (!isValidSlug(slug)) return error('not_found')
+
+  // Public list: every request is a D1 read, so it is metered like other public lists.
+  if (env.PUBLIC_READ_LIMIT) {
+    const rl = await env.PUBLIC_READ_LIMIT.limit({ key: request.headers.get('CF-Connecting-IP') ?? 'unknown' })
+    if (!rl.success) return error('rate_limited')
+  }
 
   await ensureSchema(db)
 
@@ -355,7 +363,10 @@ async function handleCampaignTemplates(slug: string, env: TreeEnv): Promise<Resp
     .bind(campaign.id)
     .all<{ id: number; name: string; layout: string }>()
 
-  return new Response(JSON.stringify(results), {
+  // Same shape as the 20/11 /api/templates: { id, name, layout, images: { slot: token } }.
+  const imgMap = await fetchTemplateImages(db, results.map((t) => t.id))
+  const list = results.map((t) => ({ id: t.id, name: t.name, layout: resolveLayout(t.layout).id, images: imgMap.get(t.id) ?? {} }))
+  return new Response(JSON.stringify(list), {
     status: 200,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -445,7 +456,7 @@ export async function handleTree(request: Request, env: TreeEnv): Promise<Respon
   if (giftsMatch) return handleGiftList(giftsMatch[1]!, request, env)
 
   const templatesMatch = pathname.match(/^\/api\/campaigns\/([^/]+)\/templates$/)
-  if (templatesMatch) return handleCampaignTemplates(templatesMatch[1]!, env)
+  if (templatesMatch) return handleCampaignTemplates(templatesMatch[1]!, request, env)
 
   const giftByIdMatch = pathname.match(/^\/api\/gifts\/([a-zA-Z0-9_-]+)$/)
   if (giftByIdMatch) return handleGiftById(giftByIdMatch[1]!, request, env)
