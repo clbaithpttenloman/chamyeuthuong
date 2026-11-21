@@ -88,53 +88,21 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
 
   const inApp = isInAppBrowser(navigator.userAgent)
 
+  // undefined until the server answers; the nonce is bound to this page load.
+  const [nonce, setNonce] = useState<string | undefined>(undefined)
+
+  // Step 1: load the GSI script and fetch { nonce, clientId }.
   useEffect(() => {
     if (inApp) return
     let cancelled = false
-
     void (async () => {
       try {
         await loadGsiScript()
         if (cancelled) return
-
-        const { nonce, clientId: cid } = await getNonce()
+        const r = await getNonce()
         if (cancelled) return
-
-        setClientId(cid)
-
-        if (!cid || !buttonRef.current) return
-
-        window.google!.accounts.id.initialize({
-          client_id: cid,
-          nonce,
-          ux_mode: 'popup',
-          use_fedcm_for_button: true,
-          context: 'signin',
-          callback: async ({ credential }: { credential: string }) => {
-            setLoading(true)
-            setError(null)
-            try {
-              const user = await signInWithGoogle(credential)
-              if (!user.nickname) {
-                setNeedsOnboarding(true)
-              } else {
-                onSignedInRef.current()
-              }
-            } catch (e) {
-              setError(messageFor(e))
-            } finally {
-              setLoading(false)
-            }
-          },
-        })
-
-        if (buttonRef.current) {
-          window.google!.accounts.id.renderButton(buttonRef.current, {
-            type: 'standard',
-            text: 'signin_with',
-            locale: 'vi',
-          })
-        }
+        setNonce(r.nonce)
+        setClientId(r.clientId)
       } catch (e) {
         if (!cancelled) {
           setClientId('')  // treat fetch failure as unconfigured
@@ -142,10 +110,43 @@ export default function GoogleSignIn({ onSignedIn }: Props) {
         }
       }
     })()
-
     return () => { cancelled = true }
     // inApp is derived from navigator.userAgent — stable across renders
   }, [inApp])
+
+  // Step 2: render the button once the container exists. It mounts only after clientId is
+  // set (smoke F4: rendering in step 1 found a null ref and never retried).
+  useEffect(() => {
+    if (!clientId || !nonce || needsOnboarding || !buttonRef.current) return
+    window.google!.accounts.id.initialize({
+      client_id: clientId,
+      nonce,
+      ux_mode: 'popup',
+      use_fedcm_for_button: true,
+      context: 'signin',
+      callback: async ({ credential }: { credential: string }) => {
+        setLoading(true)
+        setError(null)
+        try {
+          const user = await signInWithGoogle(credential)
+          if (!user.nickname) {
+            setNeedsOnboarding(true)
+          } else {
+            onSignedInRef.current()
+          }
+        } catch (e) {
+          setError(messageFor(e))
+        } finally {
+          setLoading(false)
+        }
+      },
+    })
+    window.google!.accounts.id.renderButton(buttonRef.current, {
+      type: 'standard',
+      text: 'signin_with',
+      locale: 'vi',
+    })
+  }, [clientId, nonce, needsOnboarding])
 
   if (inApp) return <InAppBrowserGuide />
 
