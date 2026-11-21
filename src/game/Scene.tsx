@@ -31,11 +31,24 @@
  *   z=4  tree image
  *   z=5  ground layer image
  *   z=6  ornament buttons with depth ≥ 0 (in front of tree)
- *   z=7  ground box buttons
- *   z=8  star
+ *   z=7+ ground box buttons (row 0=9, row 1=8, row 2=7)
+ *   z=8  star wrapper
+ *
+ * ─── LAYOUT APPROACH ───────────────────────────────────────────────────────
+ *   All pixel dimensions are computed by computeSceneLayout() (layout.ts)
+ *   and applied via inline style in a ResizeObserver callback — no CSS
+ *   height/width on the tree or box elements.  The ground layer uses
+ *   height: 22% / min-width: 104% (matches the approved mockup proportions).
+ *
+ * ─── STAR POSITION FIX ─────────────────────────────────────────────────────
+ *   The star is split into two elements:
+ *     - .noel-star-wrap (div): position updated by layout effect (not rAF)
+ *     - .noel-star-img (img): WAAPI twinkle animation (scale/filter only)
+ *   This prevents the WAAPI `transform` from clobbering the positioning
+ *   transform that sits on the wrapper.
  *
  * ─── NOTES ─────────────────────────────────────────────────────────────────
- *   - rAF loop writes only CSS `transform`, `opacity`, `z-index` (no layout thrash).
+ *   - rAF loop writes only CSS `transform`, `opacity`, `z-index` on ornaments.
  *   - All gift elements are <button> so they receive native keyboard/focus.
  *   - `touch-action: pan-y` on the scene div allows vertical scroll while
  *     horizontal drag goes to the spin machine via pointer capture.
@@ -55,6 +68,7 @@ import { createSpin } from './spin.ts'
 import { startSnow } from './particles.ts'
 import { animateStar, flashOrnament } from './timelines.ts'
 import { DEFAULT_THEME_URLS, TREE_GEOMETRY } from './defaultTheme.ts'
+import { computeSceneLayout, type SceneLayout } from './layout.ts'
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -139,16 +153,22 @@ function skyUrl(): string {
 export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicId }: SceneProps): ReactNode {
   const reduced = useMemo(() => prefersReducedMotion(), [])
 
-  const sceneRef = useRef<HTMLDivElement>(null)
-  const treeImgRef = useRef<HTMLImageElement>(null)
+  const sceneRef      = useRef<HTMLDivElement>(null)
+  const treeImgRef    = useRef<HTMLImageElement>(null)
   const snowCanvasRef = useRef<HTMLCanvasElement>(null)
-  const starRef = useRef<HTMLImageElement>(null)
+
+  // Star: wrapper handles position; inner img handles WAAPI animation
+  const starWrapRef = useRef<HTMLDivElement>(null)
+  const starImgRef  = useRef<HTMLImageElement>(null)
 
   // Map publicId → DOM button element
   const ornRefsMap = useRef(new Map<string, HTMLButtonElement>())
   const boxRefsMap = useRef(new Map<string, HTMLButtonElement>())
 
-  // Cached rects (updated by ResizeObserver, written to by layout reads in rAF)
+  // Layout computed by ResizeObserver; consumed by rAF loop and event handlers
+  const layoutRef = useRef<SceneLayout | null>(null)
+
+  // Keep treeRectRef in sync with layout (consumed by ornamentTransform in rAF)
   const treeRectRef = useRef<TreeRect | null>(null)
 
   // Spin machine (stable; reducedMotion baked in at creation)
@@ -161,7 +181,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   const slots = useMemo(() => slotLayout(treeSlots), [treeSlots])
 
   // Split gifts by place
-  const treeGifts = useMemo(() => gifts.filter(g => g.place === 'tree'), [gifts])
+  const treeGifts   = useMemo(() => gifts.filter(g => g.place === 'tree'),   [gifts])
   const groundGifts = useMemo(() => gifts.filter(g => g.place === 'ground'), [gifts])
 
   // Map publicId → slot for fast lookup in rAF
@@ -174,72 +194,67 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     return m
   }, [treeGifts, slots])
 
-  // ── Tree rect tracking via ResizeObserver ──────────────────────────────
+  // ── Layout: tree rect + star + boxes + ornament sizes ─────────────────────
+  // This single effect owns all JS-driven pixel layout.  It fires on mount,
+  // on window resize (ResizeObserver), and whenever ground gift count changes.
 
   useEffect(() => {
-    const img = treeImgRef.current
-    const scene = sceneRef.current
-    if (!img || !scene) return
+    const scene   = sceneRef.current
+    const treeImg = treeImgRef.current
+    if (!scene || !treeImg) return
 
-    const updateRect = () => {
-      const treeR = img.getBoundingClientRect()
-      const sceneR = scene.getBoundingClientRect()
-      treeRectRef.current = {
-        x: treeR.left - sceneR.left,
-        y: treeR.top - sceneR.top,
-        w: treeR.width,
-        h: treeR.height,
-      }
-    }
-
-    const ro = new ResizeObserver(updateRect)
-    ro.observe(img)
-    ro.observe(scene)
-    if (img.complete) updateRect()
-    img.addEventListener('load', updateRect)
-
-    return () => {
-      ro.disconnect()
-      img.removeEventListener('load', updateRect)
-    }
-  }, [])
-
-  // ── Ground box positioning via ResizeObserver on scene ─────────────────
-
-  useEffect(() => {
-    const scene = sceneRef.current
-    if (!scene) return
-
-    const positionGround = () => {
+    const applyLayout = () => {
       const sceneW = scene.clientWidth
       const sceneH = scene.clientHeight
       if (!sceneW || !sceneH) return
 
-      const count = groundGifts.length
-      if (count === 0) return
+      const layout = computeSceneLayout(sceneW, sceneH, groundGifts.length)
+      layoutRef.current  = layout
+      treeRectRef.current = layout.treeRect
 
-      // Position on the layer_ground: bottom 22% of scene height
-      const groundY = sceneH * 0.78
-      const margin = sceneW * 0.08
-      const usable = sceneW - 2 * margin
+      // Apply tree rect via inline style
+      treeImg.style.left   = `${layout.treeRect.x}px`
+      treeImg.style.top    = `${layout.treeRect.y}px`
+      treeImg.style.width  = `${layout.treeRect.w}px`
+      treeImg.style.height = `${layout.treeRect.h}px`
 
+      // Apply star position and size
+      const starWrap = starWrapRef.current
+      if (starWrap) {
+        starWrap.style.width     = `${layout.starSize}px`
+        starWrap.style.height    = `${layout.starSize}px`
+        starWrap.style.transform =
+          `translate(${layout.starCenter.x}px, ${layout.starCenter.y}px) translate(-50%, -50%)`
+      }
+
+      // Apply ornament button sizes
+      const ornSize = layout.ornamentSize
+      for (const [, el] of ornRefsMap.current) {
+        el.style.width  = `${ornSize}px`
+        el.style.height = `${ornSize}px`
+      }
+
+      // Apply box positions + sizes (bottom-centre anchor)
+      const giftsPerRow = Math.ceil(groundGifts.length / (groundGifts.length <= 7 ? 2 : 3))
       groundGifts.forEach((gift, i) => {
-        const el = boxRefsMap.current.get(gift.publicId)
+        const el  = boxRefsMap.current.get(gift.publicId)
         if (!el) return
-        const x = count === 1
-          ? sceneW / 2
-          : margin + (i / (count - 1)) * usable
-        // Write as transform to avoid layout (left/top stay at 0)
-        el.style.transform = `translate(${x}px,${groundY}px) translate(-50%,-100%)`
+        const pos = layout.boxPositions[i]
+        if (!pos) return
+        el.style.transform = `translate(${pos.x}px, ${pos.y}px) translate(-50%, -100%)`
+        el.style.width     = `${pos.size}px`
+        el.style.height    = `${pos.size}px`
+        // Front row on top, back rows behind
+        el.style.zIndex    = String(9 - Math.floor(i / giftsPerRow))
       })
     }
 
-    const ro = new ResizeObserver(positionGround)
+    const ro = new ResizeObserver(applyLayout)
     ro.observe(scene)
-    positionGround()
+    applyLayout()
 
     return () => ro.disconnect()
-  }, [groundGifts])
+  }, [groundGifts])  // re-run when ground gift count / identities change
 
   // ── Snow canvas ────────────────────────────────────────────────────────
 
@@ -249,26 +264,14 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     return startSnow(canvas, 80)
   }, [])
 
-  // ── Star twinkle ───────────────────────────────────────────────────────
+  // ── Star twinkle (WAAPI on inner img only — does not affect position wrap) ─
 
   useEffect(() => {
-    const star = starRef.current
-    if (!star) return
-    const anim = animateStar(star, reduced)
+    const starImg = starImgRef.current
+    if (!starImg) return
+    const anim = animateStar(starImg, reduced)
     return () => { try { anim.cancel() } catch (_) {} }
   }, [reduced])
-
-  // ── Star position sync (uses same rAF tick) ────────────────────────────
-
-  const updateStarPos = useCallback((treeRect: TreeRect) => {
-    const star = starRef.current
-    if (!star) return
-    const scale = treeRect.w / TREE_GEOMETRY.imageW
-    const sx = treeRect.x + TREE_GEOMETRY.tipX * scale
-    const sy = treeRect.y + TREE_GEOMETRY.tipY * scale
-    // Write transform only (star has position:absolute; left:0; top:0)
-    star.style.transform = `translate(${sx}px,${sy}px) translate(-50%,-50%)`
-  }, [])
 
   // ── rAF loop: spin physics + ornament DOM updates ─────────────────────
 
@@ -303,7 +306,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
 
       const treeRect = treeRectRef.current
       if (treeRect) {
-        // Update all ornament buttons via transform only
+        // Update all ornament buttons via transform only (no layout reads)
         for (const [publicId, el] of ornRefsMap.current) {
           const slot = slotByPublicId.get(publicId)
           if (!slot) continue
@@ -311,11 +314,9 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             slot, phi, treeRect, TREE_GEOMETRY,
           )
           el.style.transform = `translate(${tx}px,${ty}px) translate(-50%,-50%) scale(${s.toFixed(3)})`
-          el.style.opacity = opacity.toFixed(3)
-          el.style.zIndex = behind ? '3' : '6'
+          el.style.opacity   = opacity.toFixed(3)
+          el.style.zIndex    = behind ? '3' : '6'
         }
-
-        updateStarPos(treeRect)
       }
 
       raf = requestAnimationFrame(loop)
@@ -327,7 +328,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       if (raf) { cancelAnimationFrame(raf); raf = 0 }
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [slotByPublicId, updateStarPos, reduced])
+  }, [slotByPublicId, reduced])
 
   // ── focusPublicId: jump to front on mount ──────────────────────────────
 
@@ -340,13 +341,13 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     spin.state.phi = spin.targetFor(slot.theta)
   }, [focusPublicId, slotByPublicId])
 
-  // ── Keyboard handler (capturing: intercepts arrow keys even in child buttons) ─
+  // ── Keyboard handler (capturing: intercepts arrow keys even in child buttons)
 
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') { spinRef.current.key('left'); e.preventDefault() }
+      if (e.key === 'ArrowLeft')       { spinRef.current.key('left');  e.preventDefault() }
       else if (e.key === 'ArrowRight') { spinRef.current.key('right'); e.preventDefault() }
     }
     scene.addEventListener('keydown', onKey, true)
@@ -361,14 +362,12 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     if (!scene) return
     try { scene.setPointerCapture(e.pointerId) } catch (_) { return }
     dragRef.current = { pointerId: e.pointerId, lastX: e.clientX }
-    // Don't preventDefault: touch-action:pan-y CSS handles vertical scroll
   }, [])
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     const drag = dragRef.current
     if (!drag || drag.pointerId !== e.pointerId) return
-    const dx = e.clientX - drag.lastX
-    spinRef.current.drag(dx, e.timeStamp)
+    spinRef.current.drag(e.clientX - drag.lastX, e.timeStamp)
     drag.lastX = e.clientX
   }, [])
 
@@ -384,15 +383,45 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   const handleGiftClick = useCallback((gift: TreeGift) => {
     const slot = slotByPublicId.get(gift.publicId)
     if (slot) {
-      // Snap to front (velocity = 0, phi = target)
       spinRef.current.state.velocity = 0
       spinRef.current.state.phi = spinRef.current.targetFor(slot.theta)
-      // Flash the button
       const el = ornRefsMap.current.get(gift.publicId)
       if (el) flashOrnament(el, reduced).catch(() => {})
     }
     onOpen(gift.publicId)
   }, [slotByPublicId, onOpen, reduced])
+
+  // ── Ref callbacks: apply current layout to newly mounted elements ──────
+
+  const makeOrnRef = useCallback((gift: TreeGift) => (el: HTMLButtonElement | null) => {
+    if (el) {
+      ornRefsMap.current.set(gift.publicId, el)
+      const layout = layoutRef.current
+      if (layout) {
+        el.style.width  = `${layout.ornamentSize}px`
+        el.style.height = `${layout.ornamentSize}px`
+      }
+    } else {
+      ornRefsMap.current.delete(gift.publicId)
+    }
+  }, [])
+
+  const makeBoxRef = useCallback((gift: TreeGift, idx: number) => (el: HTMLButtonElement | null) => {
+    if (el) {
+      boxRefsMap.current.set(gift.publicId, el)
+      const layout = layoutRef.current
+      if (layout) {
+        const pos = layout.boxPositions[idx]
+        if (pos) {
+          el.style.transform = `translate(${pos.x}px, ${pos.y}px) translate(-50%, -100%)`
+          el.style.width     = `${pos.size}px`
+          el.style.height    = `${pos.size}px`
+        }
+      }
+    } else {
+      boxRefsMap.current.delete(gift.publicId)
+    }
+  }, [])
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -433,10 +462,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         return (
           <button
             key={gift.publicId}
-            ref={el => {
-              if (el) ornRefsMap.current.set(gift.publicId, el)
-              else ornRefsMap.current.delete(gift.publicId)
-            }}
+            ref={makeOrnRef(gift)}
             className="noel-orn-btn"
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
             data-rank={String(gift.rank)}
@@ -461,7 +487,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         )
       })}
 
-      {/* z=4 — tree image (ornaments behind it sit at z=3, in front at z=6) */}
+      {/* z=4 — tree image: left/top/width/height set by JS layout */}
       <img
         ref={treeImgRef}
         src={DEFAULT_THEME_URLS.tree}
@@ -471,7 +497,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         draggable={false}
       />
 
-      {/* z=5 — ground layer */}
+      {/* z=5 — ground layer: height 22% of scene; min-width 104%; obj-fit cover */}
       <img
         src={DEFAULT_THEME_URLS.layer_ground}
         className="noel-ground"
@@ -480,16 +506,13 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         draggable={false}
       />
 
-      {/* z=7 — ground boxes: positioned via ResizeObserver in a useEffect */}
-      {groundGifts.map(gift => {
+      {/* z=7+ — ground boxes: positioned via layout effect (bottom-centre anchor) */}
+      {groundGifts.map((gift, i) => {
         const box = `box_${gift.boxStyle}_closed` as keyof typeof DEFAULT_THEME_URLS
         return (
           <button
             key={gift.publicId}
-            ref={el => {
-              if (el) boxRefsMap.current.set(gift.publicId, el)
-              else boxRefsMap.current.delete(gift.publicId)
-            }}
+            ref={makeBoxRef(gift, i)}
             className="noel-box-btn"
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
             onClick={() => onOpen(gift.publicId)}
@@ -508,15 +531,21 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         )
       })}
 
-      {/* z=8 — star: position written by rAF via updateStarPos */}
-      <img
-        ref={starRef}
-        src={DEFAULT_THEME_URLS.star}
-        className="noel-star"
-        alt=""
+      {/* z=8 — star wrapper (position) + inner img (WAAPI twinkle).
+          The split prevents WAAPI transform from clobbering the position transform. */}
+      <div
+        ref={starWrapRef}
+        className="noel-star-wrap"
         aria-hidden="true"
-        draggable={false}
-      />
+      >
+        <img
+          ref={starImgRef}
+          src={DEFAULT_THEME_URLS.star}
+          className="noel-star-img"
+          alt=""
+          draggable={false}
+        />
+      </div>
     </div>
   )
 }

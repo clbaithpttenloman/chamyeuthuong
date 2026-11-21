@@ -552,33 +552,38 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 
 /* ── Tree image ──────────────────────────────────────────────────── */
+/* left / top / width / height are set by JS layout (computeSceneLayout).
+   No CSS sizing here — the JS anchors the tree base to groundSurfaceY
+   so the trunk always meets the snow at every viewport size.          */
 .noel-tree-img {
   position: absolute;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-  height: 100%;
-  width: auto;
-  max-width: 100%;
   pointer-events: none;
   z-index: 4;
-  object-fit: contain;
-  object-position: top center;
 }
 
 /* ── Ground layer ────────────────────────────────────────────────── */
+/* Height is 22% of scene height (matches approved mockup proportions).
+   min-width: 104% ensures the ground covers the full scene width.
+   object-fit: cover + object-position: top center keeps the snow surface
+   (top 35% of the original image) anchored and visible at all sizes.  */
 .noel-ground {
   position: absolute;
   bottom: 0;
-  left: -2%;
-  width: 104%;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 22%;
+  width: auto;
+  min-width: 104%;
+  object-fit: cover;
+  object-position: top center;
   pointer-events: none;
   z-index: 5;
 }
 
 /* ── Ornament buttons (tree gifts) ───────────────────────────────── */
-/* Position is fully managed by the rAF loop via transform; elements
-   start off-screen (translate(-9999px,0)) until first rAF tick. */
+/* Position fully managed by the rAF loop via transform; elements
+   start off-screen (translate(-9999px,0)) until first rAF tick.
+   Width / height set by JS layout (ornamentSize, scales with treeW). */
 .noel-orn-btn {
   position: absolute;
   left: 0;
@@ -604,10 +609,11 @@ button:disabled { opacity: 0.5; cursor: default; }
   filter: brightness(1.25);
 }
 
+/* Image fills the button (button size is set by JS) */
 .noel-orn-img {
-  width: 48px;
-  height: 56px;
   display: block;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
@@ -663,6 +669,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 
 /* ── Ground box buttons ──────────────────────────────────────────── */
+/* Width / height / z-index set by JS layout (boxSize scales with treeW).
+   transform is set to bottom-centre anchor: translate(x,y) translate(-50%,-100%). */
 .noel-box-btn {
   position: absolute;
   left: 0;
@@ -675,7 +683,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   border: none;
   padding: 0;
   cursor: pointer;
-  z-index: 7;
+  /* z-index set dynamically by layout: row 0=9, row 1=8, row 2=7 */
 }
 .noel-box-btn:focus-visible {
   outline: 3px solid #7dd3fc;
@@ -687,24 +695,33 @@ button:disabled { opacity: 0.5; cursor: default; }
   filter: brightness(1.12);
 }
 
+/* Image fills the button (button size is set by JS) */
 .noel-box-img {
-  width: 56px;
-  height: 56px;
   display: block;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
 /* ── Star ────────────────────────────────────────────────────────── */
-.noel-star {
+/* Two-element split prevents WAAPI from clobbering the position transform.
+   .noel-star-wrap: position (transform set by JS layout, not rAF)
+   .noel-star-img:  WAAPI twinkle (scale / rotate / filter only)         */
+.noel-star-wrap {
   position: absolute;
   left: 0;
   top: 0;
+  /* off-screen until layout fires */
   transform: translate(-9999px, 0);
-  width: 56px;
-  height: 56px;
   pointer-events: none;
   z-index: 8;
-  /* animation applied via WAAPI in timelines.ts */
+  /* width / height set by JS (starSize, scales with treeW) */
+}
+.noel-star-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* WAAPI in timelines.ts animates transform (scale/rotate) and filter here */
 }
 
 /* ── Sparkle particle (timelines.ts animateBoxOpen) ─────────────── */
