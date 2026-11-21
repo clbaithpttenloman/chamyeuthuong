@@ -1254,3 +1254,57 @@ describe('Fix Group 6a — Item 4: NONCE_KEY guard on POST /api/auth/google', ()
     }
   })
 })
+
+// Security cycle 2 suggestion: DELETE /api/me destroys data — pin down exactly what it touches.
+describe('DELETE /api/me — scope and guards', () => {
+  async function twoUsers() {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    await seedAdminEmail(db, TEST_EMAIL)
+    const me = await seedUser(db)
+    const other = await seedUser(db, { sub: 'other-sub-1', email: 'other@gmail.com' })
+    const myToken = makeRawToken()
+    const otherToken = makeRawToken()
+    await seedSession(db, me, myToken)
+    await seedSession(db, other, otherToken)
+    return { db, me, other, cookie: `${SESSION_COOKIE_NAME}=${myToken}` }
+  }
+  const del = (cookie: string, extra: Record<string, string> = {}) => new Request('https://x/api/me', {
+    method: 'DELETE', headers: { Cookie: cookie, 'X-Requested-With': 'fetch', 'CF-Connecting-IP': '5.6.7.8', ...extra },
+  })
+  const count = async (db: Awaited<ReturnType<typeof twoUsers>>['db'], sql: string, id?: number) =>
+    ((await (id === undefined ? db.prepare(sql) : db.prepare(sql).bind(id)).first()) as { n: number }).n
+
+  it("deletes only the caller: the other user's row and session survive, and the admin row is untouched", async () => {
+    const { db, me, other, cookie } = await twoUsers()
+    expect((await handleMe(del(cookie), meEnv({ db }) as never)).status).toBe(200)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', me)).toBe(0)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM session WHERE user_id = ?', me)).toBe(0)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', other)).toBe(1)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM session WHERE user_id = ?', other)).toBe(1)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM admin')).toBe(1)
+  })
+
+  it('Sec-Fetch-Site: cross-site → 403 and nothing deleted', async () => {
+    const { db, me, cookie } = await twoUsers()
+    expect((await handleMe(del(cookie, { 'Sec-Fetch-Site': 'cross-site' }), meEnv({ db }) as never)).status).toBe(403)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', me)).toBe(1)
+  })
+
+  it('exhausted USER_WRITE_LIMIT → 429 and nothing deleted', async () => {
+    const { db, me, cookie } = await twoUsers()
+    const env = { ...meEnv({ db }), USER_WRITE_LIMIT: { limit: async () => ({ success: false }) } }
+    expect((await handleMe(del(cookie), env as never)).status).toBe(429)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', me)).toBe(1)
+  })
+
+  it('an expired session → 401 and nothing deleted', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    const me = await seedUser(db)
+    const token = makeRawToken()
+    await seedSession(db, me, token, { expired: true })
+    expect((await handleMe(del(`${SESSION_COOKIE_NAME}=${token}`), meEnv({ db }) as never)).status).toBe(401)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', me)).toBe(1)
+  })
+})

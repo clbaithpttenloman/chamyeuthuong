@@ -1468,3 +1468,47 @@ describe('handleCampaigns — a campaign slugged "active" does not collide with 
     expect(bySlug.slug).toBe('20-11')
   })
 })
+
+describe('POST /api/admin/campaigns — dates stored normalised', () => {
+  it('fractional seconds are accepted and stored without them', async () => {
+    const r = await handleAdminCampaigns(
+      adminPost('https://x/api/admin/campaigns', { slug: 'frac-test', kind: 'teacher_cards', name: 'F', starts_at: '2026-12-01T00:00:00.5Z', ends_at: '2026-12-02T10:20:30.123Z' }),
+      campaignsEnv(db),
+      'admin@test.com',
+    )
+    expect(r.status).toBe(201)
+    expect(await db.prepare("SELECT starts_at, ends_at FROM campaign WHERE slug = 'frac-test'").first())
+      .toEqual({ starts_at: '2026-12-01T00:00:00Z', ends_at: '2026-12-02T10:20:30Z' })
+  })
+})
+
+describe('public campaign reads — non-canonical paths never reach the limiter or DB', () => {
+  for (const path of ['/api/campaigns/active/', '/api/campaigns//active', '/api/campaigns/20-11/', '/api/campaigns/20%2F11', '/api/campaigns/', '/api/campaigns/A']) {
+    it(`${path} → 404, no limiter charge`, async () => {
+      const calls: string[] = []
+      const r = await handleCampaigns(new Request(`https://x${path}`), {
+        DB: db, PUBLIC_READ_LIMIT: { limit: async ({ key }: { key: string }) => { calls.push(key); return { success: true } } },
+      })
+      expect(r.status).toBe(404)
+      expect(calls).toEqual([])
+    })
+  }
+
+  it('a cached 404 expires after 30 s', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-12-01T00:00:00Z'))
+      const calls: string[] = []
+      const env = { DB: db, PUBLIC_READ_LIMIT: { limit: async ({ key }: { key: string }) => { calls.push(key); return { success: true } } } }
+      await handleCampaigns(new Request('https://x/api/campaigns/sap-mo'), env)
+      vi.setSystemTime(new Date('2026-12-01T00:00:29Z'))
+      await handleCampaigns(new Request('https://x/api/campaigns/sap-mo'), env)
+      expect(calls).toHaveLength(1)
+      vi.setSystemTime(new Date('2026-12-01T00:00:31Z'))
+      await handleCampaigns(new Request('https://x/api/campaigns/sap-mo'), env)
+      expect(calls).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

@@ -482,8 +482,9 @@ export async function handleAdminCampaigns(
             typeof body.content === 'string' ? body.content : '{}',
             typeof body.theme_colors === 'string' ? body.theme_colors : '{}',
             typeof body.settings === 'string' ? body.settings : '{}',
-            starts_at,
-            ends_at,
+            // validateCampaignBody wrote the normalised UTC strings back to body.
+            body.starts_at,
+            body.ends_at,
             'draft',  // Accept #3: always draft on creation
             now,
             email,
