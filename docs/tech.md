@@ -434,3 +434,24 @@ CREATE UNIQUE INDEX one_active ON campaign(status) WHERE status = 'active'
   - Sources: https://developers.cloudflare.com/workers/wrangler/environments/ and https://developers.cloudflare.com/workers/wrangler/configuration/ ("Non-inheritable keys").
 - **Secrets, non-interactive:** `printf '%s' "$VALUE" | npx wrangler secret put NAME [--env staging]` (reads stdin). Use `npx wrangler secret bulk file.json` for several at once.
 - **Git tag `sso-google-signin`** (commit 1c14767) is the starting point. Its CSP line still matches Google's current guidance (script/frame/connect/style as above). Its `jose` verification options match the list above, except that it does not use `nonce` and `requiredClaims`. Add both.
+
+---
+
+## Noel game core (Phase 2) — verified 2026-11-21
+
+### Browser APIs (no animation or rendering library — ADR-4)
+- **Web Animations API**: `el.animate(keyframes, { duration, easing, fill })` returns an `Animation`; await `animation.finished` to chain steps; `animation.commitStyles()` then `cancel()` keeps the end state without a lingering fill. Safari 13.1+ supports `animate()` and `finished`; `commitStyles` from Safari 13.1. Source: https://developer.mozilla.org/en-US/docs/Web/API/Element/animate, https://developer.mozilla.org/en-US/docs/Web/API/Animation/commitStyles
+- **Drag + inertia**: Pointer Events (`pointerdown/move/up/cancel`) with `el.setPointerCapture(e.pointerId)`; CSS `touch-action: pan-y` on the scene so vertical page scroll still works while horizontal drags spin; velocity from the last ~100 ms of moves, then decay per `requestAnimationFrame` frame. Source: https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events, https://developer.mozilla.org/en-US/docs/Web/CSS/touch-action
+- **Pause when hidden**: stop the rAF loop and polling when `document.visibilityState === 'hidden'` (`visibilitychange` event). Source: https://developer.mozilla.org/en-US/docs/Web/API/Document/visibilityState
+- **Reduced motion**: `window.matchMedia('(prefers-reduced-motion: reduce)')` (`.matches`, `change` event) → no inertia, opacity-only transitions, snow off. Source: https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-reduced-motion
+
+### Default theme export (ADR-5) — no new dependency
+Chromium encodes WebP from a canvas: `canvas.toDataURL('image/webp', 0.9)`. Run in headless Edge with `puppeteer-core` (present in `../phamhuuthien/node_modules`, not a dependency of this repo), decode the base64 and write the file. Checked: a 256×256 canvas with a transparent background gave a `RIFF…WEBPVP8X` file with the alpha flag set (`file`: "Web/P image"). Chromium adds an `ICCP` chunk (~0.5 KB); harmless for static assets (Phase 3 upload validation rejects ICCP, but default files are not uploads). Source: https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/toDataURL. The export script draws each slot from the shapes in `docs/design/noel-mockup.html` at the slot's exact pixel size.
+
+### D1 batch = one transaction
+`env.DB.batch([...])` runs the statements sequentially in one SQL transaction; if one fails the whole batch rolls back. So `INSERT OR IGNORE INTO heart … SELECT … WHERE …` followed by `UPDATE gift SET heart_count = (SELECT COUNT(*) …)` commits together, and a recount always matches the rows. Source: https://developers.cloudflare.com/d1/worker-api/d1-database/ (batch). Vietnam day bucket: `date('now','+7 hours')` (Asia/Ho_Chi_Minh has no DST).
+
+### Reusing card v3 for gift cards
+- `src/components/CardView.tsx` renders a teacher card: fixed "Kính gửi", the teacher name, `roleLabel(role, subject)` (which returns "Giáo viên" when both are empty) and the stamp "<site.title> · 20/11". Gifts need three optional props with the current values as defaults so 20/11 output is unchanged: `toLine` (greeting line; `null` hides it), `subLine` (overrides `roleLabel`; `null` hides it), `stamp`. Gift mapping: `card = { name: <heading, e.g. "Điều ước Giáng sinh">, subject: '', message }`, `from = "<nickname> · <class>"`, `stamp = "<site.title> · Noel"`, plus `layout`, `images.background`, `font`, `ink` from the gift.
+- Server validation for gift text reuses `worker/submit.ts` rules: `shared/text.ts` (`hasControlCharsMultiline` for the message, `hasControlCharsSingleLine` for nickname/class, `hasLoneSurrogate`), NFC + trim, code-point lengths, `MAX_NEWLINES`; `shared/fonts.ts` (`isFont`, `isInkInput`, `normalizeInk`); layout ids from `shared/layouts.ts`. Gift limits: message 1–`MAX_MESSAGE` (300), nickname 1–30, class ≤ 10.
+- Gift backgrounds are templates of the gift's campaign. Until Phase 2, every template has `campaign_id = 1`; Phase 2 adds a campaign choice to the template admin form, `GET /api/campaigns/<slug>/templates`, and filters the 20/11 template list to campaign 1 (same output today).
