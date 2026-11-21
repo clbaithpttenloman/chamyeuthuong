@@ -40,6 +40,7 @@ import { DEFAULT_THEME_URLS } from './defaultTheme.ts'
 import { ApiError } from '../api.ts'
 import type { MeUser, ReportReason } from '../api.ts'
 import site from '../content/site.json'
+import { useDialog } from './useDialog.ts'
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,13 @@ export default function GiftSheet({
   const reduced = prefersReducedMotion()
   const dialogRef = useRef<HTMLDivElement>(null)
 
+  // onClose ref so the focus-trap effect runs once (not on every parent re-render)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose })
+
+  // Focus trap + Esc, runs once on mount
+  useDialog({ dialogRef, onCloseRef, returnFocusRef })
+
   // ── Animation phase ───────────────────────────────────────────────────
   const [phase, setPhase] = useState<'animating' | 'card'>('animating')
   const boxRef   = useRef<HTMLDivElement>(null)
@@ -141,58 +149,6 @@ export default function GiftSheet({
       .catch(() => { clearTimeout(safety); if (alive) setPhase('card') })
     return () => { alive = false; clearTimeout(safety) }
   }, [phase, reduced])
-
-  // ── Keyboard + focus trap ─────────────────────────────────────────────
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-
-    // Capture at mount time so cleanup always refers to the same element
-    const returnTarget = returnFocusRef?.current ?? null
-
-    // Focus the dialog on open
-    dialog.focus()
-
-    const getFocusable = (): HTMLElement[] =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      )
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      if (e.key !== 'Tab') return
-      const focusable = getFocusable()
-      if (!focusable.length) return
-      const first = focusable[0]!
-      const last  = focusable[focusable.length - 1]!
-      if (e.shiftKey) {
-        if (document.activeElement === first || document.activeElement === dialog) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
-    }
-
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      // Return focus to trigger element on close
-      returnTarget?.focus()
-    }
-  // returnFocusRef is a stable ref object; its .current is captured above
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose])
 
   // ── Heart action ──────────────────────────────────────────────────────
   const [heartLoading, setHeartLoading] = useState(false)

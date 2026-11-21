@@ -54,6 +54,11 @@
  *     horizontal drag goes to the spin machine via pointer capture.
  *   - Visibility pause: rAF stops when document is hidden.
  *   - Reduced motion: no inertia, no intro spin; star is static.
+ *   - Intro spin and focusPublicId snap run once (gift→slot map in a ref).
+ *   - Behind-tree ornaments: pointer-events:none + tabIndex=-1 so they are
+ *     not reachable while they are hidden.
+ *   - Tap-vs-drag: pointer is captured only after the DRAG_THRESHOLD (~6px);
+ *     click after a drag is suppressed.
  */
 
 import {
@@ -69,6 +74,14 @@ import { startSnow } from './particles.ts'
 import { animateStar, flashOrnament } from './timelines.ts'
 import { DEFAULT_THEME_URLS, TREE_GEOMETRY } from './defaultTheme.ts'
 import { computeSceneLayout, type SceneLayout } from './layout.ts'
+import {
+  createGestureState,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  clearClickSuppression,
+  type GestureState,
+} from './gesture.ts'
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -174,8 +187,8 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   // Spin machine (stable; reducedMotion baked in at creation)
   const spinRef = useRef(createSpin({ reducedMotion: reduced }))
 
-  // Pointer capture state
-  const dragRef = useRef<{ pointerId: number; lastX: number } | null>(null)
+  // Gesture state (tap-vs-drag, capture-after-threshold, suppress click)
+  const gestureRef = useRef<GestureState>(createGestureState())
 
   // Slot layouts for tree gifts
   const slots = useMemo(() => slotLayout(treeSlots), [treeSlots])
@@ -184,19 +197,21 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   const treeGifts   = useMemo(() => gifts.filter(g => g.place === 'tree'),   [gifts])
   const groundGifts = useMemo(() => gifts.filter(g => g.place === 'ground'), [gifts])
 
-  // Map publicId → slot for fast lookup in rAF
-  const slotByPublicId = useMemo(() => {
+  // Stable ref for slot lookup consumed by the rAF loop and focusPublicId snap.
+  // Updated in a separate effect so the rAF loop and the snap effect do NOT need
+  // slotByPublicId in their dep arrays — prevents intro re-spin and re-snap on
+  // every poll cycle when gifts change.
+  const slotByPublicIdRef = useRef(new Map<string, Slot>())
+  useEffect(() => {
     const m = new Map<string, Slot>()
     for (const g of treeGifts) {
       const s = slots[g.rank - 1]
       if (s) m.set(g.publicId, s)
     }
-    return m
+    slotByPublicIdRef.current = m
   }, [treeGifts, slots])
 
   // ── Layout: tree rect + star + boxes + ornament sizes ─────────────────────
-  // This single effect owns all JS-driven pixel layout.  It fires on mount,
-  // on window resize (ResizeObserver), and whenever ground gift count changes.
 
   useEffect(() => {
     const scene   = sceneRef.current
@@ -212,13 +227,11 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       layoutRef.current  = layout
       treeRectRef.current = layout.treeRect
 
-      // Apply tree rect via inline style
       treeImg.style.left   = `${layout.treeRect.x}px`
       treeImg.style.top    = `${layout.treeRect.y}px`
       treeImg.style.width  = `${layout.treeRect.w}px`
       treeImg.style.height = `${layout.treeRect.h}px`
 
-      // Apply star position and size
       const starWrap = starWrapRef.current
       if (starWrap) {
         starWrap.style.width     = `${layout.starSize}px`
@@ -227,14 +240,12 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
           `translate(${layout.starCenter.x}px, ${layout.starCenter.y}px) translate(-50%, -50%)`
       }
 
-      // Apply ornament button sizes
       const ornSize = layout.ornamentSize
       for (const [, el] of ornRefsMap.current) {
         el.style.width  = `${ornSize}px`
         el.style.height = `${ornSize}px`
       }
 
-      // Apply box positions + sizes (bottom-centre anchor)
       const giftsPerRow = Math.ceil(groundGifts.length / (groundGifts.length <= 7 ? 2 : 3))
       groundGifts.forEach((gift, i) => {
         const el  = boxRefsMap.current.get(gift.publicId)
@@ -244,7 +255,6 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         el.style.transform = `translate(${pos.x}px, ${pos.y}px) translate(-50%, -100%)`
         el.style.width     = `${pos.size}px`
         el.style.height    = `${pos.size}px`
-        // Front row on top, back rows behind
         el.style.zIndex    = String(9 - Math.floor(i / giftsPerRow))
       })
     }
@@ -254,7 +264,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     applyLayout()
 
     return () => ro.disconnect()
-  }, [groundGifts])  // re-run when ground gift count / identities change
+  }, [groundGifts])
 
   // ── Snow canvas ────────────────────────────────────────────────────────
 
@@ -264,7 +274,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     return startSnow(canvas, 80)
   }, [])
 
-  // ── Star twinkle (WAAPI on inner img only — does not affect position wrap) ─
+  // ── Star twinkle (WAAPI on inner img only) ─────────────────────────────
 
   useEffect(() => {
     const starImg = starImgRef.current
@@ -274,11 +284,14 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
   }, [reduced])
 
   // ── rAF loop: spin physics + ornament DOM updates ─────────────────────
+  // Dependencies: [reduced] only.
+  // The loop reads slotByPublicIdRef.current each frame so it always uses the
+  // latest slot map without needing it in the dep array (avoids intro re-spin).
 
   useEffect(() => {
-    // Intro auto-spin (a small velocity decays naturally over a few seconds)
+    // Intro auto-spin runs once — guard so it doesn't repeat on data changes.
     if (!reduced) {
-      spinRef.current.state.velocity = 0.0007  // rad/ms
+      spinRef.current.state.velocity = 0.0007  // rad/ms; decays naturally
     }
 
     let raf = 0
@@ -306,16 +319,18 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
 
       const treeRect = treeRectRef.current
       if (treeRect) {
-        // Update all ornament buttons via transform only (no layout reads)
         for (const [publicId, el] of ornRefsMap.current) {
-          const slot = slotByPublicId.get(publicId)
+          const slot = slotByPublicIdRef.current.get(publicId)
           if (!slot) continue
           const { tx, ty, scale: s, opacity, behind } = ornamentTransform(
             slot, phi, treeRect, TREE_GEOMETRY,
           )
-          el.style.transform = `translate(${tx}px,${ty}px) translate(-50%,-50%) scale(${s.toFixed(3)})`
-          el.style.opacity   = opacity.toFixed(3)
-          el.style.zIndex    = behind ? '3' : '6'
+          el.style.transform     = `translate(${tx}px,${ty}px) translate(-50%,-50%) scale(${s.toFixed(3)})`
+          el.style.opacity       = opacity.toFixed(3)
+          el.style.zIndex        = behind ? '3' : '6'
+          // Behind-tree ornaments: not tappable and not in tab order
+          el.style.pointerEvents = behind ? 'none' : ''
+          el.tabIndex            = behind ? -1 : 0
         }
       }
 
@@ -328,25 +343,29 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       if (raf) { cancelAnimationFrame(raf); raf = 0 }
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [slotByPublicId, reduced])
+  }, [reduced])  // slotByPublicId consumed via ref — not in deps
 
-  // ── focusPublicId: jump to front on mount ──────────────────────────────
+  // ── focusPublicId: rotate to front ONCE on mount ───────────────────────
+  // Dep: [focusPublicId] only — slotByPublicIdRef read via ref so slot-map
+  // updates (from polls) don't re-trigger the snap.
 
   useEffect(() => {
     if (!focusPublicId) return
-    const slot = slotByPublicId.get(focusPublicId)
+    const slot = slotByPublicIdRef.current.get(focusPublicId)
     if (!slot) return
     const spin = spinRef.current
     spin.state.velocity = 0
     spin.state.phi = spin.targetFor(slot.theta)
-  }, [focusPublicId, slotByPublicId])
+  }, [focusPublicId])
 
-  // ── Keyboard handler (capturing: intercepts arrow keys even in child buttons)
+  // ── Keyboard handler ───────────────────────────────────────────────────
 
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
     const onKey = (e: KeyboardEvent) => {
+      // Ignore modified arrows (Alt/Meta/Ctrl) — they may be browser/OS shortcuts
+      if (e.altKey || e.metaKey || e.ctrlKey) return
       if (e.key === 'ArrowLeft')       { spinRef.current.key('left');  e.preventDefault() }
       else if (e.key === 'ArrowRight') { spinRef.current.key('right'); e.preventDefault() }
     }
@@ -354,34 +373,46 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     return () => scene.removeEventListener('keydown', onKey, true)
   }, [])
 
-  // ── Pointer handlers ───────────────────────────────────────────────────
+  // ── Pointer handlers (tap-vs-drag via gesture.ts) ─────────────────────
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 && e.pointerType !== 'touch') return
-    const scene = sceneRef.current
-    if (!scene) return
-    try { scene.setPointerCapture(e.pointerId) } catch (_) { return }
-    dragRef.current = { pointerId: e.pointerId, lastX: e.clientX }
+    // Zero velocity on grab so there's no coasting from a previous swipe
+    spinRef.current.state.velocity = 0
+    gestureRef.current = onPointerDown(gestureRef.current, e.clientX, e.pointerId)
   }, [])
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== e.pointerId) return
-    spinRef.current.drag(e.clientX - drag.lastX, e.timeStamp)
-    drag.lastX = e.clientX
+    const g = gestureRef.current
+    if (g.pointerId !== e.pointerId) return
+    const { state, shouldCapture, dx } = onPointerMove(g, e.clientX)
+    gestureRef.current = state
+    if (shouldCapture) {
+      // First frame past threshold: capture pointer so the scene owns the drag
+      try { sceneRef.current?.setPointerCapture(e.pointerId) } catch (_) { return }
+    }
+    if (dx !== null) {
+      spinRef.current.drag(dx, e.timeStamp)
+    }
   }, [])
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== e.pointerId) return
+    const g = gestureRef.current
+    if (g.pointerId !== e.pointerId) return
+    const { state } = onPointerUp(g)
+    gestureRef.current = state
     spinRef.current.release(e.timeStamp)
-    dragRef.current = null
   }, [])
 
   // ── Gift activation (click / Enter) ───────────────────────────────────
 
   const handleGiftClick = useCallback((gift: TreeGift) => {
-    const slot = slotByPublicId.get(gift.publicId)
+    // Suppress click that follows a drag (pointer-capture synthesises a click)
+    if (gestureRef.current.suppressClick) {
+      gestureRef.current = clearClickSuppression(gestureRef.current)
+      return
+    }
+    const slot = slotByPublicIdRef.current.get(gift.publicId)
     if (slot) {
       spinRef.current.state.velocity = 0
       spinRef.current.state.phi = spinRef.current.targetFor(slot.theta)
@@ -389,7 +420,15 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       if (el) flashOrnament(el, reduced).catch(() => {})
     }
     onOpen(gift.publicId)
-  }, [slotByPublicId, onOpen, reduced])
+  }, [onOpen, reduced])
+
+  // Rotate to front when an ornament button gains keyboard focus
+  const handleOrnamentFocus = useCallback((gift: TreeGift) => {
+    const slot = slotByPublicIdRef.current.get(gift.publicId)
+    if (!slot) return
+    spinRef.current.state.velocity = 0
+    spinRef.current.state.phi = spinRef.current.targetFor(slot.theta)
+  }, [])
 
   // ── Ref callbacks: apply current layout to newly mounted elements ──────
 
@@ -431,8 +470,9 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
     <div
       ref={sceneRef}
       className="noel-scene"
-      tabIndex={0}
+      role="group"
       aria-label="Cây thông điều ước — dùng phím ← → để xoay"
+      tabIndex={0}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -455,8 +495,9 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       />
 
       {/* Ornament buttons: initially off-screen (left:-9999px via CSS);
-          rAF loop writes transform and z-index each frame.
-          z=3 (behind) or z=6 (front) — set dynamically. */}
+          rAF loop writes transform, z-index, pointer-events and tabIndex each frame.
+          z=3 (behind) or z=6 (front) — set dynamically.
+          Behind ornaments: pointer-events:none, tabIndex=-1 (not tappable/focusable). */}
       {treeGifts.map(gift => {
         const orn = `ornament_${gift.ornamentStyle}` as keyof typeof DEFAULT_THEME_URLS
         return (
@@ -468,6 +509,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
             data-rank={String(gift.rank)}
             onClick={() => handleGiftClick(gift)}
+            onFocus={() => handleOrnamentFocus(gift)}
           >
             <img
               src={DEFAULT_THEME_URLS[orn] ?? DEFAULT_THEME_URLS.ornament_1}
@@ -517,7 +559,13 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             className="noel-box-btn"
             data-public-id={gift.publicId}
             aria-label={`Quà của ${gift.nickname} · ${gift.className} · hạng ${gift.rank} · ${gift.heartCount} tim`}
-            onClick={() => onOpen(gift.publicId)}
+            onClick={() => {
+              if (gestureRef.current.suppressClick) {
+                gestureRef.current = clearClickSuppression(gestureRef.current)
+                return
+              }
+              onOpen(gift.publicId)
+            }}
           >
             <img
               src={DEFAULT_THEME_URLS[box] ?? DEFAULT_THEME_URLS.box_1_closed}

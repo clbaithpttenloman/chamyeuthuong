@@ -9,7 +9,7 @@
  *
  * Accessibility (NFR-4):
  *   - role="dialog" aria-modal="true" labelled by title
- *   - Esc key closes
+ *   - Esc key closes (via useDialog, runs once)
  *   - Focus trapped; returned to trigger on close
  */
 import {
@@ -18,6 +18,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { NoelGift } from '../api.ts'
+import { useDialog } from './useDialog.ts'
 
 export interface LeaderboardProps {
   /** All visible gifts from the tree (sorted by rank). Top-10 are shown. */
@@ -40,50 +41,12 @@ export default function Leaderboard({
   const dialogRef = useRef<HTMLDivElement>(null)
   const titleId = 'leaderboard-title'
 
-  // Focus trap + Esc
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const returnTarget = returnFocusRef?.current ?? null
-    dialog.focus()
+  // onClose ref so the focus-trap effect runs once (not on every parent re-render)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose })
 
-    const getFocusable = (): HTMLElement[] =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      )
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      if (e.key !== 'Tab') return
-      const focusable = getFocusable()
-      if (!focusable.length) return
-      const first = focusable[0]!
-      const last = focusable[focusable.length - 1]!
-      if (e.shiftKey) {
-        if (document.activeElement === first || document.activeElement === dialog) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
-    }
-
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      returnTarget?.focus()
-    }
-  }, [onClose]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Focus trap + Esc, runs once on mount
+  useDialog({ dialogRef, onCloseRef, returnFocusRef })
 
   const top10 = gifts.slice(0, 10)
 

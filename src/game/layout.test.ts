@@ -19,6 +19,9 @@ const SCENE_SIZES: Array<[number, number, string]> = [
   [412,  915, 'phone 412×915'],
   [1280, 800, 'desktop 1280×800'],
   [1920, 1080,'desktop 1920×1080'],
+  // Wide/short landscape sizes (regression for groundSurfaceY clamping)
+  [1000, 400, 'wide landscape 1000×400'],
+  [844,  340, 'short landscape 844×340'],
 ]
 
 for (const [sceneW, sceneH, label] of SCENE_SIZES) {
@@ -36,9 +39,20 @@ for (const [sceneW, sceneH, label] of SCENE_SIZES) {
       expect(treeRect.y + treeRect.h).toBeCloseTo(groundSurfaceY, 4)
     })
 
-    it('tree top is at or above 8 px from scene top', () => {
+    it('groundSurfaceY is strictly inside the scene (clamp for wide/short)', () => {
+      expect(groundSurfaceY).toBeLessThan(sceneH)
+    })
+
+    it('tree top is at or above 0 px from scene top', () => {
       // treeY = groundSurfaceY - treeH; tipY is small relative to treeH
       expect(treeRect.y).toBeGreaterThanOrEqual(0)
+    })
+
+    it('star centre is below the site header (~56 px)', () => {
+      // TREE_TOP_MIN = 56 px so the star is never hidden under the header.
+      // The star sits slightly inside the tree (tipY ≈ 5.6 % of imageH), so
+      // starCenter.y = treeY + tipY * treeScale > TREE_TOP_MIN.
+      expect(starCenter.y).toBeGreaterThan(56)
     })
 
     it('star is above groundSurfaceY', () => {

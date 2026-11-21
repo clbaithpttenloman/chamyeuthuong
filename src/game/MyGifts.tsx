@@ -11,9 +11,15 @@
  *
  * Accessibility (NFR-4):
  *   - role="dialog" aria-modal="true" labelled by title
- *   - Esc key closes
+ *   - Esc key closes innermost open layer first (via useDialog)
  *   - Focus trapped; returned to trigger on close
- *   - Confirm dialogs use role="alertdialog"
+ *   - Confirm dialogs trap focus via useDialog.pushLayer
+ *
+ * Changes (review cycle 1):
+ *   - deleteMyAccount: always sign out locally even if logout() fails
+ *   - Logout errors caught and shown
+ *   - Confirm dialogs push/pop useDialog layers: Esc and Tab target the
+ *     innermost confirm before the base dialog
  */
 import {
   useCallback,
@@ -31,6 +37,7 @@ import {
 } from '../api.ts'
 import type { NoelGift } from '../api.ts'
 import { errorMessage } from './errors.ts'
+import { useDialog } from './useDialog.ts'
 
 type MyGift = NoelGift & { status: string }
 
@@ -38,13 +45,7 @@ export interface MyGiftsProps {
   slug: string
   onClose: () => void
   onSignOut: () => void
-  /**
-   * Called when the user opens a gift from the list.
-   */
   onOpenGift: (publicId: string) => void
-  /**
-   * Called after the user successfully deletes a gift — parent should refresh tree.
-   */
   onGiftDeleted: (publicId: string) => void
   returnFocusRef?: React.RefObject<HTMLElement | null>
 }
@@ -60,19 +61,33 @@ export default function MyGifts({
   const dialogRef = useRef<HTMLDivElement>(null)
   const titleId = 'my-gifts-title'
 
+  // onClose ref so the focus-trap effect runs once
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onCloseRef.current = onClose })
+
+  // Focus trap + Esc (runs once on mount); returns pushLayer / popLayer for confirms
+  const { pushLayer, popLayer } = useDialog({ dialogRef, onCloseRef, returnFocusRef })
+
   const [gifts, setGifts] = useState<MyGift[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // Confirm: delete a specific gift
+  const confirmDeleteGiftRef = useRef<HTMLDivElement>(null)
   const [confirmDeleteGift, setConfirmDeleteGift] = useState<string | null>(null)
   const [deletingGift, setDeletingGift] = useState(false)
   const [deleteGiftError, setDeleteGiftError] = useState<string | null>(null)
 
+  // Track the button that opened each confirm (for focus return)
+  const deleteGiftOpenerRef = useRef<HTMLButtonElement | null>(null)
+  const deleteAccountOpenerRef = useRef<HTMLButtonElement | null>(null)
+
   // Confirm: delete account
+  const confirmDeleteAccountRef = useRef<HTMLDivElement>(null)
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false)
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null)
+  const [logoutError, setLogoutError] = useState<string | null>(null)
 
   // ── Load gifts ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -95,50 +110,31 @@ export default function MyGifts({
     return () => { alive = false }
   }, [slug])
 
-  // ── Focus trap + Esc ─────────────────────────────────────────────────
+  // ── Push / pop confirm layers ─────────────────────────────────────────
+  // Esc and Tab target the innermost open confirm, not the base dialog.
   useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    const returnTarget = returnFocusRef?.current ?? null
-    dialog.focus()
-
-    const getFocusable = (): HTMLElement[] =>
-      Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
+    if (confirmDeleteGift && confirmDeleteGiftRef.current) {
+      pushLayer(
+        confirmDeleteGiftRef.current,
+        () => { setConfirmDeleteGift(null); setDeleteGiftError(null) },
+        deleteGiftOpenerRef.current,
       )
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
-      if (e.key !== 'Tab') return
-      const focusable = getFocusable()
-      if (!focusable.length) return
-      const first = focusable[0]!
-      const last = focusable[focusable.length - 1]!
-      if (e.shiftKey) {
-        if (document.activeElement === first || document.activeElement === dialog) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
+      return () => popLayer(deleteGiftOpenerRef.current)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmDeleteGift])
 
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      returnTarget?.focus()
+  useEffect(() => {
+    if (confirmDeleteAccount && confirmDeleteAccountRef.current) {
+      pushLayer(
+        confirmDeleteAccountRef.current,
+        () => { setConfirmDeleteAccount(false); setDeleteAccountError(null) },
+        deleteAccountOpenerRef.current,
+      )
+      return () => popLayer(deleteAccountOpenerRef.current)
     }
-  }, [onClose]) // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmDeleteAccount])
 
   // ── Delete gift ──────────────────────────────────────────────────────
   const handleDeleteGift = useCallback(
@@ -161,27 +157,53 @@ export default function MyGifts({
   )
 
   // ── Delete account ───────────────────────────────────────────────────
+  // Always sign out locally even if logout() fails.
   const handleDeleteAccount = useCallback(async () => {
     setDeletingAccount(true)
     setDeleteAccountError(null)
+    setLogoutError(null)
     try {
       await deleteMyAccount()
-      await logout()
-      onSignOut()
-      onClose()
     } catch (err) {
       const code = err instanceof ApiError ? err.code : 'unknown'
       if (code === 'pending_review') {
         setDeleteAccountError(
           'Bạn có quà đang chờ xem xét. Vui lòng chờ kiểm duyệt xong trước khi xoá tài khoản.',
         )
-      } else {
-        setDeleteAccountError(errorMessage(code))
+        setDeletingAccount(false)
+        setConfirmDeleteAccount(false)
+        return
       }
-      setConfirmDeleteAccount(false)
-    } finally {
+      setDeleteAccountError(errorMessage(code))
       setDeletingAccount(false)
+      setConfirmDeleteAccount(false)
+      return
     }
+    // deleteMyAccount succeeded — always sign out locally
+    try {
+      await logout()
+    } catch (err) {
+      // Logout failure is non-fatal: we already deleted the account
+      const code = err instanceof ApiError ? err.code : 'unknown'
+      setLogoutError(errorMessage(code))
+    }
+    setDeletingAccount(false)
+    onSignOut()
+    onClose()
+  }, [onSignOut, onClose])
+
+  // ── Sign out ─────────────────────────────────────────────────────────
+  const handleSignOut = useCallback(async () => {
+    setLogoutError(null)
+    try {
+      await logout()
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : 'unknown'
+      setLogoutError(errorMessage(code))
+      return
+    }
+    onSignOut()
+    onClose()
   }, [onSignOut, onClose])
 
   // ── Render ────────────────────────────────────────────────────────────
@@ -209,7 +231,6 @@ export default function MyGifts({
           </button>
         </div>
 
-        {/* Loading / error */}
         {loading && <p className="my-gifts-loading">Đang tải…</p>}
         {error && <p className="my-gifts-error" role="alert">{error}</p>}
 
@@ -217,7 +238,6 @@ export default function MyGifts({
           <p className="my-gifts-empty">Bạn chưa có quà nào. Hãy treo quà đầu tiên!</p>
         )}
 
-        {/* Visible gifts */}
         {visibleGifts.length > 0 && (
           <section className="my-gifts-section">
             <h3 className="my-gifts-section-title">Quà hiển thị ({visibleGifts.length})</h3>
@@ -247,7 +267,11 @@ export default function MyGifts({
                     type="button"
                     className="my-gifts-delete-btn"
                     aria-label={`Xoá quà của ${g.nickname}`}
+                    ref={(el) => {
+                      if (confirmDeleteGift === g.publicId) deleteGiftOpenerRef.current = el
+                    }}
                     onClick={(e) => {
+                      deleteGiftOpenerRef.current = e.currentTarget
                       e.stopPropagation()
                       setConfirmDeleteGift(g.publicId)
                       setDeleteGiftError(null)
@@ -261,7 +285,6 @@ export default function MyGifts({
           </section>
         )}
 
-        {/* Hidden gifts */}
         {hiddenGifts.length > 0 && (
           <section className="my-gifts-section">
             <h3 className="my-gifts-section-title">Đang chờ xem xét ({hiddenGifts.length})</h3>
@@ -282,30 +305,29 @@ export default function MyGifts({
           </section>
         )}
 
-        {/* Delete account error */}
         {deleteAccountError && (
           <p className="my-gifts-error" role="alert">{deleteAccountError}</p>
         )}
+        {logoutError && (
+          <p className="my-gifts-error" role="alert">{logoutError}</p>
+        )}
 
-        {/* Actions */}
         <div className="my-gifts-actions">
           <button
             type="button"
             className="my-gifts-signout-btn"
-            onClick={async () => {
-              await logout()
-              onSignOut()
-              onClose()
-            }}
+            onClick={handleSignOut}
           >
             Đăng xuất
           </button>
           <button
             type="button"
             className="my-gifts-delete-account-btn"
+            ref={(el) => { deleteAccountOpenerRef.current = el }}
             onClick={() => {
               setConfirmDeleteAccount(true)
               setDeleteAccountError(null)
+              setLogoutError(null)
             }}
           >
             Xoá tài khoản
@@ -316,10 +338,12 @@ export default function MyGifts({
       {/* ── Confirm delete gift ───────────────────────────────────── */}
       {confirmDeleteGift && (
         <div
+          ref={confirmDeleteGiftRef}
           role="alertdialog"
           aria-modal="true"
           aria-labelledby="confirm-delete-gift-title"
           className="noel-confirm-backdrop"
+          tabIndex={-1}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="noel-confirm-dialog">
@@ -350,10 +374,12 @@ export default function MyGifts({
       {/* ── Confirm delete account ────────────────────────────────── */}
       {confirmDeleteAccount && (
         <div
+          ref={confirmDeleteAccountRef}
           role="alertdialog"
           aria-modal="true"
           aria-labelledby="confirm-delete-account-title"
           className="noel-confirm-backdrop"
+          tabIndex={-1}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="noel-confirm-dialog">

@@ -24,8 +24,11 @@ const GROUND_SURFACE_IMAGE_Y = 175        // top 35% of 500 = snow surface
 const GROUND_HEIGHT_RATIO   = 0.22        // height: 22% of scene (matches mockup)
 const GROUND_MIN_WIDTH_RATIO = 1.04       // min-width: 104%
 
-// Minimum clearance from scene top to star centre (keeps star out of header shadow)
-const TREE_TOP_MIN = 8  // px
+// Minimum top of the tree element in scene px.
+// ~56 px accounts for the site header so the star is never hidden under it.
+// (Header height ≈ 46 px + a few px of clearance; tipY / imageH ≈ 5.6 %
+//  so the star sits only a small fraction of the tree height below treeY.)
+const TREE_TOP_MIN = 56  // px
 
 export interface BoxPosition {
   x: number      // bottom-centre x in scene px
@@ -73,7 +76,12 @@ export function computeSceneLayout(
   // Scale factor = displayedGroundW / GROUND_IMAGE_W (width always dominates when
   // min-width is active because that stretches beyond natural aspect ratio).
   const groundScaleX = displayedGroundW / GROUND_IMAGE_W
-  const groundSurfaceY = groundTopY + GROUND_SURFACE_IMAGE_Y * groundScaleX
+  // Clamp groundSurfaceY to remain inside the scene (wide/short aspect ratios
+  // can push the computed surface below sceneH — ground image is scrolled off-screen).
+  const groundSurfaceY = Math.min(
+    groundTopY + GROUND_SURFACE_IMAGE_Y * groundScaleX,
+    sceneH - 1,
+  )
 
   // ── Tree ─────────────────────────────────────────────────────────────────
   const availH    = groundSurfaceY - TREE_TOP_MIN
