@@ -376,3 +376,34 @@ describe('handleGiftModeration — PATCH users/<id> ban/unban (ADR-8)', () => {
     expect(r.status).toBe(403)
   })
 })
+
+// Orchestrator addition: moderators need the card fields and the reasons, not just a count.
+describe('GET /api/admin/gifts — card fields and report reasons', () => {
+  it('each item carries layout, font, ink, backgroundTemplateId and unacknowledged reasons by type', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftTables(sqlite)
+    const token = await seedGiftAdminSession(db)
+    const campaignId = await seedGiftCampaign(db)
+    const templateId = await seedTemplate(db, campaignId)
+    const owner = await seedUser(db, { sub: 'owner-sub-1', email: 'owner@gmail.com' })
+    const { id: giftId } = await seedGift(db, owner, campaignId, templateId, { publicId: 'reasons000000001', reportCount: 3 })
+    const now = new Date().toISOString()
+    const reporters = [] as number[]
+    for (let i = 0; i < 4; i++) reporters.push(await seedUser(db, { sub: `rep-sub-${i}`, email: `rep${i}@gmail.com` }))
+    const ins = (u: number, reason: string, ack: number) =>
+      sqlite.prepare('INSERT INTO report (gift_id, user_id, reason, acknowledged, created_at) VALUES (?, ?, ?, ?, ?)').run(giftId, u, reason, ack, now)
+    ins(reporters[0]!, 'inappropriate', 0)
+    ins(reporters[1]!, 'inappropriate', 0)
+    ins(reporters[2]!, 'spam', 0)
+    ins(reporters[3]!, 'other', 1) // acknowledged by an earlier restore: not counted
+
+    const r = await handleGiftModeration(gSessionReq(token, '/api/admin/gifts?status=reported', 'GET'), giftModerationEnv(db))
+    expect(r.status).toBe(200)
+    const items = (await r.json()) as Array<Record<string, unknown>>
+    const item = items.find((g) => g.publicId === 'reasons000000001')!
+    expect(item).toMatchObject({ layout: 'doc-giua', font: 'patrick-hand', ink: '#1d3fa6', backgroundTemplateId: templateId })
+    expect(item.reportReasons).toEqual({ inappropriate: 2, spam: 1, other: 0 })
+    expect(JSON.stringify(items)).not.toMatch(/rep\d@gmail|rep-sub-/)
+  })
+})

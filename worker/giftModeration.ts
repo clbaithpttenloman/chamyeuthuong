@@ -58,6 +58,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       id: number; public_id: string; campaign_id: number; user_id: number; status: string
       report_count: number; heart_count: number; nickname: string; class_name: string
       message: string; created_at: string
+      layout: string; font: string; ink: string; background_template_id: number | null
     }>
 
     if (statusParam === 'reported') {
@@ -65,7 +66,8 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       ;({ results: rows } = await env.DB
         .prepare(
           'SELECT g.id, g.public_id, g.campaign_id, g.user_id, g.status, g.report_count,' +
-          '       g.heart_count, g.nickname, g.class_name, g.message, g.created_at ' +
+          '       g.heart_count, g.nickname, g.class_name, g.message, g.created_at,' +
+          '       g.layout, g.font, g.ink, g.background_template_id ' +
           "FROM gift g WHERE g.report_count > 0 AND g.status != 'deleted' " +
           'ORDER BY g.report_count DESC, g.created_at ASC',
         )
@@ -75,11 +77,36 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       ;({ results: rows } = await env.DB
         .prepare(
           'SELECT g.id, g.public_id, g.campaign_id, g.user_id, g.status, g.report_count,' +
-          '       g.heart_count, g.nickname, g.class_name, g.message, g.created_at ' +
+          '       g.heart_count, g.nickname, g.class_name, g.message, g.created_at,' +
+          '       g.layout, g.font, g.ink, g.background_template_id ' +
           "FROM gift g WHERE g.status IN ('hidden_auto','hidden_admin') " +
           'ORDER BY g.created_at DESC',
         )
         .all<typeof rows[number]>())
+    }
+
+    // Unacknowledged reports by reason for the listed gifts (counts only, no reporter identity).
+    // Reports from banned users are left out, as in report_count.
+    const reasons = new Map<number, { inappropriate: number; spam: number; other: number }>()
+    for (const g of rows) reasons.set(g.id, { inappropriate: 0, spam: 0, other: 0 })
+    if (rows.length > 0) {
+      const ids = rows.map((g) => g.id)
+      // SHORTCUT: one IN list; D1 allows 100 bound params, so chunk past ~90 rows if the queue grows.
+      for (let i = 0; i < ids.length; i += 90) {
+        const chunk = ids.slice(i, i + 90)
+        const { results } = await env.DB
+          .prepare(
+            'SELECT r.gift_id, r.reason, COUNT(*) AS n FROM report r JOIN app_user u ON u.id = r.user_id ' +
+            `WHERE r.acknowledged = 0 AND u.banned = 0 AND r.gift_id IN (${chunk.map(() => '?').join(',')}) ` +
+            'GROUP BY r.gift_id, r.reason',
+          )
+          .bind(...chunk)
+          .all<{ gift_id: number; reason: 'inappropriate' | 'spam' | 'other'; n: number }>()
+        for (const x of results) {
+          const entry = reasons.get(x.gift_id)
+          if (entry && x.reason in entry) entry[x.reason] = x.n
+        }
+      }
     }
 
     // Reporter identity is NEVER included (ADR-8: never return reporter identities except to admin,
@@ -97,6 +124,11 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
         className: g.class_name,
         message: g.message,
         createdAt: g.created_at,
+        layout: g.layout,
+        font: g.font,
+        ink: g.ink,
+        backgroundTemplateId: g.background_template_id,
+        reportReasons: reasons.get(g.id),
       })),
     )
   }

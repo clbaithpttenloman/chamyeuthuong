@@ -32,6 +32,7 @@ import { useMe } from '../auth/useMe.ts'
 import AboutSection from './admin/AboutSection.tsx'
 import AdminsSection from './admin/AdminsSection.tsx'
 import CampaignsSection from './admin/CampaignsSection.tsx'
+import GiftModerationSection from './admin/GiftModerationSection.tsx'
 import ImageLibrary from './admin/ImageLibrary.tsx'
 import ModerationSection from './admin/ModerationSection.tsx'
 import TeachersSection from './admin/TeachersSection.tsx'
@@ -123,10 +124,11 @@ function SignInPage({ emailError, onEmailSubmit, onGoogleSignedIn }: SignInPageP
 
 // ── Section tabs ──────────────────────────────────────────────────────────
 
-type Section = 'moderation' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins' | 'campaigns'
+type Section = 'moderation' | 'giftModeration' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins' | 'campaigns'
 
 const SECTION_LABELS: Record<Section, string> = {
   moderation: 'Duyệt thiệp',
+  giftModeration: 'Kiểm duyệt quà',
   templates: 'Mẫu thiệp',
   teachers: 'Thầy cô',
   wishes: 'Thư viện lời chúc',
@@ -160,6 +162,8 @@ export default function Admin() {
 
   const [teachers, setTeachers] = useState<AdminTeacher[]>([])
   const [pendingCount, setPendingCount] = useState(0)
+  /** Count of reported gifts awaiting review (shown in the "Kiểm duyệt quà" tab badge). */
+  const [giftReviewCount, setGiftReviewCount] = useState(0)
 
   const [section, setSection] = useState<Section>('moderation')
 
@@ -292,6 +296,11 @@ export default function Admin() {
             {s === 'moderation' && pendingCount > 0 && (
               <span className="pending-badge" aria-hidden="true">{pendingCount}</span>
             )}
+            {s === 'giftModeration' && giftReviewCount > 0 && (
+              <span className="pending-badge" aria-label={`${giftReviewCount} quà cần kiểm duyệt`}>
+                {giftReviewCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>
@@ -302,6 +311,12 @@ export default function Admin() {
             teachers={teachers}
             pendingCount={pendingCount}
             onPendingCountChange={(delta) => setPendingCount((n) => Math.max(0, n + delta))}
+            onAccessError={handleAccessError}
+          />
+        )}
+        {section === 'giftModeration' && (
+          <GiftModerationSection
+            onReportedCountChange={(count) => setGiftReviewCount(count)}
             onAccessError={handleAccessError}
           />
         )}

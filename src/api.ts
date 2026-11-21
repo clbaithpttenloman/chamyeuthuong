@@ -523,3 +523,67 @@ export async function putAdminAbout(body: AboutContent): Promise<AboutContent> {
     body: JSON.stringify(body),
   }))).json() as Promise<AboutContent>
 }
+
+// ── Admin moderation API (Phase 2) ────────────────────────────────────────────
+//
+// All routes require a Google session (ADR-3: new admin routes, no legacy path).
+// Typed-email sessions → 401; handle with giftModerationErrorMessage from moderationHelpers.ts.
+
+/** Gift item returned by GET /api/admin/gifts?status=reported|hidden. */
+export type AdminGiftItem = {
+  id: number
+  publicId: string
+  campaignId: number
+  userId: number
+  status: 'visible' | 'hidden_auto' | 'hidden_admin' | 'deleted'
+  reportCount: number
+  heartCount: number
+  nickname: string
+  className: string
+  message: string
+  createdAt: string
+  layout: string
+  font: string
+  ink: string
+  backgroundTemplateId: number | null
+  /** Unacknowledged reports by reason (banned reporters excluded). */
+  reportReasons: { inappropriate: number; spam: number; other: number }
+}
+
+/**
+ * GET /api/admin/gifts?status=reported|hidden
+ * reported → gifts with report_count ≥ 1 and not deleted (review queue).
+ * hidden   → gifts with status hidden_auto or hidden_admin.
+ */
+export async function listAdminGifts(status: 'reported' | 'hidden'): Promise<AdminGiftItem[]> {
+  return (await expectOk(await apiFetch(`/api/admin/gifts?status=${status}`))).json() as Promise<AdminGiftItem[]>
+}
+
+/**
+ * PATCH /api/admin/gifts/<id>  { status: 'visible'|'hidden_admin'|'deleted' }
+ * restore (→ visible): acknowledges existing reports, resets report_count.
+ */
+export async function updateAdminGiftStatus(
+  id: number,
+  status: 'visible' | 'hidden_admin' | 'deleted',
+): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/gifts/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  }))
+}
+
+/**
+ * PATCH /api/admin/users/<id>  { banned: true|false }
+ * ban=true:  saves status_before_ban, hides visible gifts to hidden_admin, deletes hearts
+ *            with recounts, revokes sessions. Admin cannot ban themselves (→ 403).
+ * ban=false: restores gift status from status_before_ban; hearts NOT restored.
+ */
+export async function banAdminUser(userId: number, banned: boolean): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ banned }),
+  }))
+}

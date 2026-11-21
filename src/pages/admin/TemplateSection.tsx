@@ -6,15 +6,21 @@
  * library with a size hint for the layout's ratio, active switch, live preview with the
  * writing zone outlined so the admin can check the image leaves it clear.
  * Delete with 409 message "Mẫu đang được dùng — hãy tắt mẫu thay vì xóa".
+ *
+ * Phase 2 addition: campaign select on create/edit (from /api/admin/campaigns).
+ * Requires Google session. If campaigns call returns 401 (typed-email session), the
+ * select is hidden and campaign defaults to 1 (keeps existing 20/11 behaviour).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AdminTemplate, AdminTemplateInput } from '../../../shared/api.ts'
 import { LAYOUTS, SLOTS, type Slot, DEFAULT_LAYOUT, resolveLayout } from '../../../shared/layouts.ts'
 import {
   ApiError,
+  type AdminCampaignRow,
   type ImageRow,
   createAdminTemplate,
   deleteAdminTemplate,
+  listAdminCampaigns,
   listAdminTemplates,
   listImages,
   messageFor,
@@ -31,6 +37,7 @@ type TemplateForm = {
   layout: string
   active: 0 | 1
   images: SlotImages
+  campaignId: number  // Phase 2: campaign this template belongs to (default 1)
 }
 
 const SLOT_LABELS: Record<Slot, string> = {
@@ -53,7 +60,7 @@ const SAMPLE_CARD = {
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 function emptyForm(): TemplateForm {
-  return { name: '', layout: DEFAULT_LAYOUT, active: 1, images: {} }
+  return { name: '', layout: DEFAULT_LAYOUT, active: 1, images: {}, campaignId: 1 }
 }
 
 function templateToForm(t: AdminTemplate): TemplateForm {
@@ -62,7 +69,7 @@ function templateToForm(t: AdminTemplate): TemplateForm {
     const img = t.images[slot]
     if (img) images[slot] = img
   }
-  return { name: t.name, layout: resolveLayout(t.layout).id, active: t.active, images }
+  return { name: t.name, layout: resolveLayout(t.layout).id, active: t.active, images, campaignId: t.campaignId ?? 1 }
 }
 
 export default function TemplateSection({
@@ -86,6 +93,11 @@ export default function TemplateSection({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pendingSlot = useRef<Slot | null>(null)
 
+  // Phase 2: Campaign list for the campaign select in create/edit.
+  // On 401 (typed-email session), campaigns stay empty and the select is hidden.
+  const [campaigns, setCampaigns] = useState<AdminCampaignRow[]>([])
+  const [campaignsLoaded, setCampaignsLoaded] = useState(false)
+
   useEffect(() => {
     setLoading(true)
     listAdminTemplates()
@@ -107,12 +119,29 @@ export default function TemplateSection({
     }
   }, [onAccessError])
 
+  /** Load campaigns for the campaign select. On 401, silently leaves campaigns empty. */
+  const loadCampaigns = useCallback(async () => {
+    if (campaignsLoaded) return
+    try {
+      const rows = await listAdminCampaigns()
+      setCampaigns(rows)
+    } catch (e) {
+      // 401 (typed-email session) → hide the select, keep campaign 1 as default.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        // Non-401 failure: treat as non-critical; select will be hidden.
+      }
+    } finally {
+      setCampaignsLoaded(true)
+    }
+  }, [campaignsLoaded])
+
   function openNew() {
     setEditing('new')
     setForm(emptyForm())
     setError(null)
     setUploadError(null)
     void loadImages()
+    void loadCampaigns()
   }
 
   function openEdit(t: AdminTemplate) {
@@ -121,6 +150,7 @@ export default function TemplateSection({
     setError(null)
     setUploadError(null)
     void loadImages()
+    void loadCampaigns()
   }
 
   function cancelEdit() {
@@ -179,6 +209,7 @@ export default function TemplateSection({
       layout: form.layout,
       active: form.active,
       images: imagesPayload,
+      campaignId: form.campaignId,
     }
 
     try {
@@ -257,6 +288,11 @@ export default function TemplateSection({
                 <span className={`template-active-badge ${tpl.active ? 'template-active' : 'template-inactive'}`}>
                   {tpl.active ? 'Đang dùng' : 'Tắt'}
                 </span>
+                {tpl.campaignId !== undefined && tpl.campaignId !== 1 && (
+                  <span style={{ fontSize: '0.78rem', color: '#78716c', marginLeft: '0.4rem' }}>
+                    {'Chiến dịch '}{tpl.campaignId}
+                  </span>
+                )}
               </div>
               <div className="admin-actions">
                 <button type="button" className="btn-ghost" onClick={() => openEdit(tpl)}>Sửa</button>
@@ -290,6 +326,26 @@ export default function TemplateSection({
                 />
                 <small>{form.name.length}/60 ký tự</small>
               </label>
+
+              {/* Phase 2: Campaign select — hidden when campaigns are unavailable (401 / not loaded). */}
+              {campaignsLoaded && campaigns.length > 0 && (
+                <label htmlFor="template-campaign-select">
+                  Chiến dịch
+                  <select
+                    id="template-campaign-select"
+                    value={form.campaignId}
+                    onChange={(e) => setForm((f) => ({ ...f, campaignId: parseInt(e.target.value, 10) }))}
+                    aria-label="Chọn chiến dịch cho mẫu thiệp"
+                  >
+                    {campaigns.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.slug})
+                      </option>
+                    ))}
+                  </select>
+                  <small>Mẫu chỉ hiển thị cho học sinh trong chiến dịch này.</small>
+                </label>
+              )}
 
               <fieldset className="write-choice">
                 <legend>Bố cục (khung thiệp và vùng viết)</legend>

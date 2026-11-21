@@ -205,6 +205,8 @@ export type AdminTemplate = {
   images: Record<string, { id: number; token: string }>
   created_at: string
   created_by: string
+  /** Phase 2: campaign this template belongs to. Absent when the backend has not yet returned it. */
+  campaignId?: number
 }
 
 /** Input body for creating/updating a template. */
@@ -213,6 +215,8 @@ export type AdminTemplateInput = {
   layout: string
   active?: 0 | 1
   images?: Record<string, number | null>  // 'background' → imageId (null removes it)
+  /** Phase 2: campaign to associate the template with (default 1 when omitted). */
+  campaignId?: number
 }
 
 /** Card record in admin moderation API (includes raw student-submitted fields). */
