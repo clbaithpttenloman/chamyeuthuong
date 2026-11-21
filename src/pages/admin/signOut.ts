@@ -10,7 +10,9 @@ export async function revokeAdminSession(
   try {
     await logout()
     return { ok: true }
-  } catch {
+  } catch (e) {
+    // 401: the session is already gone (expired or revoked), so the admin is signed out.
+    if ((e as { status?: number } | null)?.status === 401) return { ok: true }
     return { ok: false }
   }
 }

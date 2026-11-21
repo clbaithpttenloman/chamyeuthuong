@@ -9,7 +9,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   // ── Gift / heart errors (ADR-7, AC-12) ────────────────────────────────
   gift_not_found:    'Không tìm thấy quà.',
   already_hearted:   'Bạn đã thả tim cho quà này rồi.',
-  own_gift:          'Không thể thả tim cho quà của chính mình.',
+  own_gift:          'Đây là quà của bạn, bạn không thể thả tim hay báo cáo nó.',
   hearts_exhausted:  'Bạn đã dùng hết tim hôm nay — quay lại vào ngày mai nhé!',
 
   // ── Campaign errors (AC-3, AC-15, FR-6) ───────────────────────────────

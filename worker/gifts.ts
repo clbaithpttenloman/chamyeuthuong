@@ -335,8 +335,12 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
       '    SELECT 1 FROM app_user u WHERE u.id = ? AND u.banned = 1 ' +
       '  ) ' +
       // Open reports are evidence: the owner cannot delete until an admin has reviewed them.
+      // Same predicate as the report_count recount (non-banned reporters, accounts >= 24 h old),
+      // so every report that blocks a delete also puts the gift in the admin queue.
       '  AND NOT EXISTS ( ' +
-      '    SELECT 1 FROM report r WHERE r.gift_id = gift.id AND r.acknowledged = 0 ' +
+      '    SELECT 1 FROM report r JOIN app_user ru ON ru.id = r.user_id ' +
+      '    WHERE r.gift_id = gift.id AND r.acknowledged = 0 AND ru.banned = 0 ' +
+      "      AND (strftime('%s', r.created_at) - strftime('%s', ru.created_at)) >= 86400 " +
       '  )',
     )
     .bind(gift.id, userId, gift.campaign_id, nowDt, userId)
@@ -515,7 +519,7 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
   // The INSERT below is conditional so a race between this read and the INSERT returns 0 changes.
   const state = await env.DB
     .prepare(
-      'SELECT g.id AS gift_id, g.status AS gift_status, ' +
+      'SELECT g.id AS gift_id, g.status AS gift_status, g.user_id AS owner_id, ' +
       '       c.status AS camp_status, c.starts_at, c.ends_at, c.settings, ' +
       '       u.banned, ' +
       '       (SELECT COUNT(*) FROM report r WHERE r.gift_id = g.id AND r.user_id = ?) AS already_rep ' +
@@ -526,7 +530,7 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
     )
     .bind(userId, userId, publicId)
     .first<{
-      gift_id: number; gift_status: string;
+      gift_id: number; gift_status: string; owner_id: number;
       camp_status: string; starts_at: string; ends_at: string; settings: string;
       banned: number; already_rep: number;
     }>()
@@ -539,6 +543,8 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
   )
   if (!campOpen) return json({ error: 'campaign_closed' }, 409)
   if (state.banned) return json({ error: 'banned' }, 403)
+  // Reporting one's own gift would only block one's own delete; refuse it (same code as hearts).
+  if (state.owner_id === userId) return json({ error: 'own_gift' }, 403)
   if (state.already_rep > 0) return json({ error: 'already_reported' }, 409)
 
   // Parse threshold from settings
@@ -561,12 +567,12 @@ async function handleReport(publicId: string, request: Request, env: GiftsEnv): 
       'SELECT g.id, ?, ?, 0, ? ' +
       'FROM gift g ' +
       'JOIN campaign c ON c.id = g.campaign_id ' +
-      "WHERE g.id = ? AND g.status = 'visible' " +
+      "WHERE g.id = ? AND g.status = 'visible' AND g.user_id != ? " +
       "  AND c.status = 'active' AND ? BETWEEN c.starts_at AND c.ends_at " +
       '  AND NOT EXISTS (SELECT 1 FROM report WHERE gift_id = g.id AND user_id = ?) ' +
       '  AND (SELECT COUNT(*) FROM report WHERE user_id = ? ' +
       "       AND substr(datetime(created_at, '+7 hours'), 1, 10) = ?) < ?",
-    ).bind(userId, reason, nowDt, state.gift_id, nowDt, userId, userId, day, DAILY_REPORT_LIMIT),
+    ).bind(userId, reason, nowDt, state.gift_id, userId, nowDt, userId, userId, day, DAILY_REPORT_LIMIT),
     // 2. Recount: only non-banned, unacknowledged reports from accounts aged >= 24 h at
     //    the time of the report (new-account exclusion, security cycle 1).
     //    Guard: status != 'deleted' so a race where the gift was deleted between the

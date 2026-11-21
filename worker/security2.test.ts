@@ -479,6 +479,29 @@ describe('Item 4 — Owner delete conditions inside the write', () => {
     expect(row.message.trim()).not.toBe('')
   })
 
+  it('a report from an account < 24 h old does not block owner delete', async () => {
+    const { id, publicId } = await seedGift(db, ownerId, campaignId, templateId)
+    const now = new Date().toISOString()
+    const fresh = (sqlite.prepare("INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES ('rep-new-1','rep-new-1@gmail.com','R','',0,?,?) RETURNING id").get(now, now) as { id: number }).id
+    sqlite.prepare("INSERT INTO report (gift_id, user_id, reason, acknowledged, created_at) VALUES (?, ?, 'spam', 0, ?)").run(id, fresh, now)
+    expect((await handleGifts(sessionReq(ownerToken, `/api/gifts/${publicId}`, 'DELETE'), giftsEnv(db))).status).toBe(200)
+  })
+
+  it('a report from a banned reporter does not block owner delete', async () => {
+    const { id, publicId } = await seedGift(db, ownerId, campaignId, templateId)
+    const banned = (sqlite.prepare("INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES ('rep-ban-1','rep-ban-1@gmail.com','R','',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z') RETURNING id").get() as { id: number }).id
+    sqlite.prepare("INSERT INTO report (gift_id, user_id, reason, acknowledged, created_at) VALUES (?, ?, 'spam', 0, ?)").run(id, banned, new Date().toISOString())
+    expect((await handleGifts(sessionReq(ownerToken, `/api/gifts/${publicId}`, 'DELETE'), giftsEnv(db))).status).toBe(200)
+  })
+
+  it('reporting your own gift → 403 own_gift, nothing stored', async () => {
+    const { id, publicId } = await seedGift(db, ownerId, campaignId, templateId)
+    const r = await handleGifts(sessionReq(ownerToken, `/api/gifts/${publicId}/report`, 'POST', { reason: 'spam' }), giftsEnv(db))
+    expect(r.status).toBe(403)
+    expect((await r.json() as { error: string }).error).toBe('own_gift')
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM report WHERE gift_id = ?').get(id)).toEqual({ n: 0 })
+  })
+
   it('acknowledged reports do not block owner delete', async () => {
     const { id, publicId } = await seedGift(db, ownerId, campaignId, templateId)
     const reporter = (sqlite.prepare("INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES ('rep-pr-2','rep-pr-2@gmail.com','R','',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z') RETURNING id").get() as { id: number }).id
