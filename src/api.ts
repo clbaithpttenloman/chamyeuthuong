@@ -717,3 +717,79 @@ export async function getMyGifts(slug: string): Promise<Array<NoelGift & { statu
   const data = await res.json() as { gifts: Array<NoelGift & { status: string }> }
   return data.gifts ?? []
 }
+
+// ── Noel player write API (Part B) ────────────────────────────────────────────
+
+/** Input shape for POST /api/campaigns/<slug>/gifts. */
+export type CreateGiftInput = {
+  boxStyle: number
+  ornamentStyle: number
+  layout: string
+  backgroundTemplateId: number
+  font: string
+  ink: string
+  message: string
+  nickname: string
+  className: string
+}
+
+/**
+ * POST /api/campaigns/<slug>/gifts — create a gift (FR-19, AC-10).
+ * Throws ApiError on failure (codes: limit_reached 409, daily_limit 429,
+ * campaign_closed 409, banned 403, bad_request 400, unauthorized 401, rate_limited 429).
+ */
+export async function createGift(
+  slug: string,
+  input: CreateGiftInput,
+): Promise<{ publicId: string }> {
+  return (
+    await sessionExpectOk(
+      await sessionFetch(`/api/campaigns/${encodeURIComponent(slug)}/gifts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    )
+  ).json() as Promise<{ publicId: string }>
+}
+
+/**
+ * DELETE /api/gifts/<publicId> — owner deletes their own visible gift (ADR-8).
+ * Throws ApiError on failure (codes: not_found 404, pending_review 409, unauthorized 401).
+ */
+export async function deleteMyGift(publicId: string): Promise<void> {
+  await sessionExpectOk(
+    await sessionFetch(`/api/gifts/${encodeURIComponent(publicId)}`, { method: 'DELETE' }),
+  )
+}
+
+/**
+ * DELETE /api/me — delete the signed-in user's account (FR-13, ADR-8).
+ * Throws ApiError on failure (codes: pending_review 409 — has hidden gifts).
+ */
+export async function deleteMyAccount(): Promise<void> {
+  await sessionExpectOk(await sessionFetch('/api/me', { method: 'DELETE' }))
+}
+
+/**
+ * GET /api/campaigns/<slug>/gifts?sort=hearts|new&page= — paginated gift list (24/page).
+ * Throws ApiError for 400 (invalid page); returns [] for other errors.
+ */
+export async function getGiftList(
+  slug: string,
+  sort: 'hearts' | 'new',
+  page: number,
+): Promise<NoelGiftFlat[]> {
+  const url = `/api/campaigns/${encodeURIComponent(slug)}/gifts?sort=${sort}&page=${page}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    let code = 'unknown'
+    try {
+      const b = (await res.json()) as { error?: string }
+      code = b.error ?? 'unknown'
+    } catch { /* ignore */ }
+    throw new ApiError(res.status, code)
+  }
+  const data = (await res.json()) as { gifts: NoelGiftFlat[] }
+  return data.gifts ?? []
+}

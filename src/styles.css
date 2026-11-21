@@ -1287,3 +1287,876 @@ button:disabled { opacity: 0.5; cursor: default; }
   cursor: not-allowed;
 }
 .gift-sheet-nav-btn:not(:disabled):hover { background: #f1f5f9; }
+
+/* ══════════════════════════════════════════════════════════════════
+   Noel — shared dialog shell
+   (CreateGift · Leaderboard · AllGifts · MyGifts)
+   ══════════════════════════════════════════════════════════════════ */
+
+.noel-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.noel-dialog {
+  background: #fff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 440px;
+  max-height: 92vh;
+  overflow-y: auto;
+  outline: none;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.noel-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  border-radius: 20px 20px 0 0;
+  z-index: 1;
+}
+
+.noel-dialog-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+}
+
+.noel-dialog-close {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 1rem;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.noel-dialog-close:hover { background: #f1f5f9; color: #475569; }
+
+/* Primary action button shared by game dialogs */
+.noel-action-btn {
+  background: #1e3a5f;
+  color: #fff;
+  border: none;
+  border-radius: 24px;
+  padding: 10px 24px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.noel-action-btn:hover { background: #2d5080; }
+.noel-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── User menu dropdown ───────────────────────────────────────────── */
+.noel-page-user-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f0e6ff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.noel-page-user-btn:hover { background: rgba(255, 255, 255, 0.22); }
+
+.noel-page-user-menu {
+  position: relative;
+}
+
+.noel-user-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  min-width: 160px;
+  z-index: 30;
+  overflow: hidden;
+}
+
+.noel-user-menu-item {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 0.85rem;
+  color: #334155;
+  cursor: pointer;
+  font-family: inherit;
+}
+.noel-user-menu-item:hover { background: #f8fafc; }
+
+/* ══════════════════════════════════════════════════════════════════
+   CreateGift dialog
+   ══════════════════════════════════════════════════════════════════ */
+
+.create-gift-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.create-gift-quota {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+.create-gift-quota strong { color: #1e3a5f; }
+
+.create-gift-signin,
+.create-gift-closed,
+.create-gift-limit {
+  padding: 24px 16px;
+  text-align: center;
+  color: #334155;
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.create-gift-closed { color: #ef4444; font-weight: 600; }
+
+/* Step dots */
+.create-gift-steps {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px 0;
+  justify-content: center;
+}
+
+.create-gift-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  transition: background 0.2s;
+  display: inline-block;
+}
+.create-gift-step-dot--active { background: #1e3a5f; }
+.create-gift-step-dot--done   { background: #22c55e; }
+
+/* Error */
+.create-gift-error {
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  background: #fef2f2;
+  color: #dc2626;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* ── Style picker (box / ornament) ───────────────────────────────── */
+.create-gift-style-picker { padding: 12px 16px; }
+
+.create-gift-picker-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0 0 8px;
+}
+
+.create-gift-style-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.create-gift-style-item {
+  aspect-ratio: 1;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  transition: border-color 0.15s, background 0.15s;
+  min-height: 80px;
+}
+.create-gift-style-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.create-gift-style-item--selected {
+  border-color: #1e3a5f;
+  background: #eff6ff;
+}
+.create-gift-style-item:hover:not(.create-gift-style-item--selected) {
+  border-color: #94a3b8;
+}
+
+/* ── Card editor ─────────────────────────────────────────────────── */
+.create-gift-card-editor {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.create-gift-editor-section { display: flex; flex-direction: column; gap: 6px; }
+
+.create-gift-editor-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0;
+  display: block;
+}
+
+/* Layout */
+.create-gift-layout-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.create-gift-layout-btn {
+  padding: 6px 14px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 20px;
+  background: #f8fafc;
+  font-size: 0.8rem;
+  color: #475569;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+.create-gift-layout-btn--active {
+  border-color: #1e3a5f;
+  background: #eff6ff;
+  color: #1e3a5f;
+  font-weight: 600;
+}
+
+/* Background template thumbnails — bug #2: real images, not "." */
+.create-gift-bg-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.create-gift-bg-btn {
+  width: 72px;
+  height: 72px;
+  border: 2.5px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  color: #475569;
+  font-family: inherit;
+  transition: border-color 0.15s;
+  padding: 0;
+}
+.create-gift-bg-btn--active {
+  border-color: #1e3a5f;
+  box-shadow: 0 0 0 2px #93c5fd;
+}
+.create-gift-bg-btn:hover:not(.create-gift-bg-btn--active) { border-color: #94a3b8; }
+
+.create-gift-bg-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Font buttons */
+.create-gift-font-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.create-gift-font-btn {
+  padding: 7px 14px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 20px;
+  background: #f8fafc;
+  font-size: 0.9rem;
+  color: #475569;
+  cursor: pointer;
+  min-height: 36px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.create-gift-font-btn--active {
+  border-color: #1e3a5f;
+  background: #eff6ff;
+  color: #1e3a5f;
+  font-weight: 600;
+}
+
+/* Ink swatches — bug #2: ≥44 px touch targets with accessible labels */
+.create-gift-ink-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.create-gift-ink-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.15s, box-shadow 0.15s;
+  position: relative;
+  flex-shrink: 0;
+}
+.create-gift-ink-btn--active {
+  border-color: #1e3a5f;
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px #93c5fd;
+}
+.create-gift-ink-btn:not(.create-gift-ink-btn--active):hover {
+  border-color: #94a3b8;
+}
+
+/* Message textarea — bug #2: not monospace; font set via inline style from draft.font */
+.create-gift-message {
+  width: 100%;
+  min-height: 100px;
+  padding: 10px 12px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #1e293b;
+  font-family: inherit;   /* overridden by inline style from card font */
+  resize: vertical;
+  box-sizing: border-box;
+}
+.create-gift-message:focus { outline: none; border-color: #1e3a5f; }
+
+.create-gift-msg-counter {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  text-align: right;
+  display: block;
+  margin-top: 2px;
+}
+.create-gift-msg-counter--warn { color: #ef4444; font-weight: 600; }
+
+/* ── Preview step ───────────────────────────────────────────────── */
+.create-gift-preview {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.create-gift-preview-meta {
+  font-size: 0.8rem;
+  color: #64748b;
+  text-align: center;
+}
+
+/* ── Wrap animation ─────────────────────────────────────────────── */
+.create-gift-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px 16px;
+  min-height: 200px;
+}
+
+.create-gift-wrap-box {
+  width: 100px;
+  height: 100px;
+}
+.create-gift-wrap-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.create-gift-wrap-text {
+  color: #64748b;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+/* ── Success ────────────────────────────────────────────────────── */
+.create-gift-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 16px;
+}
+
+.create-gift-success-emoji { font-size: 3rem; margin: 0; }
+
+.create-gift-success-text {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #22c55e;
+}
+
+/* ── Navigation buttons ─────────────────────────────────────────── */
+.create-gift-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid #f1f5f9;
+  flex-shrink: 0;
+}
+
+.create-gift-back-btn {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.create-gift-back-btn:hover { background: #e2e8f0; }
+
+/* ── Name step ──────────────────────────────────────────────────── */
+.create-gift-name-step {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.create-gift-onboarding-note {
+  font-size: 0.8rem;
+  color: #64748b;
+  background: #f0f9ff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin: 0;
+}
+
+.create-gift-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.create-gift-field-label small {
+  font-weight: 400;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.create-gift-input {
+  padding: 9px 12px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  color: #1e293b;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.create-gift-input:focus { outline: none; border-color: #1e3a5f; }
+
+/* ══════════════════════════════════════════════════════════════════
+   Leaderboard dialog
+   ══════════════════════════════════════════════════════════════════ */
+
+.leaderboard-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.leaderboard-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0 16px;
+}
+
+.leaderboard-item { border-bottom: 1px solid #f1f5f9; }
+.leaderboard-item:last-child { border-bottom: none; }
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.1s;
+}
+.leaderboard-row:hover { background: #f8fafc; }
+
+.leaderboard-rank {
+  font-size: 1.1rem;
+  min-width: 36px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.leaderboard-rank--top1 { font-size: 1.4rem; }
+.leaderboard-rank--top2 { font-size: 1.3rem; }
+.leaderboard-rank--top3 { font-size: 1.2rem; }
+
+.leaderboard-name {
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboard-class { font-weight: 400; color: #64748b; }
+
+.leaderboard-hearts {
+  font-size: 0.82rem;
+  color: #ef4444;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   AllGifts dialog
+   ══════════════════════════════════════════════════════════════════ */
+
+.all-gifts-tabs {
+  display: flex;
+  border-bottom: 2px solid #f1f5f9;
+  padding: 0 16px;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.all-gifts-tab {
+  background: none;
+  border: none;
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+}
+.all-gifts-tab--active { color: #1e3a5f; border-bottom-color: #1e3a5f; }
+
+.all-gifts-panel { overflow-y: auto; flex: 1; }
+
+.all-gifts-error,
+.all-gifts-empty,
+.all-gifts-loading,
+.all-gifts-end {
+  padding: 16px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+.all-gifts-error { color: #dc2626; background: #fef2f2; border-radius: 8px; margin: 8px; }
+
+.all-gifts-list { list-style: none; margin: 0; padding: 4px 0 8px; }
+
+.all-gifts-item { border-bottom: 1px solid #f1f5f9; }
+.all-gifts-item:last-child { border-bottom: none; }
+
+.all-gifts-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.1s;
+}
+.all-gifts-row:hover { background: #f8fafc; }
+
+.all-gifts-position {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  min-width: 24px;
+  text-align: center;
+}
+
+.all-gifts-name {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.all-gifts-class { font-weight: 400; color: #64748b; }
+
+.all-gifts-hearts {
+  font-size: 0.8rem;
+  color: #ef4444;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.all-gifts-more-btn {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 8px 16px;
+  padding: 9px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  color: #475569;
+  cursor: pointer;
+  text-align: center;
+  font-family: inherit;
+}
+.all-gifts-more-btn:hover { background: #f1f5f9; }
+
+/* ══════════════════════════════════════════════════════════════════
+   MyGifts dialog
+   ══════════════════════════════════════════════════════════════════ */
+
+.my-gifts-loading,
+.my-gifts-error,
+.my-gifts-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+.my-gifts-error { color: #dc2626; background: #fef2f2; }
+
+.my-gifts-section { padding: 0 0 8px; }
+
+.my-gifts-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 10px 16px 4px;
+  margin: 0;
+}
+
+.my-gifts-list { list-style: none; margin: 0; padding: 0; }
+
+.my-gifts-item {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #f1f5f9;
+  padding: 0 16px 0 0;
+}
+.my-gifts-item--hidden { opacity: 0.65; }
+
+.my-gifts-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 10px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.1s;
+  min-width: 0;
+}
+.my-gifts-row:hover { background: #f8fafc; }
+
+.my-gifts-rank { font-size: 0.78rem; color: #94a3b8; min-width: 36px; }
+
+.my-gifts-name {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.my-gifts-hearts { font-size: 0.8rem; color: #ef4444; font-weight: 600; }
+
+.my-gifts-delete-btn {
+  padding: 5px 10px;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: 4px;
+  font-family: inherit;
+}
+.my-gifts-delete-btn:hover { background: #fee2e2; }
+
+.my-gifts-status-badge {
+  font-size: 0.72rem;
+  color: #f59e0b;
+  font-weight: 600;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.my-gifts-hidden-note {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  padding: 0 16px 8px;
+  margin: 0;
+}
+
+.my-gifts-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid #f1f5f9;
+  flex-shrink: 0;
+}
+
+.my-gifts-signout-btn {
+  flex: 1;
+  padding: 9px;
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.my-gifts-signout-btn:hover { background: #f1f5f9; }
+
+.my-gifts-delete-account-btn {
+  flex: 1;
+  padding: 9px;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.my-gifts-delete-account-btn:hover { background: #fee2e2; }
+
+/* ── Confirm dialogs (gift delete, account delete) ────────────────── */
+.noel-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.noel-confirm-dialog {
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 320px;
+  width: 100%;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+}
+
+.noel-confirm-dialog h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0 0 8px;
+}
+
+.noel-confirm-dialog p {
+  font-size: 0.85rem;
+  color: #475569;
+  margin: 0 0 8px;
+}
+
+.noel-confirm-list {
+  font-size: 0.82rem;
+  color: #475569;
+  padding-left: 20px;
+  margin: 0 0 12px;
+}
+
+.noel-confirm-error {
+  color: #dc2626;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: #fef2f2;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.noel-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.noel-confirm-actions button {
+  flex: 1;
+  padding: 9px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-family: inherit;
+}
+.noel-confirm-actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.noel-confirm-danger-btn {
+  background: #dc2626 !important;
+  color: #fff !important;
+  border-color: #dc2626 !important;
+}

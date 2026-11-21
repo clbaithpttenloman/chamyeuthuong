@@ -133,10 +133,13 @@ export default function GiftSheet({
     if (!boxEl || !lidEl || !sparksEl) { setPhase('card'); return }
 
     let alive = true
+    // Bug #3 fix: safety timeout ensures we always reach 'card' within 2 s even
+    // if WAAPI animations are paused (hidden tab, reduced-motion, missing img).
+    const safety = setTimeout(() => { if (alive) { setPhase('card') } }, 2000)
     animateBoxOpen({ box: boxEl, lid: lidEl, sparks: sparksEl }, reduced)
-      .then(() => { if (alive) setPhase('card') })
-      .catch(() => { if (alive) setPhase('card') })
-    return () => { alive = false }
+      .then(() => { clearTimeout(safety); if (alive) setPhase('card') })
+      .catch(() => { clearTimeout(safety); if (alive) setPhase('card') })
+    return () => { alive = false; clearTimeout(safety) }
   }, [phase, reduced])
 
   // ── Keyboard + focus trap ─────────────────────────────────────────────
