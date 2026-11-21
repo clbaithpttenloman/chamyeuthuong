@@ -2080,3 +2080,308 @@ describe('Fix Group 5a — Accept #1: campaign 1 content is nested {home:{…}}'
     expect(parsed).toEqual({ home: SITE_HOME })
   })
 })
+
+// ===================================================================
+// Phase 2 (Noel core) — gift, heart, report, banned_identity tables
+//
+// COLD-START COUNT NOTE:
+//   FRESH_COLD_START = SCHEMA.length + 13 + SEED_STATEMENT_COUNT.
+//   Phase 2 adds gift/heart/report/banned_identity to SCHEMA (new CREATE TABLE IF NOT EXISTS
+//   statements — no new UPGRADES probe steps because these are brand-new tables, not ALTER TABLE).
+//   SCHEMA.length is used dynamically, so the constant itself DOES NOT change.
+//   If Phase 2 adds UPGRADES steps (new probes), update "+ 13" accordingly.
+//   The tests below assert TABLE/COLUMN presence instead of exact counts where the count
+//   depends on unknowable implementation choices.
+// ===================================================================
+
+describe('Phase 2 tables — present in testDb()', () => {
+  it('testDb() creates gift table (fails until Phase 2 schema is in SCHEMA)', () => {
+    const { sqlite } = testDb()
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('gift')
+  })
+
+  it('testDb() creates heart table', () => {
+    const { sqlite } = testDb()
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('heart')
+  })
+
+  it('testDb() creates report table', () => {
+    const { sqlite } = testDb()
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('report')
+  })
+
+  it('testDb() creates banned_identity table', () => {
+    const { sqlite } = testDb()
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('banned_identity')
+  })
+})
+
+describe('Phase 2 tables — ensureSchema on fresh DB', () => {
+  it('ensureSchema creates gift table on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('gift')
+  })
+
+  it('ensureSchema creates heart table on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('heart')
+  })
+
+  it('ensureSchema creates report table on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('report')
+  })
+
+  it('ensureSchema creates banned_identity table on a fresh DB', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+    expect(rows.map((r) => r.name)).toContain('banned_identity')
+  })
+})
+
+describe('gift table — column presence and CHECKs', () => {
+  it('gift table has status CHECK: visible/hidden_auto/hidden_admin/deleted accepted, unknown rejected', () => {
+    // Uses testDb() — fails until gift table is in SCHEMA (table not found)
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')  // allow orphan FK in this structural test
+    const now = new Date().toISOString()
+    // Insert a minimal gift for status checks (FK skipped)
+    const insertFn = (status: string) => () =>
+      sqlite
+        .prepare(
+          `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,` +
+          `background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+          `VALUES ('pid${status.slice(0,3)}12345678901',1,1,1,1,'','', '','','Msg','Nick','11A','${status}','${now}')`,
+        )
+        .run()
+    for (const s of ['visible', 'hidden_auto', 'hidden_admin', 'deleted']) {
+      expect(insertFn(s), `${s} should be allowed`).not.toThrow()
+    }
+    expect(insertFn('published'), 'unknown status should throw').toThrow()
+  })
+
+  it('gift table box_style CHECK rejects 0 and 7', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidbox0_12345678901',1,1,0,1,'',null,'','','Msg','Nick','11A','visible','${now}')`,
+      ).run()
+    ).toThrow()
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidbox7_12345678901',1,1,7,1,'',null,'','','Msg','Nick','11A','visible','${now}')`,
+      ).run()
+    ).toThrow()
+  })
+
+  it('gift table box_style CHECK accepts 1 and 6', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidbox1_12345678901',1,1,1,1,'',null,'','','Msg','Nick','11A','visible','${now}')`,
+      ).run()
+    ).not.toThrow()
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidbox6_12345678901',1,1,6,1,'',null,'','','Msg','Nick','11A','visible','${now}')`,
+      ).run()
+    ).not.toThrow()
+  })
+
+  it('gift table message CHECK rejects empty string', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidmsgempty_1234567',1,1,1,1,'',null,'','','','Nick','11A','visible','${now}')`,
+      ).run()
+    ).toThrow()
+  })
+
+  it('gift table message CHECK rejects length > 300', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    const msg = 'a'.repeat(301)
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidmsglong_1234567',1,1,1,1,'',null,'','','${msg}','Nick','11A','visible','${now}')`,
+      ).run()
+    ).toThrow()
+  })
+
+  it('gift table nickname CHECK rejects empty string', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidnicke_12345678901',1,1,1,1,'',null,'','','Msg','','11A','visible','${now}')`,
+      ).run()
+    ).toThrow()
+  })
+
+  it('gift table nickname CHECK rejects length > 30', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    const nick = 'N'.repeat(31)
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidnickl_12345678901',1,1,1,1,'',null,'','','Msg','${nick}','11A','visible','${now}')`,
+      ).run()
+    ).toThrow()
+  })
+
+  it('gift table class_name CHECK rejects length > 10', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    const cls = 'C'.repeat(11)
+    expect(() =>
+      sqlite.prepare(
+        `INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) ` +
+        `VALUES ('pidclassl_12345678901',1,1,1,1,'',null,'','','Msg','Nick','${cls}','visible','${now}')`,
+      ).run()
+    ).toThrow()
+  })
+
+  it('gift_rank index exists and covers (campaign_id, status, heart_count, created_at)', () => {
+    const { sqlite } = testDb()
+    const indexList = sqlite.prepare('PRAGMA index_list(gift)').all() as Array<{ name: string }>
+    const rankIdx = indexList.find((r) => r.name === 'gift_rank')
+    expect(rankIdx, 'gift_rank index must exist').toBeDefined()
+    if (rankIdx) {
+      const cols = sqlite.prepare(`PRAGMA index_info(gift_rank)`).all() as Array<{ name: string }>
+      const names = cols.map((c) => c.name)
+      expect(names).toContain('campaign_id')
+      expect(names).toContain('status')
+      expect(names).toContain('heart_count')
+      expect(names).toContain('created_at')
+    }
+  })
+})
+
+describe('heart table — PRIMARY KEY and CASCADE', () => {
+  it('heart PRIMARY KEY (gift_id, user_id) prevents duplicate heart', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    // insert once
+    sqlite.prepare(`INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) VALUES ('hearttest1234567',1,1,1,1,'',null,'','','Msg','Nick','11A','visible','${now}')`).run()
+    const giftId = (sqlite.prepare(`SELECT id FROM gift WHERE public_id='hearttest1234567'`).get() as { id: number }).id
+    sqlite.prepare(`INSERT INTO heart (gift_id,user_id,day,created_at) VALUES (${giftId},1,'2026-12-10','${now}')`).run()
+    expect(() =>
+      sqlite.prepare(`INSERT INTO heart (gift_id,user_id,day,created_at) VALUES (${giftId},1,'2026-12-10','${now}')`).run()
+    ).toThrow()
+  })
+
+  it('heart_user_day index exists and covers (user_id, day)', () => {
+    const { sqlite } = testDb()
+    const indexList = sqlite.prepare('PRAGMA index_list(heart)').all() as Array<{ name: string }>
+    const idx = indexList.find((r) => r.name === 'heart_user_day')
+    expect(idx, 'heart_user_day index must exist').toBeDefined()
+    if (idx) {
+      const cols = sqlite.prepare(`PRAGMA index_info(heart_user_day)`).all() as Array<{ name: string }>
+      const names = cols.map((c) => c.name)
+      expect(names).toContain('user_id')
+      expect(names).toContain('day')
+    }
+  })
+})
+
+describe('report table — CHECKs and PRIMARY KEY', () => {
+  it('report reason CHECK accepts inappropriate, spam, other', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    sqlite.prepare(`INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) VALUES ('reporttest12345678',1,1,1,1,'',null,'','','Msg','Nick','11A','visible','${now}')`).run()
+    const giftId = (sqlite.prepare(`SELECT id FROM gift WHERE public_id='reporttest12345678'`).get() as { id: number }).id
+    for (const [userId, reason] of [[1,'inappropriate'],[2,'spam'],[3,'other']] as [number, string][]) {
+      expect(() =>
+        sqlite.prepare(`INSERT INTO report (gift_id,user_id,reason,created_at) VALUES (${giftId},${userId},'${reason}','${now}')`).run()
+      ).not.toThrow()
+    }
+  })
+
+  it('report reason CHECK rejects unknown reason', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    sqlite.prepare(`INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) VALUES ('reportbad123456789',1,1,1,1,'',null,'','','Msg','Nick','11A','visible','${now}')`).run()
+    const giftId = (sqlite.prepare(`SELECT id FROM gift WHERE public_id='reportbad123456789'`).get() as { id: number }).id
+    expect(() =>
+      sqlite.prepare(`INSERT INTO report (gift_id,user_id,reason,created_at) VALUES (${giftId},1,'hate','${now}')`).run()
+    ).toThrow()
+  })
+
+  it('report PRIMARY KEY (gift_id, user_id) prevents duplicate report', () => {
+    const { sqlite } = testDb()
+    sqlite.exec('PRAGMA foreign_keys = OFF')
+    const now = new Date().toISOString()
+    sqlite.prepare(`INSERT INTO gift (public_id,campaign_id,user_id,box_style,ornament_style,layout,background_template_id,font,ink,message,nickname,class_name,status,created_at) VALUES ('reportdup123456789',1,1,1,1,'',null,'','','Msg','Nick','11A','visible','${now}')`).run()
+    const giftId = (sqlite.prepare(`SELECT id FROM gift WHERE public_id='reportdup123456789'`).get() as { id: number }).id
+    sqlite.prepare(`INSERT INTO report (gift_id,user_id,reason,created_at) VALUES (${giftId},1,'spam','${now}')`).run()
+    expect(() =>
+      sqlite.prepare(`INSERT INTO report (gift_id,user_id,reason,created_at) VALUES (${giftId},1,'other','${now}')`).run()
+    ).toThrow()
+  })
+})
+
+describe('banned_identity table — sub_hmac is PRIMARY KEY', () => {
+  it('banned_identity sub_hmac PRIMARY KEY prevents duplicate tombstone', () => {
+    const { sqlite } = testDb()
+    const now = new Date().toISOString()
+    sqlite.prepare(`INSERT INTO banned_identity (sub_hmac,created_at) VALUES ('hmac12345678901234567890123456789012','${now}')`).run()
+    expect(() =>
+      sqlite.prepare(`INSERT INTO banned_identity (sub_hmac,created_at) VALUES ('hmac12345678901234567890123456789012','${now}')`).run()
+    ).toThrow()
+  })
+
+  it('banned_identity accepts distinct sub_hmacs', () => {
+    const { sqlite } = testDb()
+    const now = new Date().toISOString()
+    expect(() => {
+      sqlite.prepare(`INSERT INTO banned_identity (sub_hmac,created_at) VALUES ('hmac_a_1234567890123456789012345678','${now}')`).run()
+      sqlite.prepare(`INSERT INTO banned_identity (sub_hmac,created_at) VALUES ('hmac_b_1234567890123456789012345678','${now}')`).run()
+    }).not.toThrow()
+  })
+})
+
+describe('Phase 2 idempotency — ensureSchema twice leaves tables intact', () => {
+  it('running ensureSchema twice on a fresh DB leaves all Phase 2 tables', async () => {
+    const { db, sqlite } = testDb({ schema: false })
+    await ensureSchema(db)
+    // Second call is a no-op (cached promise or IF NOT EXISTS)
+    const p1 = ensureSchema(db)
+    await p1
+    for (const table of ['gift', 'heart', 'report', 'banned_identity']) {
+      const row = sqlite.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table) as { name: string } | undefined
+      expect(row?.name, `${table} must survive second ensureSchema`).toBe(table)
+    }
+  })
+})

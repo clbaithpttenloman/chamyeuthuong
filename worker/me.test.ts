@@ -1308,3 +1308,419 @@ describe('DELETE /api/me — scope and guards', () => {
     expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', me)).toBe(1)
   })
 })
+
+// ===================================================================
+// Phase 2 — GET /api/me?campaign=<slug> and GET /api/me/gifts?campaign=<slug>
+//
+// New behaviour added to handleMe:
+//   GET /api/me?campaign=<slug>
+//       Extends the existing { user, isAdmin } body with:
+//         heartsLeft     — hearts_per_day minus today's hearts given (Vietnam day = UTC+7)
+//         heartedGiftIds — public_ids of gifts the user hearted in this campaign
+//       Anonymous: heartsLeft = hearts_per_day (from campaign settings), heartedGiftIds = []
+//
+//   GET /api/me/gifts?campaign=<slug>
+//       Returns own gifts for the campaign (including hidden ones) each with:
+//         status, rank (from heart_count ordering)
+//
+// These tests fail because handleMe does not yet implement the campaign param.
+// Pre-existing tests (without campaign param) continue to pass.
+// ===================================================================
+
+// Helper: create gift + heart tables (column names matching plan.md § Data model)
+function createGiftAndHeartTables(sqlite: import('node:sqlite').DatabaseSync): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS gift (
+      id                     INTEGER PRIMARY KEY,
+      public_id              TEXT UNIQUE NOT NULL,
+      campaign_id            INTEGER NOT NULL,
+      user_id                INTEGER NOT NULL,
+      box_style              INTEGER NOT NULL DEFAULT 1,
+      ornament_style         INTEGER NOT NULL DEFAULT 1,
+      layout                 TEXT    NOT NULL DEFAULT 'classic',
+      background_template_id INTEGER,
+      font                   TEXT    NOT NULL DEFAULT 'patrick-hand',
+      ink                    TEXT    NOT NULL DEFAULT '#1d3fa6',
+      message                TEXT    NOT NULL DEFAULT '',
+      nickname               TEXT    NOT NULL DEFAULT '',
+      class_name             TEXT    NOT NULL DEFAULT '',
+      heart_count            INTEGER NOT NULL DEFAULT 0,
+      report_count           INTEGER NOT NULL DEFAULT 0,
+      status                 TEXT    NOT NULL DEFAULT 'visible'
+                               CHECK (status IN ('visible','hidden_auto','hidden_admin','deleted')),
+      status_before_ban      TEXT,
+      created_at             TEXT    NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS heart (
+      gift_id    INTEGER NOT NULL,
+      user_id    INTEGER NOT NULL,
+      day        TEXT    NOT NULL,
+      created_at TEXT    NOT NULL,
+      PRIMARY KEY (gift_id, user_id)
+    );
+  `)
+}
+
+/** Returns current date as YYYY-MM-DD in Asia/Ho_Chi_Minh (+7 UTC). */
+function vnToday(): string {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+/** Seeds a gift_tree campaign and returns its id. Closes any active campaign first. */
+function seedNoelCampaign(
+  sqlite: import('node:sqlite').DatabaseSync,
+  settings = JSON.stringify({ tree_slots: 15, ground_slots: 10, hearts_per_day: 5, gifts_per_user: 3, report_threshold: 3 }),
+): number {
+  sqlite.prepare("UPDATE campaign SET status = 'closed' WHERE status = 'active'").run()
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO campaign
+      (slug, kind, name, tagline, content, theme_colors, settings,
+       starts_at, ends_at, status, created_at, created_by)
+    VALUES ('noel', 'gift_tree', 'Noel', '', '{}', '{}', ?,
+      '2026-01-01T00:00:00Z', '2027-12-31T23:59:59Z', 'active', datetime('now'), 'test')
+  `).run(settings)
+  return (sqlite.prepare("SELECT id FROM campaign WHERE slug = 'noel'").get() as { id: number }).id
+}
+
+let _meGiftSeq = 0
+/** Seeds one gift and returns its id and publicId. */
+function seedMeGift(
+  sqlite: import('node:sqlite').DatabaseSync,
+  opts: { campaignId: number; userId: number; heartCount?: number; status?: string },
+): { id: number; publicId: string } {
+  _meGiftSeq++
+  const publicId = `me${String(_meGiftSeq).padStart(14, '0')}`
+  const now = new Date(Date.now() + _meGiftSeq).toISOString()
+  sqlite.prepare(`
+    INSERT INTO gift
+      (public_id, campaign_id, user_id, box_style, ornament_style, layout,
+       font, ink, message, nickname, class_name,
+       heart_count, report_count, status, created_at)
+    VALUES (?, ?, ?, 1, 1, 'classic', 'patrick-hand', '#1d3fa6', 'msg', 'Nick', '11A', ?, 0, ?, ?)
+  `).run(publicId, opts.campaignId, opts.userId, opts.heartCount ?? 0, opts.status ?? 'visible', now)
+  const row = sqlite.prepare('SELECT id FROM gift WHERE public_id = ?').get(publicId) as { id: number }
+  return { id: row.id, publicId }
+}
+
+/** Seeds a heart row (day defaults to today Vietnam time). */
+function seedHeart(
+  sqlite: import('node:sqlite').DatabaseSync,
+  giftId: number,
+  userId: number,
+  day = vnToday(),
+): void {
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO heart (gift_id, user_id, day, created_at)
+    VALUES (?, ?, ?, datetime('now'))
+  `).run(giftId, userId, day)
+}
+
+// ── GET /api/me?campaign=<slug> — heartsLeft ─────────────────────────────────
+
+describe('GET /api/me?campaign=<slug> — heartsLeft', () => {
+  it('anonymous → heartsLeft equals hearts_per_day from campaign settings', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const settings = JSON.stringify({ tree_slots: 15, ground_slots: 10, hearts_per_day: 5, gifts_per_user: 3, report_threshold: 3 })
+    seedNoelCampaign(sqlite, settings)
+    const env = meEnv({ db })
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      env,
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { heartsLeft?: number; heartedGiftIds?: unknown[] }
+    expect(body.heartsLeft).toBe(5)   // hearts_per_day = 5, no hearts given
+    expect(Array.isArray(body.heartedGiftIds)).toBe(true)
+    expect((body.heartedGiftIds as unknown[]).length).toBe(0)
+  })
+
+  it('signed-in user with no hearts → heartsLeft = hearts_per_day', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { heartsLeft?: number; heartedGiftIds?: string[] }
+    expect(body.heartsLeft).toBe(5)
+    expect(body.heartedGiftIds).toEqual([])
+    // suppress unused variable warning
+    void campaignId
+  })
+
+  it('signed-in user who gave 2 hearts today → heartsLeft = hearts_per_day − 2', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    // Other user owns the gifts (can't heart own gift)
+    const otherId = await seedUser(db, { sub: 'other-sub-hearts', email: 'other-h@gmail.com' })
+    const { id: g1 } = seedMeGift(sqlite, { campaignId, userId: otherId })
+    const { id: g2 } = seedMeGift(sqlite, { campaignId, userId: otherId })
+    seedHeart(sqlite, g1, userId)
+    seedHeart(sqlite, g2, userId)
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { heartsLeft?: number }
+    expect(body.heartsLeft).toBe(3) // 5 − 2
+  })
+
+  it('heartsLeft counts only today (Vietnam day) — yesterday hearts do not reduce it', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const otherId = await seedUser(db, { sub: 'other-sub-yday', email: 'yday@gmail.com' })
+    const { id: g1 } = seedMeGift(sqlite, { campaignId, userId: otherId })
+    const { id: g2 } = seedMeGift(sqlite, { campaignId, userId: otherId })
+
+    // One heart yesterday, one today
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    const yesterdayVn = new Date(yesterday.getTime() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    seedHeart(sqlite, g1, userId, yesterdayVn)   // yesterday → not counted
+    seedHeart(sqlite, g2, userId, vnToday())     // today → counted
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { heartsLeft?: number }
+    expect(body.heartsLeft).toBe(4) // 5 − 1 (only today's heart counts)
+  })
+})
+
+// ── GET /api/me?campaign=<slug> — heartedGiftIds ─────────────────────────────
+
+describe('GET /api/me?campaign=<slug> — heartedGiftIds', () => {
+  it('heartedGiftIds contains publicIds of gifts the user hearted', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const otherId = await seedUser(db, { sub: 'other-sub-hid', email: 'hid@gmail.com' })
+    const { id: g1, publicId: pid1 } = seedMeGift(sqlite, { campaignId, userId: otherId })
+    const { publicId: pid2 } = seedMeGift(sqlite, { campaignId, userId: otherId })
+    // Heart only g1
+    seedHeart(sqlite, g1, userId)
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { heartedGiftIds?: string[] }
+    expect(body.heartedGiftIds).toContain(pid1)
+    expect(body.heartedGiftIds).not.toContain(pid2)
+  })
+
+  it('heartedGiftIds contains public_ids (not integer ids)', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const otherId = await seedUser(db, { sub: 'other-sub-pid', email: 'pid@gmail.com' })
+    const { id: giftId, publicId } = seedMeGift(sqlite, { campaignId, userId: otherId })
+    seedHeart(sqlite, giftId, userId)
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { heartedGiftIds?: unknown[] }
+    expect((body.heartedGiftIds ?? []).every((v) => typeof v === 'string')).toBe(true)
+    expect(body.heartedGiftIds).toContain(publicId)
+    expect(body.heartedGiftIds).not.toContain(giftId) // must not leak integer id
+  })
+
+  it('response remains no-store when campaign param is present', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    seedNoelCampaign(sqlite)
+
+    const r = await handleMe(
+      new Request('https://x/api/me?campaign=noel', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      meEnv({ db }),
+    )
+    expect(r.headers.get('Cache-Control')).toBe('no-store')
+  })
+})
+
+// ── GET /api/me/gifts?campaign=<slug> ────────────────────────────────────────
+
+describe('GET /api/me/gifts?campaign=<slug>', () => {
+  it('returns own gifts including hidden ones with status', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const { publicId: visiblePid } = seedMeGift(sqlite, { campaignId, userId, status: 'visible' })
+    const { publicId: hiddenPid } = seedMeGift(sqlite, { campaignId, userId, status: 'hidden_auto' })
+
+    const r = await handleMe(
+      new Request('https://x/api/me/gifts?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    expect(r.status).toBe(200)
+    const body = await r.json() as { gifts?: { publicId: string; status: string }[] }
+    expect(Array.isArray(body.gifts)).toBe(true)
+    const pids = (body.gifts ?? []).map((g) => g.publicId)
+    expect(pids).toContain(visiblePid)
+    expect(pids).toContain(hiddenPid) // owner sees own hidden gifts
+    // Status must be present
+    for (const g of body.gifts ?? []) {
+      expect(typeof g.status).toBe('string')
+    }
+  })
+
+  it('does not return other users\' gifts', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const otherId = await seedUser(db, { sub: 'other-sub-myg', email: 'myg@gmail.com' })
+    const { publicId: myGift } = seedMeGift(sqlite, { campaignId, userId })
+    const { publicId: theirGift } = seedMeGift(sqlite, { campaignId, userId: otherId })
+
+    const r = await handleMe(
+      new Request('https://x/api/me/gifts?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { gifts?: { publicId: string }[] }
+    const pids = (body.gifts ?? []).map((g) => g.publicId)
+    expect(pids).toContain(myGift)
+    expect(pids).not.toContain(theirGift)
+  })
+
+  it('each gift has a rank computed from heart_count ordering', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    // Other users' gifts to fill the leaderboard
+    const otherId = await seedUser(db, { sub: 'other-sub-rnk', email: 'rnk@gmail.com' })
+    // Gift with 10 hearts is rank 1 (not mine)
+    seedMeGift(sqlite, { campaignId, userId: otherId, heartCount: 10 })
+    // My gift with 5 hearts is rank 2
+    const { publicId: myGiftPid } = seedMeGift(sqlite, { campaignId, userId, heartCount: 5 })
+
+    const r = await handleMe(
+      new Request('https://x/api/me/gifts?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { gifts?: { publicId: string; rank: number }[] }
+    const myGift = (body.gifts ?? []).find((g) => g.publicId === myGiftPid)
+    expect(myGift).toBeDefined()
+    expect(myGift?.rank).toBe(2) // rank 1 belongs to the other user's gift
+  })
+
+  it('unauthenticated GET /api/me/gifts → 401', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    seedNoelCampaign(sqlite)
+
+    const r = await handleMe(
+      new Request('https://x/api/me/gifts?campaign=noel', { headers: { 'CF-Connecting-IP': '1.2.3.4' } }),
+      meEnv({ db }),
+    )
+    expect(r.status).toBe(401)
+  })
+
+  it('response has Cache-Control: no-store', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const r = await handleMe(
+      new Request('https://x/api/me/gifts?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    expect(r.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  it('deleted gifts are excluded from own gift list', async () => {
+    const { db, sqlite } = testDb()
+    createNewTables(sqlite)
+    createGiftAndHeartTables(sqlite)
+    const campaignId = seedNoelCampaign(sqlite)
+    const userId = await seedUser(db)
+    const rawToken = makeRawToken()
+    await seedSession(db, userId, rawToken)
+
+    const { publicId: activePid } = seedMeGift(sqlite, { campaignId, userId, status: 'visible' })
+    const { publicId: deletedPid } = seedMeGift(sqlite, { campaignId, userId, status: 'deleted' })
+
+    const r = await handleMe(
+      new Request('https://x/api/me/gifts?campaign=noel', {
+        headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
+      }),
+      meEnv({ db }),
+    )
+    const body = await r.json() as { gifts?: { publicId: string }[] }
+    const pids = (body.gifts ?? []).map((g) => g.publicId)
+    expect(pids).toContain(activePid)
+    expect(pids).not.toContain(deletedPid)
+  })
+})
