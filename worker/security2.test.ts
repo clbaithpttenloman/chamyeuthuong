@@ -177,6 +177,17 @@ describe('Item 2 — LIST_READ_LIMIT and 5 s memo for GET /api/campaigns/<slug>/
     expect(preparesAfterHit).toBe(preparesAfterMiss)
   })
 
+  it('random sort values share the hearts memo entry (no cache-busting keys)', async () => {
+    const { db: db2, state } = testDb({ shareWith: sqlite })
+    const env2 = treeEnv(db2)
+    const req = (sort: string) => new Request(`https://x/api/campaigns/noel-2026/gifts?sort=${sort}&page=1`, { headers: { 'CF-Connecting-IP': '1.2.3.4' } })
+    expect((await handleTree(req('hearts'), env2)).status).toBe(200)
+    const afterFirst = state.prepares
+    expect((await handleTree(req('zz1'), env2)).status).toBe(200)
+    expect((await handleTree(req('zz2'), env2)).status).toBe(200)
+    expect(state.prepares).toBe(afterFirst)
+  })
+
   it('LIST_READ_LIMIT is charged on miss (first call) but not on hit (second call)', async () => {
     const calls: string[] = []
     const countingLimit: Limiter = {
@@ -454,6 +465,25 @@ describe('Item 4 — Owner delete conditions inside the write', () => {
     )
     expect(r.status).toBe(403)
     expect((await r.json() as { error: string }).error).toBe('banned')
+  })
+
+  it('open (unacknowledged) reports below the threshold → 409 pending_review, text kept', async () => {
+    const { id, publicId } = await seedGift(db, ownerId, campaignId, templateId)
+    const reporter = (sqlite.prepare("INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES ('rep-pr-1','rep-pr-1@gmail.com','R','',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z') RETURNING id").get() as { id: number }).id
+    sqlite.prepare("INSERT INTO report (gift_id, user_id, reason, acknowledged, created_at) VALUES (?, ?, 'spam', 0, ?)").run(id, reporter, new Date().toISOString())
+    const r = await handleGifts(sessionReq(ownerToken, `/api/gifts/${publicId}`, 'DELETE'), giftsEnv(db))
+    expect(r.status).toBe(409)
+    expect((await r.json() as { error: string }).error).toBe('pending_review')
+    const row = sqlite.prepare('SELECT status, message FROM gift WHERE id = ?').get(id) as { status: string; message: string }
+    expect(row.status).toBe('visible')
+    expect(row.message.trim()).not.toBe('')
+  })
+
+  it('acknowledged reports do not block owner delete', async () => {
+    const { id, publicId } = await seedGift(db, ownerId, campaignId, templateId)
+    const reporter = (sqlite.prepare("INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES ('rep-pr-2','rep-pr-2@gmail.com','R','',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z') RETURNING id").get() as { id: number }).id
+    sqlite.prepare("INSERT INTO report (gift_id, user_id, reason, acknowledged, created_at) VALUES (?, ?, 'spam', 1, ?)").run(id, reporter, new Date().toISOString())
+    expect((await handleGifts(sessionReq(ownerToken, `/api/gifts/${publicId}`, 'DELETE'), giftsEnv(db))).status).toBe(200)
   })
 
   it('owner delete blanks message, nickname; class_name becomes empty', async () => {

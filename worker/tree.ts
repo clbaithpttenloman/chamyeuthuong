@@ -338,7 +338,8 @@ async function handleGiftList(slug: string, request: Request, env: TreeEnv): Pro
     })
   }
 
-  const sort = url.searchParams.get('sort') ?? 'hearts'
+  // Normalised so arbitrary values cannot create memo keys (anything but 'new' sorts by hearts).
+  const sort = url.searchParams.get('sort') === 'new' ? 'new' : 'hearts'
 
   // Memo check BEFORE rate limit and DB (miss404 set shared with tree memo)
   const cached = listMemoGet(db, slug, sort, page)

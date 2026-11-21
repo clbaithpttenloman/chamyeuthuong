@@ -16,6 +16,7 @@
  *   2. listAdminTeachers() — legacy email verify + data for teacher filter
  *   AboutSection loads GET /api/admin/about only when that tab is opened.
  */
+import { revokeAdminSession } from './admin/signOut.ts'
 import { useCallback, useEffect, useState } from 'react'
 import type { AdminTeacher } from '../../shared/api.ts'
 import {
@@ -157,6 +158,7 @@ export default function Admin() {
   // ── Legacy email path ────────────────────────────────────────────────
   const [adminEmail, setAdminEmailState] = useState<string | null>(() => getAdminEmail())
   const [emailError, setEmailError] = useState<string | null>(null)
+  const [signOutError, setSignOutError] = useState<string | null>(null)
   const [legacyVerified, setLegacyVerified] = useState(false)
   const [checking, setChecking] = useState(false)
 
@@ -238,9 +240,12 @@ export default function Admin() {
   }
 
   async function handleSignOut() {
-    // Revoke Google session if one is active
-    if (me.user !== null || googleVerified) {
-      await logout().catch(() => {})
+    // Revoke the Google session if one is active; on failure stay signed in and say so.
+    setSignOutError(null)
+    const { ok } = await revokeAdminSession(me.user !== null || googleVerified, logout)
+    if (!ok) {
+      setSignOutError('Đăng xuất thất bại. Phiên đăng nhập vẫn còn, vui lòng thử lại.')
+      return
     }
     // Reset all auth state
     setGoogleVerified(false)
@@ -285,6 +290,7 @@ export default function Admin() {
           >
             {googleVerified ? 'Đăng xuất' : 'Đổi email'}
           </button>
+          {signOutError && <p className="admin-signin-error" role="alert">{signOutError}</p>}
         </div>
       </div>
 

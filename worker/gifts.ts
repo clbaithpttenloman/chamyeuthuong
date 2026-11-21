@@ -333,6 +333,10 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
       '  ) ' +
       '  AND NOT EXISTS ( ' +
       '    SELECT 1 FROM app_user u WHERE u.id = ? AND u.banned = 1 ' +
+      '  ) ' +
+      // Open reports are evidence: the owner cannot delete until an admin has reviewed them.
+      '  AND NOT EXISTS ( ' +
+      '    SELECT 1 FROM report r WHERE r.gift_id = gift.id AND r.acknowledged = 0 ' +
       '  )',
     )
     .bind(gift.id, userId, gift.campaign_id, nowDt, userId)
@@ -356,7 +360,7 @@ async function handleDeleteGift(publicId: string, request: Request, env: GiftsEn
       new Date(),
     )
     if (!campOpen) return json({ error: 'campaign_closed' }, 409)
-    // Fallback (gift status changed concurrently — e.g. hidden by moderation)
+    // Fallback: open reports, or the gift was hidden concurrently by moderation.
     return json({ error: 'pending_review' }, 409)
   }
 
