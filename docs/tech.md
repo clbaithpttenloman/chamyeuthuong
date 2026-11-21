@@ -24,7 +24,7 @@ Verified 2026-11-17 for the student cards platform.
 - Rate limiting binding (`ratelimits` in wrangler.jsonc): `{ name, namespace_id, simple: { limit, period } }`; period is
   10 or 60 seconds; call `await env.X.limit({ key })` -> `{ success }`. Counts are per Cloudflare location. Same shape
   as `../phamhuuthien/wrangler.jsonc`.
-- Secrets: `npx wrangler secret put ADMIN_TOKEN`; local dev reads `.dev.vars` (gitignored).
+- Secrets: `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put NONCE_KEY` (see `docs/runbooks/google-signin.md`); local dev reads `.dev.vars` (gitignored).
 - `crypto.subtle.timingSafeEqual` is a non-standard Workers extension (not in Node). This project does not use it:
   it hashes both values with SHA-256 (`crypto.subtle.digest`) and compares the equal-length digests with an
   XOR-accumulate loop. Source: https://developers.cloudflare.com/workers/runtime-apis/web-crypto/
