@@ -218,7 +218,7 @@ describe('Admin POST /api/admin/templates — campaignId field', () => {
         'Content-Type': 'application/json',
         Cookie: cookie,
       },
-      body: JSON.stringify({ name: 'Noel Card BG', layout: 'classic', active: 1, campaignId: noelId }),
+      body: JSON.stringify({ name: 'Noel Card BG', layout: 'doc-giua', active: 1, campaignId: noelId }),
     })
     const r = await handleAdmin(req, makeTemplatesEnv(db) as never)
     expect(r.status).toBe(200)
@@ -243,7 +243,7 @@ describe('Admin POST /api/admin/templates — campaignId field', () => {
         'Content-Type': 'application/json',
         Cookie: cookie,
       },
-      body: JSON.stringify({ name: 'Default Campaign Template', layout: 'classic', active: 1 }),
+      body: JSON.stringify({ name: 'Default Campaign Template', layout: 'doc-giua', active: 1 }),
     })
     const r = await handleAdmin(req, makeTemplatesEnv(db) as never)
     expect(r.status).toBe(200)
@@ -265,7 +265,7 @@ describe('Admin POST /api/admin/templates — campaignId field', () => {
         'Content-Type': 'application/json',
         Cookie: cookie,
       },
-      body: JSON.stringify({ name: 'Bad Campaign', layout: 'classic', campaignId: 9999 }),
+      body: JSON.stringify({ name: 'Bad Campaign', layout: 'doc-giua', campaignId: 9999 }),
     })
     const r = await handleAdmin(req, makeTemplatesEnv(db) as never)
     expect(r.status).toBe(400)
@@ -290,7 +290,7 @@ describe('Admin PUT /api/admin/templates/:id — campaignId field', () => {
         'Content-Type': 'application/json',
         Cookie: cookie,
       },
-      body: JSON.stringify({ name: 'Updated Template', layout: 'classic', active: 1, campaignId: noelId }),
+      body: JSON.stringify({ name: 'Updated Template', layout: 'doc-giua', active: 1, campaignId: noelId }),
     })
     const r = await handleAdmin(req, makeTemplatesEnv(db) as never)
     expect(r.status).toBe(200)

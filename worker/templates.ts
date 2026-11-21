@@ -77,6 +77,7 @@ type TemplateInput = {
   layout: string
   active: number
   imageUpdates: Record<string, number | null> | null
+  campaignId: number | null  // null = not provided (default to 1 on create)
 }
 
 async function parseTemplateBody(
@@ -93,6 +94,16 @@ async function parseTemplateBody(
 
   const active = body.active !== undefined ? (body.active === 1 ? 1 : body.active === 0 ? 0 : null) : 1
   if (active === null) throw new HttpError('bad_request')
+
+  // campaignId: optional integer, must exist in DB when provided
+  let campaignId: number | null = null
+  if ('campaignId' in body) {
+    const raw = body.campaignId
+    if (raw !== undefined && raw !== null) {
+      if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) throw new HttpError('bad_request')
+      campaignId = raw
+    }
+  }
 
   // Parse image slots: { [slot]: imageId | null }
   const rawImages = body.images
@@ -115,19 +126,24 @@ async function parseTemplateBody(
     }
   }
 
-  return { name, layout, active, imageUpdates }
+  return { name, layout, active, imageUpdates, campaignId }
 }
 
 // ---- POST /api/admin/templates ----
 
 async function createTemplate(request: Request, env: Env, email: string): Promise<Response> {
-  const { name, layout, active, imageUpdates } = await parseTemplateBody(request, env)
+  const { name, layout, active, imageUpdates, campaignId: rawCampaignId } = await parseTemplateBody(request, env)
+  // Default to campaign 1 when not provided; validate that the campaign exists.
+  const campaignId = rawCampaignId ?? 1
+  const campaignRow = await env.DB.prepare('SELECT id FROM campaign WHERE id = ?').bind(campaignId).first()
+  if (!campaignRow) throw new HttpError('bad_request')
+
   const now = new Date().toISOString()
 
   // All inserts in ONE batch so a FK error on any image slot leaves no orphan template row.
   const stmts: D1Stmt[] = [
-    env.DB.prepare('INSERT INTO template (name, layout, active, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
-      .bind(name, layout, active, now, email),
+    env.DB.prepare('INSERT INTO template (name, layout, active, created_at, created_by, campaign_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(name, layout, active, now, email, campaignId),
   ]
 
   if (imageUpdates) {
@@ -169,10 +185,18 @@ async function updateTemplate(request: Request, env: Env, id: number): Promise<R
   const existing = await env.DB.prepare('SELECT id FROM template WHERE id = ?').bind(id).first()
   if (!existing) return error('not_found')
 
-  const { name, layout, active, imageUpdates } = await parseTemplateBody(request, env)
+  const { name, layout, active, imageUpdates, campaignId: rawCampaignId } = await parseTemplateBody(request, env)
+
+  // If campaignId provided, validate the campaign exists
+  if (rawCampaignId !== null) {
+    const campaignRow = await env.DB.prepare('SELECT id FROM campaign WHERE id = ?').bind(rawCampaignId).first()
+    if (!campaignRow) throw new HttpError('bad_request')
+  }
 
   const stmts: D1Stmt[] = [
-    env.DB.prepare('UPDATE template SET name = ?, layout = ?, active = ? WHERE id = ?').bind(name, layout, active, id),
+    rawCampaignId !== null
+      ? env.DB.prepare('UPDATE template SET name = ?, layout = ?, active = ?, campaign_id = ? WHERE id = ?').bind(name, layout, active, rawCampaignId, id)
+      : env.DB.prepare('UPDATE template SET name = ?, layout = ?, active = ? WHERE id = ?').bind(name, layout, active, id),
   ]
 
   if (imageUpdates) {

@@ -8,7 +8,10 @@
  *
  * handleMe handles:
  *   GET  /api/me            → { user|null, isAdmin }, no-store
+ *   GET  /api/me?campaign=  → adds heartsLeft, heartedGiftIds for the campaign
+ *   GET  /api/me/gifts      → own gifts for the campaign with rank and status
  *   PUT  /api/me            → update nickname (1–30) and className (≤10)
+ *   DELETE /api/me          → delete the account
  *
  * Security: no CORS headers; writes require X-Requested-With: fetch and reject
  * Sec-Fetch-Site: cross-site. Nonce cookie cleared after every sign-in attempt.
@@ -296,18 +299,124 @@ export async function handleAuth(
 
 // ── handleMe ──────────────────────────────────────────────────────────────────
 
+/** Vietnam day string (YYYY-MM-DD, UTC+7). Uses Date.now() so fake clocks work in tests. */
+function vietnamDay(): string {
+  return new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+}
+
+/** Shared admin-status check from a loaded user row. */
+function resolveAdminFromRow(
+  userRow: { email: string; hd: string | null; google_sub: string | null },
+  adminRow: { google_sub: string | null } | null,
+): boolean {
+  if (!adminRow || !isGoogleAuthoritative(userRow.email, userRow.hd ?? undefined)) return false
+  if (adminRow.google_sub === null) return true
+  return adminRow.google_sub === userRow.google_sub
+}
+
 /**
- * Handle /api/me requests.
- *   GET  → { user|null, isAdmin }  (no auth required; no-store)
- *   PUT  → update nickname/className (auth required; CSRF checked)
+ * Handle /api/me and /api/me/gifts requests.
+ *   GET /api/me             → { user|null, isAdmin }  (no auth required; no-store)
+ *   GET /api/me?campaign=   → adds heartsLeft, heartedGiftIds
+ *   GET /api/me/gifts       → own gifts for campaign, with rank (auth required)
+ *   PUT /api/me             → update nickname/className (auth required; CSRF checked)
+ *   DELETE /api/me          → delete account (auth required; CSRF checked)
  */
 export async function handleMe(request: Request, env: MeEnv): Promise<Response> {
   await ensureSchema(env.DB)
 
+  const { pathname } = new URL(request.url)
+
+  // ── GET /api/me/gifts ─────────────────────────────────────────────────────────
+  if (pathname === '/api/me/gifts') {
+    if (request.method !== 'GET') return failResp('method', 405)
+    const session = await readSession(request, env.DB)
+    if (!session) return failResp('unauthorized', 401)
+
+    if (!(await withinUserLimit(env.USER_READ_LIMIT, request, session.userId))) return failResp('rate_limited', 429)
+
+    const url = new URL(request.url)
+    const campaignSlug = url.searchParams.get('campaign') ?? ''
+
+    // Find campaign
+    const campaign = await env.DB
+      .prepare('SELECT id FROM campaign WHERE slug = ? LIMIT 1')
+      .bind(campaignSlug)
+      .first<{ id: number }>()
+
+    if (!campaign) return resp({ gifts: [] }, 200)
+
+    // Fetch user's non-deleted gifts with rank computed against visible gifts
+    const { results } = await env.DB
+      .prepare(
+        'SELECT g.public_id, g.box_style, g.ornament_style, g.layout, g.background_template_id,' +
+        ' g.font, g.ink, g.message, g.nickname, g.class_name, g.heart_count, g.created_at,' +
+        ' g.status,' +
+        " (SELECT COUNT(*) + 1 FROM gift g2 WHERE g2.campaign_id = g.campaign_id AND g2.status = 'visible'" +
+        "   AND (g2.heart_count > g.heart_count" +
+        '       OR (g2.heart_count = g.heart_count AND g2.created_at < g.created_at)' +
+        '       OR (g2.heart_count = g.heart_count AND g2.created_at = g.created_at AND g2.id < g.id))) AS rank' +
+        " FROM gift g WHERE g.campaign_id = ? AND g.user_id = ? AND g.status != 'deleted'" +
+        ' ORDER BY g.created_at DESC',
+      )
+      .bind(campaign.id, session.userId)
+      .all<{
+        public_id: string; box_style: number; ornament_style: number; layout: string
+        background_template_id: number | null; font: string; ink: string; message: string
+        nickname: string; class_name: string; heart_count: number; created_at: string
+        status: string; rank: number
+      }>()
+
+    return resp(
+      {
+        gifts: results.map((g) => ({
+          publicId: g.public_id,
+          heartCount: g.heart_count,
+          nickname: g.nickname,
+          className: g.class_name,
+          boxStyle: g.box_style,
+          ornamentStyle: g.ornament_style,
+          layout: g.layout,
+          backgroundTemplateId: g.background_template_id ?? null,
+          font: g.font,
+          ink: g.ink,
+          message: g.message,
+          createdAt: g.created_at,
+          status: g.status,
+          rank: g.rank,
+        })),
+      },
+      200,
+    )
+  }
+
+  // ── GET /api/me ───────────────────────────────────────────────────────────────
   if (request.method === 'GET') {
     const session = await readSession(request, env.DB)
     if (!(await withinUserLimit(env.USER_READ_LIMIT, request, session?.userId))) return failResp('rate_limited', 429)
-    if (!session) return resp({ user: null, isAdmin: false }, 200)
+
+    // Check for campaign param — if present, add heartsLeft and heartedGiftIds
+    const url = new URL(request.url)
+    const campaignSlug = url.searchParams.get('campaign')
+
+    if (!session) {
+      if (campaignSlug) {
+        // Anonymous with campaign param: return hearts_per_day as heartsLeft, empty heartedGiftIds
+        const campaignData = await env.DB
+          .prepare('SELECT settings FROM campaign WHERE slug = ? AND kind = ? LIMIT 1')
+          .bind(campaignSlug, 'gift_tree')
+          .first<{ settings: string }>()
+        let heartsPerDay = 5
+        if (campaignData) {
+          try {
+            const s = JSON.parse(campaignData.settings) as { hearts_per_day?: number }
+            if (typeof s.hearts_per_day === 'number') heartsPerDay = s.hearts_per_day
+          } catch { /* use default */ }
+        }
+        return resp({ user: null, isAdmin: false, heartsLeft: heartsPerDay, heartedGiftIds: [] }, 200)
+      }
+      return resp({ user: null, isAdmin: false }, 200)
+    }
 
     // Accept #10: single app_user read including google_sub (eliminates the second read)
     const userRow = await env.DB
@@ -322,14 +431,48 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       .bind(userRow.email.toLowerCase())
       .first<{ google_sub: string | null }>()
 
-    let isAdmin = false
-    if (adminRow && isGoogleAuthoritative(userRow.email, userRow.hd ?? undefined)) {
-      if (adminRow.google_sub === null) {
-        isAdmin = true  // sub not yet pinned; will be pinned on first requireAdmin call
-      } else {
-        // Accept #10: use userRow.google_sub from the first read (no second query)
-        isAdmin = userRow.google_sub === adminRow.google_sub
+    const isAdmin = resolveAdminFromRow(userRow, adminRow)
+
+    if (campaignSlug) {
+      // Add heartsLeft and heartedGiftIds for the campaign
+      const campaignData = await env.DB
+        .prepare('SELECT id, settings FROM campaign WHERE slug = ? AND kind = ? LIMIT 1')
+        .bind(campaignSlug, 'gift_tree')
+        .first<{ id: number; settings: string }>()
+
+      let heartsLeft = 5
+      let heartedGiftIds: string[] = []
+
+      if (campaignData) {
+        let heartsPerDay = 5
+        try {
+          const s = JSON.parse(campaignData.settings) as { hearts_per_day?: number }
+          if (typeof s.hearts_per_day === 'number') heartsPerDay = s.hearts_per_day
+        } catch { /* use default */ }
+
+        const today = vietnamDay()
+
+        const givenRow = await env.DB
+          .prepare(
+            'SELECT COUNT(*) AS n FROM heart h JOIN gift g ON g.id = h.gift_id' +
+            ' WHERE h.user_id = ? AND h.day = ? AND g.campaign_id = ?',
+          )
+          .bind(session.userId, today, campaignData.id)
+          .first<{ n: number }>()
+        const given = givenRow?.n ?? 0
+        heartsLeft = heartsPerDay - given
+
+        const { results: heartedRows } = await env.DB
+          .prepare(
+            'SELECT g.public_id FROM heart h JOIN gift g ON g.id = h.gift_id' +
+            ' WHERE h.user_id = ? AND g.campaign_id = ?',
+          )
+          .bind(session.userId, campaignData.id)
+          .all<{ public_id: string }>()
+        heartedGiftIds = heartedRows.map((r) => r.public_id)
       }
+
+      return resp({ user: publicUser(userRow, isAdmin), isAdmin, heartsLeft, heartedGiftIds }, 200)
     }
 
     return resp({ user: publicUser(userRow, isAdmin), isAdmin }, 200)

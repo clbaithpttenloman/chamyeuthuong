@@ -6,6 +6,8 @@ import { handleAbout } from './about.ts'
 import { handlePublicImage } from './images.ts'
 import { handleCampaigns, handleAdminCampaigns } from './campaigns.ts'
 import { handleGifts } from './gifts.ts'
+import { handleTree } from './tree.ts'
+import { handleGiftModeration } from './giftModeration.ts'
 import { requireAdmin } from './auth.ts'
 import { handleAuth, handleMe } from './me.ts'
 import { error } from './http.ts'
@@ -18,17 +20,26 @@ import type { Env, ExecutionContext } from './types.ts'
  * Routes (in order):
  *   /api/image/:token        - handlePublicImage
  *   /api/wall                - handlePublic
- *   /api/templates           - handlePublic
+ *   /api/templates           - handlePublic (campaign 1 only)
  *   /api/wishes              - handlePublic
  *   /api/about               - handleAbout  (public GET, rate-limited)
  *   /api/auth/...            - handleAuth   (nonce, google sign-in, logout)
- *   /api/me                  - handleMe     (profile read/update)
+ *   /api/me/gifts            - handleMe     (own gifts for a campaign)
+ *   /api/me                  - handleMe     (profile read/update/delete)
  *   /api/cards               - handleSubmit
  *   /api/qr/...              - handleQr
- *   /api/admin/campaigns...  - handleAdminCampaigns (Google session required)
- *   /api/admin/...           - handleAdmin
- *   /api/campaigns/:slug/gifts - handleGifts (gift create)
+ *   /api/campaigns/active    - handleCampaigns
+ *   /api/campaigns/<slug>/tree      - handleTree (gift-tree read APIs)
+ *   /api/campaigns/<slug>/gifts GET - handleTree (paginated gift list)
+ *   /api/campaigns/<slug>/gifts POST - handleGifts (gift create)
+ *   /api/campaigns/<slug>/templates - handleTree (campaign templates)
+ *   /api/campaigns/...       - handleCampaigns (public campaign read)
+ *   /api/gifts/<id> GET      - handleTree  (gift by public id)
  *   /api/gifts/...           - handleGifts (gift delete, heart, report)
+ *   /api/admin/campaigns...  - handleAdminCampaigns (Google session required)
+ *   /api/admin/gifts*        - handleGiftModeration (Google session, stub)
+ *   /api/admin/users*        - handleGiftModeration (Google session, stub)
+ *   /api/admin/...           - handleAdmin
  *   /api/...                 - 404
  *   /...                     - ASSETS (SPA)
  */
@@ -44,23 +55,48 @@ export default {
       if (pathname === '/api/about') return await handleAbout(request, env)
       // Auth and profile endpoints (no legacy email auth)
       if (pathname.startsWith('/api/auth/')) return await handleAuth(request, env as never)
+      // /api/me/gifts must be checked before /api/me (more specific path)
+      if (pathname === '/api/me/gifts') return await handleMe(request, env as never)
       if (pathname === '/api/me') return await handleMe(request, env as never)
       if (pathname === '/api/cards') return await handleSubmit(request, env)
       if (pathname.startsWith('/api/qr/')) return await handleQr(request, env)
-      // Campaign public endpoints (no auth; memoised per isolate; rate limited on cache misses)
-      if (pathname === '/api/campaigns/active' || pathname.startsWith('/api/campaigns/')) {
-        // Gift-tree write paths (/api/campaigns/:slug/gifts) are handled by handleGifts
-        const giftsPath = pathname.match(/^\/api\/campaigns\/[^/]+\/gifts$/)
-        if (giftsPath) return await handleGifts(request, env as never)
+
+      // Campaign-scoped read APIs (tree, gifts list, templates) — handled by handleTree for GET
+      // Gift-tree write paths (/api/campaigns/:slug/gifts POST) — handled by handleGifts
+      if (pathname.startsWith('/api/campaigns/')) {
+        // /api/campaigns/active and /api/campaigns/<slug> go to handleCampaigns
+        if (pathname === '/api/campaigns/active') return await handleCampaigns(request, env)
+        // /api/campaigns/<slug>/tree → handleTree (GET only)
+        if (/^\/api\/campaigns\/[^/]+\/tree$/.test(pathname)) return await handleTree(request, env as never)
+        // /api/campaigns/<slug>/gifts → GET to handleTree, POST to handleGifts
+        if (/^\/api\/campaigns\/[^/]+\/gifts$/.test(pathname)) {
+          if (request.method === 'POST') return await handleGifts(request, env as never)
+          return await handleTree(request, env as never)
+        }
+        // /api/campaigns/<slug>/templates → handleTree (GET only)
+        if (/^\/api\/campaigns\/[^/]+\/templates$/.test(pathname)) return await handleTree(request, env as never)
+        // Everything else → handleCampaigns (campaign read by slug)
         return await handleCampaigns(request, env)
       }
-      // Gift read/write paths (/api/gifts/:publicId, /heart, /report)
-      if (pathname.startsWith('/api/gifts/')) return await handleGifts(request, env as never)
+
+      // Gift endpoints: GET /api/gifts/<publicId> → handleTree; writes → handleGifts
+      if (pathname.startsWith('/api/gifts/')) {
+        // GET /api/gifts/<publicId> (no sub-path like /heart or /report)
+        if (request.method === 'GET' && /^\/api\/gifts\/[^/]+$/.test(pathname)) {
+          return await handleTree(request, env as never)
+        }
+        return await handleGifts(request, env as never)
+      }
+
       // Campaign admin CRUD — requires Google session (not legacy email)
       if (pathname.startsWith('/api/admin/campaigns')) {
         const auth = await requireAdmin(request, env)
         if (auth instanceof Response) return auth
         return await handleAdminCampaigns(request, env, auth.email)
+      }
+      // Gift moderation + user ban (stub; wired before handleAdmin so the route exists)
+      if (pathname.startsWith('/api/admin/gifts') || pathname.startsWith('/api/admin/users')) {
+        return await handleGiftModeration(request, env as never)
       }
       if (pathname.startsWith('/api/admin/')) return await handleAdmin(request, env)
       if (pathname.startsWith('/api/')) return error('not_found')

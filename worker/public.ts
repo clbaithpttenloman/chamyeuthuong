@@ -52,8 +52,9 @@ async function handleWall(db: Env['DB']): Promise<Response> {
 // ---- GET /api/templates ----
 
 async function handleTemplateList(db: Env['DB']): Promise<Response> {
+  // Phase 2: return only campaign 1 templates (20/11 compat — byte-identical with pre-Phase-2).
   const { results: templates } = await db
-    .prepare('SELECT id, name, layout FROM template WHERE active = 1 ORDER BY id')
+    .prepare('SELECT id, name, layout FROM template WHERE active = 1 AND campaign_id = 1 ORDER BY id')
     .all<{ id: number; name: string; layout: string }>()
 
   if (templates.length === 0) return json([])
