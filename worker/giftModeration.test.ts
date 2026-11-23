@@ -405,7 +405,6 @@ describe('GET /api/admin/gifts — card fields and report reasons', () => {
 // Fix Group 8a — new tests for items 1, 3, 4, 10
 // ═════════════════════════════════════════════════════════════════════════════
 
-import { NONCE_COOKIE_NAME } from './testGoogle.ts'
 import { TEST_SUB_HMAC_KEY } from './testGift.ts'
 
 // ── Item 1: unban removes banned_identity tombstone ───────────────────────────
