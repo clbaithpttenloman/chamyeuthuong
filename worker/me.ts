@@ -17,7 +17,8 @@
  * Sec-Fetch-Site: cross-site. Nonce cookie cleared after every sign-in attempt.
  * Email and sub are never logged.
  */
-import { json, readJson } from './http.ts'
+import { HttpError, json, readJson } from './http.ts'
+import { verifyOwnPassword } from './accounts.ts'
 import { verifyGoogleCredential, isGoogleAuthoritative } from './google.ts'
 import type { JWTVerifyGetKey } from './google.ts'
 import {
@@ -337,14 +338,6 @@ function vietnamDay(): string {
 }
 
 /** Shared admin-status check from a loaded user row. */
-function resolveAdminFromRow(
-  userRow: { email: string; hd: string | null; google_sub: string | null },
-  adminRow: { google_sub: string | null } | null,
-): boolean {
-  if (!adminRow || !isGoogleAuthoritative(userRow.email, userRow.hd ?? undefined)) return false
-  if (adminRow.google_sub === null) return true
-  return adminRow.google_sub === userRow.google_sub
-}
 
 /**
  * Handle /api/me and /api/me/gifts requests.
@@ -450,20 +443,29 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       return resp({ user: null, isAdmin: false }, 200)
     }
 
-    // Accept #10: single app_user read including google_sub (eliminates the second read)
+    // Phase 2b: one read for the profile, the password identity's username, the must-change flag
+    // and the admin role (admin_role presence = admin, ADR-9).
     const userRow = await env.DB
-      .prepare('SELECT id, email, nickname, class_name, banned, hd, google_sub FROM app_user WHERE id = ?')
+      .prepare(
+        'SELECT u.id, u.nickname, u.class_name, u.banned, ui.subject AS username, pc.must_change,' +
+        " (SELECT 1 FROM admin_role a WHERE a.user_id = u.id) AS is_admin" +
+        " FROM app_user u LEFT JOIN user_identity ui ON ui.user_id = u.id AND ui.provider = 'password'" +
+        ' LEFT JOIN password_credential pc ON pc.user_id = u.id WHERE u.id = ?',
+      )
       .bind(session.userId)
-      .first<UserRow & { google_sub: string | null }>()
+      .first<{ id: number; nickname: string; class_name: string; banned: number; username: string | null; must_change: number | null; is_admin: number | null }>()
     if (!userRow) return resp({ user: null, isAdmin: false }, 200)
 
-    // Admin check: email in admin list + authoritative
-    const adminRow = await env.DB
-      .prepare('SELECT google_sub FROM admin WHERE lower(email) = ?')
-      .bind(userRow.email.toLowerCase())
-      .first<{ google_sub: string | null }>()
-
-    const isAdmin = resolveAdminFromRow(userRow, adminRow)
+    const isAdmin = userRow.is_admin === 1
+    const accountUser = {
+      id: userRow.id,
+      username: userRow.username,
+      nickname: userRow.nickname,
+      className: userRow.class_name,
+      banned: userRow.banned === 1,
+      isAdmin,
+      mustChangePassword: userRow.must_change === 1,
+    }
 
     if (campaignSlug) {
       // Add heartsLeft and heartedGiftIds for the campaign
@@ -504,10 +506,10 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
         heartedGiftIds = heartedRows.map((r) => r.public_id)
       }
 
-      return resp({ user: publicUser(userRow, isAdmin), isAdmin, heartsLeft, heartedGiftIds }, 200)
+      return resp({ user: accountUser, isAdmin, heartsLeft, heartedGiftIds }, 200)
     }
 
-    return resp({ user: publicUser(userRow, isAdmin), isAdmin }, 200)
+    return resp({ user: accountUser, isAdmin }, 200)
   }
 
   if (request.method === 'DELETE') {
@@ -518,12 +520,33 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
     if (!session) return failResp('unauthorized', 401)
     if (!(await withinUserLimit(env.USER_WRITE_LIMIT, request, session.userId))) return failResp('rate_limited', 429)
 
-    // Load user (need google_sub for tombstone, banned for key-required check).
+    // Phase 2b: re-enter the password (AC-34). Wrong or missing → 401, nothing deleted.
+    let body: { password?: unknown }
+    try {
+      body = await readJson<{ password?: unknown }>(request, 2048)
+    } catch (e) {
+      if (e instanceof HttpError) return failResp(e.code, e.code === 'too_long' ? 413 : 400)
+      throw e
+    }
+    const passwordOk = await verifyOwnPassword(env, session.userId, body.password)
+    if (passwordOk === 'misconfigured') return failResp('misconfigured', 503)
+    if (!passwordOk) return failResp('invalid_credentials', 401)
+
     const userRow = await env.DB
-      .prepare('SELECT google_sub, banned FROM app_user WHERE id = ?')
+      .prepare('SELECT banned FROM app_user WHERE id = ?')
       .bind(session.userId)
-      .first<{ google_sub: string; banned: number }>()
+      .first<{ banned: number }>()
     if (!userRow) return failResp('unauthorized', 401)
+
+    // The last admin cannot delete their own account (ADR-9): that would leave no admin.
+    const adminRow = await env.DB
+      .prepare('SELECT 1 AS x FROM admin_role WHERE user_id = ?')
+      .bind(session.userId)
+      .first()
+    if (adminRow) {
+      const count = await env.DB.prepare('SELECT COUNT(*) AS c FROM admin_role').first<{ c: number }>()
+      if ((count?.c ?? 0) <= 1) return failResp('last_admin', 409)
+    }
 
     // Refused while any own gift is hidden (evidence cannot be removed — ADR-8, AC-14).
     const pendingRow = await env.DB
@@ -534,16 +557,21 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
       .first()
     if (pendingRow) return failResp('pending_review', 409)
 
-    // Tombstone for banned users (fail closed if SUB_HMAC_KEY is missing — security: a banned
-    // user must not silently escape the ban because the key was removed by mistake).
-    // Never log sub.
-    let subHmac: string | null = null
+    // Tombstone per identity for banned users (ADR-8, AC-29): fail closed without SUB_HMAC_KEY so a
+    // banned user cannot escape the ban because the key was missing. Never log subjects.
+    const tombstones: string[] = []
     if (userRow.banned) {
       if (!env.SUB_HMAC_KEY) {
         console.error('auth: misconfigured')
         return failResp('misconfigured', 503)
       }
-      subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, userRow.google_sub)
+      const ids = await env.DB
+        .prepare('SELECT provider, subject FROM user_identity WHERE user_id = ?')
+        .bind(session.userId)
+        .all<{ provider: string; subject: string }>()
+      for (const id of ids.results) {
+        tombstones.push(await hmacSha256Hex(env.SUB_HMAC_KEY, `${id.provider}:${id.subject}`))
+      }
     }
 
     // Pre-fetch the user's google_sub for tombstone (need it before deleting the user row).
@@ -563,14 +591,12 @@ export async function handleMe(request: Request, env: MeEnv): Promise<Response> 
     //   7. Delete sessions.
     //   8. Delete the user row.
     const stmts = [
-      ...(subHmac !== null
-        ? [
-            env.DB.prepare(
-              'INSERT OR IGNORE INTO banned_identity (sub_hmac, created_at) ' +
-              'SELECT ?, ? FROM app_user WHERE id = ? AND banned = 1',
-            ).bind(subHmac, new Date().toISOString(), session.userId),
-          ]
-        : []),
+      ...tombstones.map((h) =>
+        env.DB.prepare(
+          'INSERT OR IGNORE INTO banned_identity (sub_hmac, created_at) ' +
+          'SELECT ?, ? FROM app_user WHERE id = ? AND banned = 1',
+        ).bind(h, new Date().toISOString(), session.userId),
+      ),
       env.DB.prepare('DELETE FROM gift WHERE user_id = ?').bind(session.userId),
       // In-batch heart recount BEFORE the delete (item 4: no pre-read drift).
       // The subquery excludes the user's hearts, equaling post-delete COUNT(heart).

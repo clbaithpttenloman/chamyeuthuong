@@ -17,7 +17,7 @@ export const SESSION_COOKIE = '__Host-cyt_s'
 /** Cookie name for the sign-in nonce. */
 export const NONCE_COOKIE = '__Host-cyt_n'
 
-const SESSION_MAX_AGE = 14 * 24 * 60 * 60  // 1 209 600 s = 14 days
+export const SESSION_MAX_AGE = 14 * 24 * 60 * 60  // 1 209 600 s = 14 days
 const NONCE_MAX_AGE = 300                    // 5 min
 
 // ── Cookie builders ───────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ export function clearCookie(name: string): string {
 // ── Crypto helpers ────────────────────────────────────────────────────────────
 
 /** Compute SHA-256 hex hash. Used to store the session token hash. */
-async function sha256Hex(raw: string): Promise<string> {
+export async function sha256Hex(raw: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw))
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }

@@ -9,6 +9,7 @@ import { handleGifts } from './gifts.ts'
 import { handleTree } from './tree.ts'
 import { handleGiftModeration } from './giftModeration.ts'
 import { requireAdmin } from './auth.ts'
+import { handleAccounts, handleChangePassword } from './accounts.ts'
 import { handleAuth, handleMe } from './me.ts'
 import { error } from './http.ts'
 import type { Env, ExecutionContext } from './types.ts'
@@ -54,8 +55,12 @@ export default {
       }
       if (pathname === '/api/about') return await handleAbout(request, env)
       // Auth and profile endpoints (no legacy email auth)
+      if (pathname === '/api/auth/register' || pathname === '/api/auth/login') {
+        return await handleAccounts(request, env as never)
+      }
       if (pathname.startsWith('/api/auth/')) return await handleAuth(request, env as never)
       // /api/me/gifts must be checked before /api/me (more specific path)
+      if (pathname === '/api/me/password') return await handleChangePassword(request, env as never)
       if (pathname === '/api/me/gifts') return await handleMe(request, env as never)
       if (pathname === '/api/me') return await handleMe(request, env as never)
       if (pathname === '/api/cards') return await handleSubmit(request, env)

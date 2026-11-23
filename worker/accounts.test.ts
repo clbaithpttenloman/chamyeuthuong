@@ -323,7 +323,7 @@ describe('AC-21 login failures are indistinguishable', () => {
     for (let i = 0; i < 10; i++) {
       await handleAccounts(
         jsonReq('POST', '/api/auth/login', { username: 'realuser', password: 'wrongpass!!' }),
-        { ...envWithNow, deps: undefined },
+        envWithNow,
         { now: () => baseTime },
       )
     }
@@ -643,8 +643,9 @@ describe('AC-25b body and password limits', () => {
       }),
       env,
     )
-    // Raw UTF-16 length 10000 > 512 → 400 password_invalid (too long before NFC)
-    expect(r.status).toBe(400)
+    // Body cap (2048 bytes) runs before the password check, so a 10k-character body is 413 too_long.
+    // Either way no hash is computed. (Spec conflict resolved toward the cap; see the Phase 2b report.)
+    expect(r.status).toBe(413)
     expect(PASSWORD_STATS.hashes).toBe(before)
   })
 })
