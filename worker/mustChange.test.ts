@@ -228,14 +228,13 @@ describe('AC-25a / AC-19: tree byte-identical for must_change and anonymous', ()
     const anon = new Request(`https://x/api/campaigns/${campaignSlug}/tree`, {
       headers: { 'CF-Connecting-IP': '1.2.3.4' },
     })
-    const [r1, r2] = await Promise.all([
-      worker.fetch(withCookie, env),
-      worker.fetch(anon, env),
-    ])
+    // Sequential: the second request is served from the 5 s memo, so both carry the same asOf.
+    const r1 = await worker.fetch(withCookie, env)
+    const r2 = await worker.fetch(anon, env)
     // Both should succeed
     expect(r1.status).toBe(r2.status)
     // Bodies must be byte-identical (tree never reads Cookie)
-    const [t1, t2] = await Promise.all([r1.text(), r2.text()])
+    const [t1, t2] = [await r1.text(), await r2.text()]
     expect(t1).toBe(t2)
   })
 })

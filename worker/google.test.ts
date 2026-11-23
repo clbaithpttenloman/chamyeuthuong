@@ -474,13 +474,8 @@ describe('POST /api/auth/google — route behavior (Phase 2b)', () => {
     const { db, sqlite } = gRouteTestDb()
     setupGoogleRouteP2bTables(sqlite)
     // Seed a Phase-1 app_user (google_sub present) and link it via user_identity as well.
+    // gRouteSeedUser links the Google identity (user_identity provider 'google') for TEST_SUB.
     const userId = await gRouteSeedUser(db, { sub: TEST_SUB, email: TEST_EMAIL })
-    const now = new Date().toISOString()
-    sqlite
-      .prepare(
-        'INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(userId, 'google', TEST_SUB, '', now, now)
 
     const env = gMeEnv({ db })
     const { nonceValue } = await gMakeNonce()

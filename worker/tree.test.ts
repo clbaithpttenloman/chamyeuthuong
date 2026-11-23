@@ -615,8 +615,8 @@ describe('GET /api/campaigns/<slug>/tree — TREE_READ_LIMIT charged on cache mi
     createGiftTables(sqlite)
     const now = new Date().toISOString()
     const userId = (sqlite.prepare(
-      'INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?,?,?,?,0,?,?) RETURNING id',
-    ).get('sub-lim', 'lim@gmail.com', 'Lim', '11A', now, now) as { id: number }).id
+      'INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?,?,0,?,?) RETURNING id',
+    ).get('Lim', '11A', now, now) as { id: number }).id
     const campaignId = seedGiftTreeCampaign(sqlite)
     seedGift(sqlite, { campaignId, userId })
 
@@ -670,8 +670,8 @@ describe('GET /api/campaigns/<slug>/tree — byte-identical body regardless of s
     createGiftTables(sqlite)
     const now = new Date().toISOString()
     const userId = (sqlite.prepare(
-      'INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?,?,?,?,0,?,?) RETURNING id',
-    ).get('anon-cmp-sub', 'anon@gmail.com', 'Anon', '11A', now, now) as { id: number }).id
+      'INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?,?,0,?,?) RETURNING id',
+    ).get('Anon', '11A', now, now) as { id: number }).id
     const campaignId = seedGiftTreeCampaign(sqlite)
     seedGift(sqlite, { campaignId, userId, heartCount: 7 })
 
@@ -909,13 +909,12 @@ describe('GET /api/gifts/<publicId>', () => {
     createNewTables(sqlite)
     createGiftTables(sqlite)
     const userId = await seedUser(db)
-    const adminId = await seedUser(db, { sub: 'admin-sub-999', email: 'admin@gmail.com' })
+    // seedAdminEmail makes a user with admin_role and a known session token (legacyToken).
     await seedAdminEmail(db, 'admin@gmail.com')
     const campaignId = seedGiftTreeCampaign(sqlite)
     const { publicId } = seedGift(sqlite, { campaignId, userId, status: 'hidden_admin' })
 
-    const rawToken = makeRawToken()
-    await seedSession(db, adminId, rawToken)
+    const rawToken = 't-admin@gmail.com'
 
     const r = await handleTree(
       giftByIdReq(publicId, `${SESSION_COOKIE_NAME}=${rawToken}`),

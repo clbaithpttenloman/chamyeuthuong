@@ -12,6 +12,7 @@
  * NOT for production use.
  */
 
+import { hashPassword } from './password.ts'
 import { generateKeyPair, SignJWT, exportJWK, createLocalJWKSet } from 'jose'
 import type { JWTVerifyGetKey } from 'jose'
 import { testDb, type D1 } from './testDb.ts'
@@ -333,8 +334,24 @@ export async function seedUser(
     )
     .bind(userId, sub, email, now, now)
     .run()
+  // Deleting an account needs the password (ADR-9), so every seeded user also has one.
+  // Username is random so several seeded users can share a database.
+  const username = `t${Math.random().toString(36).slice(2, 12)}`
+  await db
+    .prepare("INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', ?, '', ?, ?)")
+    .bind(userId, username, now, now)
+    .run()
+  const cred = await hashPassword(TEST_PASSWORD, TEST_PEPPER_FOR_SEED, { iterations: 10_000 })
+  await db
+    .prepare('INSERT INTO password_credential (user_id, hash, salt, iterations, must_change, failed_count, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?)')
+    .bind(userId, cred.hash, cred.salt, cred.iterations, now)
+    .run()
   return userId
 }
+
+/** Password of every user seeded by seedUser (sent by the DELETE helpers). */
+export const TEST_PASSWORD = 'Password-123!'
+export const TEST_PEPPER_FOR_SEED = 'test-password-pepper-32bytesx!'
 
 /**
  * Seed a `session` row. `rawToken` is the base64url token that goes in the cookie;
@@ -385,6 +402,7 @@ export type MeTestEnv = {
 
 export function meEnv(opts: { db?: D1; nonceKey?: string; legacyLogin?: string; subHmacKey?: string } = {}): MeTestEnv {
   return {
+    PASSWORD_PEPPER: 'test-password-pepper-32bytesx!',
     DB: opts.db ?? testDb().db,
     GOOGLE_CLIENT_ID: TEST_CLIENT_ID,
     NONCE_KEY: opts.nonceKey ?? TEST_NONCE_KEY,

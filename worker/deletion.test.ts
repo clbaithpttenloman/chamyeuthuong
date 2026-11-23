@@ -1,3 +1,4 @@
+import { hmacSha256Hex } from './session.ts'
 // @vitest-environment node
 /**
  * RED-PHASE tests for DELETE /api/me (account deletion, Phase 2 extensions).
@@ -324,7 +325,7 @@ describe('DELETE /api/me — banned user writes banned_identity tombstone (ADR-8
     expect(tombstones).toBe(0)
   })
 
-  it('tombstone sub_hmac is HMAC(SUB_HMAC_KEY, google_sub) — repeatable', async () => {
+  it('tombstone sub_hmac is HMAC(SUB_HMAC_KEY, "google:" + sub) — repeatable', async () => {
     // The same sub + same key always produces the same hmac → idempotent tombstone
     sqlite.prepare('UPDATE app_user SET banned = 1 WHERE id = ?').run(userId)
     await handleMe(
@@ -344,8 +345,9 @@ describe('DELETE /api/me — banned user writes banned_identity tombstone (ADR-8
       deletionEnv(db, { subHmacKey: TEST_SUB_HMAC_KEY }),
     )
 
-    // INSERT OR IGNORE: same sub_hmac so only one tombstone row
-    const count = (sqlite.prepare('SELECT COUNT(*) AS c FROM banned_identity').get() as { c: number }).c
+    // INSERT OR IGNORE: the Google identity's tombstone is written once, however often it is deleted
+    const googleHmac = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `google:${TEST_SUB}`)
+    const count = (sqlite.prepare('SELECT COUNT(*) AS c FROM banned_identity WHERE sub_hmac = ?').get(googleHmac) as { c: number }).c
     expect(count).toBe(1)
     // The hash is the same
     const t2 = sqlite.prepare('SELECT sub_hmac FROM banned_identity').get() as { sub_hmac: string }
@@ -408,7 +410,7 @@ describe('DELETE /api/me — sign-in with tombstoned sub recreates user banned',
 
     // The new account should be banned
     const newUser = sqlite
-      .prepare('SELECT banned FROM app_user WHERE google_sub = ?')
+      .prepare("SELECT u.banned FROM app_user u JOIN user_identity ui ON ui.user_id = u.id WHERE ui.provider = 'google' AND ui.subject = ?")
       .get(TEST_SUB) as { banned: number } | undefined
     expect(newUser).toBeDefined()
     expect(newUser?.banned).toBe(1)
@@ -433,7 +435,7 @@ describe('DELETE /api/me — sign-in with tombstoned sub recreates user banned',
 
     // New account should NOT be banned
     const newUser = sqlite
-      .prepare('SELECT banned FROM app_user WHERE google_sub = ?')
+      .prepare("SELECT u.banned FROM app_user u JOIN user_identity ui ON ui.user_id = u.id WHERE ui.provider = 'google' AND ui.subject = ?")
       .get(TEST_SUB) as { banned: number } | undefined
     expect(newUser?.banned).toBe(0)
   })

@@ -166,7 +166,7 @@ async function resolveAdmin(db: D1, userId: number): Promise<boolean> {
 
 /** Build the public user object returned in GET /api/me and POST /api/auth/google. */
 function publicUser(row: UserRow, isAdmin: boolean) {
-  return { nickname: row.nickname, className: row.class_name, isAdmin }
+  return { id: row.id, nickname: row.nickname, className: row.class_name, isAdmin }
 }
 
 /** Validate and normalise a user text field (nickname/class): NFC, trim, control/bidi/surrogate check.
@@ -221,7 +221,7 @@ export async function handleAuth(
     // This must happen BEFORE any JWT verification attempt.
     if (!env.GOOGLE_CLIENT_ID) {
       console.error('auth: misconfigured')
-      return failResp('unauthorized', 401, [nonceClear])
+      return failResp('misconfigured', 503, [nonceClear])
     }
 
     // Security item 4: fail closed when NONCE_KEY is not configured.

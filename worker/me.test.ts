@@ -22,6 +22,7 @@
  *
  * Tests fail at import because worker/me.ts does not exist yet.
  */
+import { TEST_PASSWORD } from './testGoogle.ts'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 // --- Module under test does not exist yet; import triggers red phase ---
 import { handleAuth, handleMe } from './me.ts'
@@ -173,10 +174,10 @@ describe('POST /api/auth/google — successful sign-in', () => {
 
     // User created in DB
     const user = sqlite
-      .prepare('SELECT google_sub, email FROM app_user WHERE google_sub = ?')
-      .get(TEST_SUB) as { google_sub: string; email: string } | undefined
+      .prepare("SELECT ui.subject, ui.email FROM user_identity ui WHERE ui.provider = 'google' AND ui.subject = ?")
+      .get(TEST_SUB) as { subject: string; email: string } | undefined
     expect(user).toBeDefined()
-    expect(user?.google_sub).toBe(TEST_SUB)
+    expect(user?.subject).toBe(TEST_SUB)
   })
 
   it('response body has { user: { nickname, className, isAdmin } }', async () => {
@@ -259,7 +260,7 @@ describe('POST /api/auth/google — successful sign-in', () => {
     expect(nonceClear).toBeDefined()
   })
 
-  it('signed-in user admin flag is true when email is in admin table', async () => {
+  it('signed-in user admin flag is false: Google sign-in never grants admin (admin_role only)', async () => {
     const { db, sqlite } = testDb()
     createNewTables(sqlite)
     const env = meEnv({ db })
@@ -270,7 +271,7 @@ describe('POST /api/auth/google — successful sign-in', () => {
 
     const r = await handleAuth(req, env, { keys: await localJwks() })
     const body = await r.json() as { user?: { isAdmin?: boolean } }
-    expect(body.user?.isAdmin).toBe(true)
+    expect(body.user?.isAdmin).toBe(false)
   })
 })
 
@@ -462,7 +463,7 @@ describe('GET /api/me', () => {
     createNewTables(sqlite)
     const env = meEnv({ db })
     await seedAdminEmail(db, TEST_EMAIL)
-    const userId = await seedUser(db)
+    const userId = (await db.prepare("SELECT user_id AS id FROM admin_role LIMIT 1").first<{ id: number }>())!.id
     const rawToken = makeRawToken()
     await seedSession(db, userId, rawToken)
 
@@ -666,63 +667,13 @@ describe('logging discipline — email and sub never in logs', () => {
 
 // ---- Accept #5: resolveAdmin race (conditional pin) ----
 
-describe('Fix Group 5a — Accept #5: resolveAdmin pins only WHERE google_sub IS NULL', () => {
-  it('a second sub for the same admin email is refused after the sub is pinned', async () => {
-    const { db, sqlite } = testDb()
-    createNewTables(sqlite)
-    const env = meEnv({ db })
-    await seedAdminEmail(db, TEST_EMAIL)
+// Phase 2b: admin pinning (admin.google_sub) was removed; its tests were deleted.
 
-    // First sign-in: pins TEST_SUB
-    const { nonceValue: n1 } = await makeNonce(TEST_NONCE_KEY)
-    const cred1 = await validToken({ nonce: n1, sub: TEST_SUB })
-    await handleAuth(makeSignInReq(cred1, n1), env, { keys: await localJwks() })
-
-    // Second sign-in with a DIFFERENT sub but same email
-    const { nonceValue: n2 } = await makeNonce(TEST_NONCE_KEY)
-    const differentSub = 'different-sub-99999'
-    const cred2 = await validToken({ nonce: n2, sub: differentSub, email: TEST_EMAIL, email_verified: true })
-    // Need to seed a second user with the different sub
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
-      .bind(differentSub, TEST_EMAIL, '', '', now, now).run()
-
-    const r = await handleAuth(makeSignInReq(cred2, n2), env, { keys: await localJwks() })
-    // Different sub must be refused with 200 isAdmin: false (not elevated)
-    // OR return 200 with isAdmin: false (the user gets a session but NOT admin access)
-    // After fix: resolveAdmin refuses a different sub
-    const body = await r.json() as { user?: { isAdmin?: boolean } }
-    expect(body.user?.isAdmin).toBe(false)
-  })
-
-  it('resolveAdmin: UPDATE only WHERE google_sub IS NULL (re-reads on 0 changes, refuses different sub)', async () => {
-    const { db, sqlite } = testDb()
-    createNewTables(sqlite)
-    // Seed admin with a pinned sub
-    await seedAdminEmail(db, TEST_EMAIL)
-    // Manually pin a sub
-    const pinnedSub = 'pinned-sub-12345'
-    await db.prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ?')
-      .bind(pinnedSub, TEST_EMAIL).run()
-
-    // Try to sign in with a different sub — resolveAdmin should refuse
-    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
-    const differentSub = 'different-sub-99999'
-    const cred = await validToken({ nonce: nonceValue, sub: differentSub, email: TEST_EMAIL, email_verified: true })
-    const now = new Date().toISOString()
-    await db.prepare('INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
-      .bind(differentSub, TEST_EMAIL, '', '', now, now).run()
-
-    const r = await handleAuth(makeSignInReq(cred, nonceValue), meEnv({ db }), { keys: await localJwks() })
-    const body = await r.json() as { user?: { isAdmin?: boolean } }
-    expect(body.user?.isAdmin).toBe(false)
-  })
-})
 
 // ---- Accept #6: missing or empty GOOGLE_CLIENT_ID → refuse ----
 
 describe('Fix Group 5a — Accept #6: missing/empty GOOGLE_CLIENT_ID → sign-in refused', () => {
-  it('empty GOOGLE_CLIENT_ID → 401 unauthorized (fail closed)', async () => {
+  it('empty GOOGLE_CLIENT_ID → 503 misconfigured (fail closed)', async () => {
     const { db, sqlite } = testDb()
     createNewTables(sqlite)
     const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
@@ -738,10 +689,10 @@ describe('Fix Group 5a — Accept #6: missing/empty GOOGLE_CLIENT_ID → sign-in
     }
 
     const r = await handleAuth(makeSignInReq(credential, nonceValue), envNoId, { keys: await localJwks() })
-    expect(r.status).toBe(401)
+    expect(r.status).toBe(503)
   })
 
-  it('undefined GOOGLE_CLIENT_ID → 401 unauthorized (fail closed)', async () => {
+  it('undefined GOOGLE_CLIENT_ID → 503 misconfigured (fail closed)', async () => {
     const { db, sqlite } = testDb()
     createNewTables(sqlite)
     const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
@@ -756,7 +707,7 @@ describe('Fix Group 5a — Accept #6: missing/empty GOOGLE_CLIENT_ID → sign-in
     }
 
     const r = await handleAuth(makeSignInReq(credential, nonceValue), envNoId, { keys: await localJwks() })
-    expect(r.status).toBe(401)
+    expect(r.status).toBe(503)
   })
 
   it('missing GOOGLE_CLIENT_ID logs auth: misconfigured (not email/sub)', async () => {
@@ -969,39 +920,8 @@ describe('Fix Group 5a — Accept #8: nickname/class validation (shared/text.ts)
 // Review cycle 2 Warning: the re-read branch when the conditional pin changes 0 rows.
 // The wrapper writes another sub into admin.google_sub just before the pin UPDATE runs,
 // which is what a concurrent sign-in that wins the race looks like.
-describe('resolveAdmin — pin race (UPDATE … WHERE google_sub IS NULL changes 0 rows)', () => {
-  async function signInWithRace(winnerSub: string) {
-    const { db, sqlite } = testDb()
-    createNewTables(sqlite)
-    await seedAdminEmail(db, TEST_EMAIL)
-    const raced = {
-      prepare(sql: string) {
-        if (sql.startsWith('UPDATE admin SET google_sub')) {
-          sqlite.prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ?').run(winnerSub, TEST_EMAIL.toLowerCase())
-        }
-        return db.prepare(sql)
-      },
-      batch: (s: Parameters<typeof db.batch>[0]) => db.batch(s),
-    }
-    const { nonceValue } = await makeNonce(TEST_NONCE_KEY)
-    const cred = await validToken({ nonce: nonceValue, sub: TEST_SUB })
-    const r = await handleAuth(makeSignInReq(cred, nonceValue), meEnv({ db: raced as typeof db }), { keys: await localJwks() })
-    const pinned = sqlite.prepare('SELECT google_sub FROM admin WHERE lower(email) = ?').get(TEST_EMAIL.toLowerCase())
-    return { body: (await r.json()) as { user?: { isAdmin?: boolean } }, pinned }
-  }
+// Phase 2b: admin pinning (admin.google_sub) was removed; its tests were deleted.
 
-  it('another sub won the pin → this sign-in is not admin, and the winner stays pinned', async () => {
-    const { body, pinned } = await signInWithRace('racing-winner-sub')
-    expect(body.user?.isAdmin).toBe(false)
-    expect(pinned).toEqual({ google_sub: 'racing-winner-sub' })
-  })
-
-  it('the same sub won the pin concurrently (two tabs) → still admin', async () => {
-    const { body, pinned } = await signInWithRace(TEST_SUB)
-    expect(body.user?.isAdmin).toBe(true)
-    expect(pinned).toEqual({ google_sub: TEST_SUB })
-  })
-})
 
 // Review cycle 2 Warning: USER_READ_LIMIT / USER_WRITE_LIMIT are enforced (keyed by user id).
 describe('USER_READ_LIMIT / USER_WRITE_LIMIT', () => {
@@ -1140,6 +1060,7 @@ describe('Fix Group 6a — Item 3: DELETE /api/me', () => {
 
     const req = new Request('https://x/api/me', {
       method: 'DELETE',
+      body: JSON.stringify({ password: TEST_PASSWORD }),
       headers: {
         'CF-Connecting-IP': '1.2.3.4',
         'X-Requested-With': 'fetch',
@@ -1163,6 +1084,7 @@ describe('Fix Group 6a — Item 3: DELETE /api/me', () => {
 
     await handleMe(new Request('https://x/api/me', {
       method: 'DELETE',
+      body: JSON.stringify({ password: TEST_PASSWORD }),
       headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
     }), env)
 
@@ -1182,6 +1104,7 @@ describe('Fix Group 6a — Item 3: DELETE /api/me', () => {
 
     await handleMe(new Request('https://x/api/me', {
       method: 'DELETE',
+      body: JSON.stringify({ password: TEST_PASSWORD }),
       headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch', Cookie: `${SESSION_COOKIE_NAME}=${token1}` },
     }), env)
 
@@ -1195,6 +1118,7 @@ describe('Fix Group 6a — Item 3: DELETE /api/me', () => {
     const env = meEnv({ db })
     const r = await handleMe(new Request('https://x/api/me', {
       method: 'DELETE',
+      body: JSON.stringify({ password: TEST_PASSWORD }),
       headers: { 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
     }), env)
     expect(r.status).toBe(401)
@@ -1209,6 +1133,7 @@ describe('Fix Group 6a — Item 3: DELETE /api/me', () => {
     await seedSession(db, userId, rawToken)
     const r = await handleMe(new Request('https://x/api/me', {
       method: 'DELETE',
+      body: JSON.stringify({ password: TEST_PASSWORD }),
       headers: { 'CF-Connecting-IP': '1.2.3.4', Cookie: `${SESSION_COOKIE_NAME}=${rawToken}` },
     }), env)
     expect(r.status).toBe(403)
@@ -1273,7 +1198,9 @@ describe('DELETE /api/me — scope and guards', () => {
     return { db, me, other, cookie: `${SESSION_COOKIE_NAME}=${myToken}` }
   }
   const del = (cookie: string, extra: Record<string, string> = {}) => new Request('https://x/api/me', {
-    method: 'DELETE', headers: { Cookie: cookie, 'X-Requested-With': 'fetch', 'CF-Connecting-IP': '5.6.7.8', ...extra },
+    method: 'DELETE',
+    headers: { Cookie: cookie, 'X-Requested-With': 'fetch', 'CF-Connecting-IP': '5.6.7.8', 'Content-Type': 'application/json', ...extra },
+    body: JSON.stringify({ password: TEST_PASSWORD }),
   })
   const count = async (db: Awaited<ReturnType<typeof twoUsers>>['db'], sql: string, id?: number) =>
     ((await (id === undefined ? db.prepare(sql) : db.prepare(sql).bind(id)).first()) as { n: number }).n
@@ -1285,7 +1212,7 @@ describe('DELETE /api/me — scope and guards', () => {
     expect(await count(db, 'SELECT COUNT(*) AS n FROM session WHERE user_id = ?', me)).toBe(0)
     expect(await count(db, 'SELECT COUNT(*) AS n FROM app_user WHERE id = ?', other)).toBe(1)
     expect(await count(db, 'SELECT COUNT(*) AS n FROM session WHERE user_id = ?', other)).toBe(1)
-    expect(await count(db, 'SELECT COUNT(*) AS n FROM admin')).toBe(1)
+    expect(await count(db, 'SELECT COUNT(*) AS n FROM admin_role')).toBe(1)
   })
 
   it('Sec-Fetch-Site: cross-site → 403 and nothing deleted', async () => {

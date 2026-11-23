@@ -22,7 +22,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 import type { D1 } from './testDb.ts'
-import { seedUser as _seedUser, seedSession as _seedSession, SESSION_COOKIE_NAME } from './testGoogle.ts'
+import { seedUser as _seedUser, seedSession as _seedSession, SESSION_COOKIE_NAME, TEST_PASSWORD } from './testGoogle.ts'
 import type { GiftsEnv } from './gifts.ts'
 
 export { SESSION_COOKIE_NAME }
@@ -132,6 +132,7 @@ export type DeletionEnv = {
   SUB_HMAC_KEY?: string
 }
 
+export const TEST_PASSWORD_PEPPER = 'test-password-pepper-32bytesx!'
 export const TEST_SUB_HMAC_KEY = 'test-sub-hmac-key-32bytes-padded'
 
 export function deletionEnv(
@@ -142,6 +143,7 @@ export function deletionEnv(
   } = {},
 ): DeletionEnv {
   return {
+    PASSWORD_PEPPER: TEST_PASSWORD_PEPPER,
     DB: db,
     GOOGLE_CLIENT_ID: 'test-client-123.apps.googleusercontent.com',
     NONCE_KEY: 'test-nonce-key-32bytes-paddingXX',
@@ -294,6 +296,11 @@ export function sessionReq(
   if (method !== 'GET') {
     headers['X-Requested-With'] = 'fetch'
     if (body !== undefined) headers['Content-Type'] = 'application/json'
+  }
+  // Account deletion re-checks the password (ADR-9); seeded users all use TEST_PASSWORD.
+  if (method === 'DELETE' && path === '/api/me' && body === undefined) {
+    headers['Content-Type'] = 'application/json'
+    body = { password: TEST_PASSWORD }
   }
   return new Request(`https://x${path}`, {
     method,
