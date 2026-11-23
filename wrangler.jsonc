@@ -35,15 +35,13 @@
     { "binding": "DB", "database_name": "cham-yeu-thuong", "database_id": "9e58f935-fb6f-4c1f-be0b-21a9183ba483" }
   ],
   "vars": {
-    // First-admin bootstrap: only this address can claim the empty admin table. Inert once an admin exists.
-    "BOOTSTRAP_EMAIL": "clbaithpttenloman@gmail.com",
     // Google OAuth client ID (replace with the real value from Google Cloud Console).
     // Authorised JavaScript origins must include the production domain and https://localhost:5173 for local dev.
     // GOOGLE_CLIENT_ID must end with .apps.googleusercontent.com
     "GOOGLE_CLIENT_ID": "",
-    // Phase 1 transition: keep legacy X-Admin-Email login on 20/11 admin routes.
-    // Removing the typed-email login is a separate, later feature (not campaign-platform).
-    "ADMIN_LEGACY_LOGIN": "1"
+    // Registration caps (ADR-9). Per IP per Vietnam day, and in total per day.
+    "REGISTER_IP_DAILY": "300",
+    "REGISTER_GLOBAL_DAILY": "2000"
   },
   // Secrets required for deploy (set via `wrangler secret put <NAME>`):
   //   NONCE_KEY, SUB_HMAC_KEY (required Phase 2: account deletion + ban tombstones), IP_HMAC_KEY
@@ -67,6 +65,7 @@
     { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "2002", "simple": { "limit": 60,   "period": 60 } },
     { "name": "IMAGE_IP_LIMIT",   "namespace_id": "2003", "simple": { "limit": 300,  "period": 60 } },
     { "name": "AUTH_LIMIT",       "namespace_id": "2006", "simple": { "limit": 300,  "period": 60 } },
+    { "name": "REGISTER_LIMIT",   "namespace_id": "2016", "simple": { "limit": 20,   "period": 60 } },
     { "name": "AUTH_SUB_LIMIT",   "namespace_id": "2009", "simple": { "limit": 10,   "period": 60 } },
     { "name": "USER_READ_LIMIT",  "namespace_id": "2007", "simple": { "limit": 120,  "period": 60 } },
     { "name": "USER_WRITE_LIMIT", "namespace_id": "2008", "simple": { "limit": 10,   "period": 60 } },
@@ -95,10 +94,12 @@
       ],
       "vars": {
         // Replace with the staging OAuth client ID (add staging hostname as an authorised origin).
-        "GOOGLE_CLIENT_ID": ""
-        // ADMIN_LEGACY_LOGIN and BOOTSTRAP_EMAIL are intentionally absent from staging.
-        // Staging admins are seeded with: wrangler d1 execute cham-yeu-thuong-staging --command
-        //   "INSERT INTO admin (email, created_at, created_by) VALUES ('you@gmail.com', datetime('now'), 'seed')"
+        "GOOGLE_CLIENT_ID": "",
+        // Staging registration caps (same as production unless a test needs otherwise).
+        "REGISTER_IP_DAILY": "300",
+        "REGISTER_GLOBAL_DAILY": "2000",
+        // Staging admin: the first account registered on the empty staging database becomes admin
+        // (same rule as production; see docs/runbooks/staging.md).
       },
       "ratelimits": [
         { "name": "PUBLIC_IP_LIMIT",  "namespace_id": "3004", "simple": { "limit": 120,  "period": 60 } },
@@ -107,6 +108,7 @@
         { "name": "ADMIN_FAIL_LIMIT", "namespace_id": "3002", "simple": { "limit": 60,   "period": 60 } },
         { "name": "IMAGE_IP_LIMIT",   "namespace_id": "3003", "simple": { "limit": 300,  "period": 60 } },
         { "name": "AUTH_LIMIT",       "namespace_id": "3006", "simple": { "limit": 300,  "period": 60 } },
+        { "name": "REGISTER_LIMIT",   "namespace_id": "3016", "simple": { "limit": 20,   "period": 60 } },
         { "name": "AUTH_SUB_LIMIT",   "namespace_id": "3009", "simple": { "limit": 10,   "period": 60 } },
         { "name": "USER_READ_LIMIT",  "namespace_id": "3007", "simple": { "limit": 120,  "period": 60 } },
         { "name": "USER_WRITE_LIMIT", "namespace_id": "3008", "simple": { "limit": 10,   "period": 60 } },

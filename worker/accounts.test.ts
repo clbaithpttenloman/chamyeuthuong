@@ -1198,3 +1198,17 @@ describe('Rate limits', () => {
     expect(recordedKeys.some((k) => k === 'pw:keytest:10.20.30.40')).toBe(true)
   })
 })
+
+// ── Regression: admin routes accept ids of at most 9 digits (parseId) ─────────
+
+describe('generated user ids are admin-routable', () => {
+  it('register returns an id of at most 9 digits', async () => {
+    const r = await handleAccounts(
+      jsonReq('POST', '/api/auth/register', { username: 'idcheck1', password: 'correct-horse-battery', nickname: 'A', className: '11A' }),
+      env,
+    )
+    expect(r.status).toBe(201)
+    const body = await r.json() as { user: { id: number } }
+    expect(String(body.user.id)).toMatch(/^\d{1,9}$/)
+  })
+})

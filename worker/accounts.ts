@@ -263,7 +263,7 @@ export async function handleRegister(request: Request, env: AccountsEnv, deps: A
   const globalMax = parseCap(env.REGISTER_GLOBAL_DAILY, 2000)
 
   const cred = await hashPassword(password.value, env.PASSWORD_PEPPER)
-  const userId = 1_000_000_000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000_000)
+  const userId = 100_000_000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 900_000_000)
   const rawToken = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
   const tokenHash = await sha256Hex(rawToken)

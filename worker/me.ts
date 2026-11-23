@@ -132,7 +132,7 @@ async function upsertUser(db: D1, sub: string, email: string, hd: string | undef
     return row
   }
 
-  const id = 1_000_000_000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000_000)
+  const id = 100_000_000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 900_000_000)
   try {
     await db.batch([
       db.prepare(
