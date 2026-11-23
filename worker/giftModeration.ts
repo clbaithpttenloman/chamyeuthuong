@@ -288,6 +288,12 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       if (adminUserId !== undefined && adminUserId === targetUserId) {
         return json({ error: 'forbidden' }, 403)
       }
+      // An admin cannot be banned; revoke the admin role first (ADR-9, AC-25).
+      const targetIsAdmin = await env.DB
+        .prepare('SELECT 1 AS x FROM admin_role WHERE user_id = ?')
+        .bind(targetUserId)
+        .first()
+      if (targetIsAdmin) return json({ error: 'is_admin' }, 409)
 
       // One D1 batch for the entire ban lifecycle (ADR-8):
       //   1. Mark user banned.
@@ -314,6 +320,9 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
         ).bind(targetUserId, targetUserId),
         env.DB.prepare('DELETE FROM heart WHERE user_id = ?').bind(targetUserId),
         env.DB.prepare('DELETE FROM session WHERE user_id = ?').bind(targetUserId),
+        env.DB.prepare(
+          'INSERT INTO admin_audit (actor_user_id, action, target_user_id, at) VALUES (?, ?, ?, ?)',
+        ).bind(adminUserId ?? null, 'ban', targetUserId, new Date().toISOString()),
         // Report recount for gifts this user reported (item 4): their reports now excluded.
         env.DB.prepare(
           'UPDATE gift SET report_count = (' +
@@ -331,22 +340,19 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       //   - Removes their banned_identity tombstone (item 1: so they can sign in normally).
       //     Fails closed without SUB_HMAC_KEY.
 
-      // Need the user's google_sub to compute sub_hmac for tombstone removal.
+      // Tombstones are per identity (provider:subject), ADR-9. Fail closed without SUB_HMAC_KEY.
       if (!env.SUB_HMAC_KEY) {
-        // Can't safely clear the tombstone without the key — fail closed.
         console.error('giftModeration: SUB_HMAC_KEY missing; unban refused (tombstone cannot be cleared)')
         return json({ error: 'misconfigured' }, 500)
       }
-
-      const userRow = await env.DB
-        .prepare('SELECT google_sub FROM app_user WHERE id = ?')
+      const identities = await env.DB
+        .prepare('SELECT provider, subject FROM user_identity WHERE user_id = ?')
         .bind(targetUserId)
-        .first<{ google_sub: string | null }>()
-      if (!userRow || !userRow.google_sub) {
-        return json({ error: 'not_found' }, 404)
+        .all<{ provider: string; subject: string }>()
+      const tombstoneKeys: string[] = []
+      for (const id of identities.results) {
+        tombstoneKeys.push(await hmacSha256Hex(env.SUB_HMAC_KEY, `${id.provider}:${id.subject}`))
       }
-
-      const subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, userRow.google_sub)
 
       await env.DB.batch([
         env.DB.prepare('UPDATE app_user SET banned = 0 WHERE id = ?').bind(targetUserId),
@@ -363,8 +369,11 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
           '  AND (strftime(\'%s\', r.created_at) - strftime(\'%s\', u.created_at)) >= 86400' +
           ') WHERE id IN (SELECT DISTINCT gift_id FROM report WHERE user_id = ?)',
         ).bind(targetUserId),
-        // Remove tombstone (item 1): same batch so the unban is atomic with tombstone removal.
-        env.DB.prepare('DELETE FROM banned_identity WHERE sub_hmac = ?').bind(subHmac),
+        // Remove every tombstone of this user's identities (ADR-8), atomically with the unban.
+        ...tombstoneKeys.map((k) => env.DB.prepare('DELETE FROM banned_identity WHERE sub_hmac = ?').bind(k)),
+        env.DB.prepare(
+          'INSERT INTO admin_audit (actor_user_id, action, target_user_id, at) VALUES (?, ?, ?, ?)',
+        ).bind(adminUserId ?? null, 'unban', targetUserId, new Date().toISOString()),
       ])
     }
 

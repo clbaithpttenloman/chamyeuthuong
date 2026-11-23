@@ -85,8 +85,8 @@ function seedUser(
   const now = new Date().toISOString()
   const username = opts.username
   sqlite.prepare(
-    "INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, '', ?, '', 0, ?, ?)",
-  ).run(`_p_${username}`, opts.nickname ?? 'User', now, now)
+    "INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?, '', 0, ?, ?)",
+  ).run(opts.nickname ?? 'User', now, now)
   const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
   sqlite.prepare(
     "INSERT INTO user_identity (user_id, provider, subject, ip_hash, created_at, last_used_at) VALUES (?, 'password', ?, '', ?, ?)",
@@ -123,7 +123,7 @@ function req(method: string, path: string, body?: unknown): Request {
 }
 
 function makeEnv(db: D1) {
-  return { DB: db }
+  return { DB: db, PASSWORD_PEPPER: 'test-pepper-for-admin-reset' }
 }
 
 /** Phase 2b auth object passed as 3rd arg to handleAdmins. */
@@ -145,8 +145,8 @@ beforeEach(() => {
 
 describe('GET /api/admin/admins — Phase 2b: list admins by username', () => {
   it('empty admin_role → 200 []', async () => {
-    // RED: Phase 1 handleAdmins lists the admin table (email-based), not admin_role.
-    const actorId = seedUser(sqlite, { username: 'caller', admin: true })
+    // The caller is signed in but holds no admin_role row here, so the list starts empty.
+    const actorId = seedUser(sqlite, { username: 'caller', admin: false })
     const r = await handleAdmins(req('GET', '/api/admin/admins'), makeEnv(db), auth(actorId, 'caller') as never)
     expect(r.status).toBe(200)
     expect(await r.json()).toEqual([])
@@ -257,7 +257,7 @@ describe('DELETE /api/admin/admins/<userId> — Phase 2b: revoke admin role by u
     )
     expect(r.status).toBe(204)
     const row = sqlite.prepare('SELECT user_id FROM admin_role WHERE user_id = ?').get(targetUserId)
-    expect(row).toBeNull()
+    expect(row).toBeUndefined()
   })
 
   it('self-revoke → 409 cannot_revoke_self', async () => {

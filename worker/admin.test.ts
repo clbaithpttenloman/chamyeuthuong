@@ -12,6 +12,8 @@ import worker from './index.ts'
 import { newToken } from './token.ts'
 import { testDb, type D1 } from './testDb.ts'
 import { TEST_EMAIL } from './testAuth.ts'
+import { makeRawToken, legacyToken, seedAdminEmail, seedSession, seedUser, createNewTables, TEST_EMAIL as GOOGLE_ADMIN_EMAIL, TEST_SUB as GOOGLE_ADMIN_SUB } from './testGoogle.ts'
+import { testDb as testDb2 } from './testDb.ts'
 
 // New teacher model (plan § Decision: Admin API)
 type AdminTeacher = {
@@ -52,7 +54,7 @@ function makeEnv(db: D1, opts: { adminFailLimit?: boolean } = {}) {
 
 function adminReq(method: string, path: string, body?: unknown, ip = '1.2.3.4') {
   const headers: Record<string, string> = {
-    'X-Admin-Email': TEST_EMAIL,
+    Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`,
     'CF-Connecting-IP': ip,
   }
   if (method !== 'GET') headers['X-Requested-With'] = 'fetch'
@@ -72,9 +74,8 @@ beforeEach(async () => {
   tokenSeq = 0
   vi.mocked(newToken).mockReset()  // clear any leftover one-time values between tests
   vi.mocked(newToken).mockImplementation(() => `gn${String(tokenSeq++).padStart(14, '0')}`)
-  const now = new Date().toISOString()
-  await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
-    .bind(TEST_EMAIL, now, 'test-seed').run()
+  // Phase 2b: the admin is a user with admin_role and a session (see seedAdminEmail).
+  await seedAdminEmail(db, TEST_EMAIL)
 })
 
 // ---- Teacher list ----
@@ -203,7 +204,7 @@ describe('POST /api/admin/teachers', () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'POST',
       headers: {
-        'X-Admin-Email': TEST_EMAIL,
+        Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`,
         'CF-Connecting-IP': '1.2.3.4',
         'Content-Type': 'application/json',
         'X-Requested-With': 'fetch',
@@ -628,7 +629,7 @@ describe('POST /api/admin/teachers/bulk — structured items format', () => {
     const req2 = new Request('https://x/api/admin/teachers/bulk', {
       method: 'POST',
       headers: {
-        'X-Admin-Email': TEST_EMAIL,
+        Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`,
         'CF-Connecting-IP': '1.2.3.4',
         'Content-Type': 'application/json',
         'X-Requested-With': 'fetch',
@@ -724,7 +725,7 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('PUT /api/admin/about without X-Requested-With: fetch → 403', async () => {
     const req = new Request('https://x/api/admin/about', {
       method: 'PUT',
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
       body: '{}',
     })
     expect((await handleAdmin(req, makeEnv(db))).status).toBe(403)
@@ -734,7 +735,7 @@ describe('CSRF guard (via handleAdmin)', () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'POST',
       headers: {
-        'X-Admin-Email': TEST_EMAIL,
+        Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`,
         'CF-Connecting-IP': '1.2.3.4',
         'Content-Type': 'application/json',
       },
@@ -758,7 +759,7 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('OPTIONS with valid X-Admin-Email but no X-Requested-With → 403 (no CORS headers emitted)', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(403)
@@ -770,7 +771,7 @@ describe('CSRF guard (via handleAdmin)', () => {
   it('OPTIONS with X-Admin-Email and X-Requested-With: fetch → 405 (past CSRF, rejected by method guard)', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'OPTIONS',
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(405)
@@ -784,7 +785,7 @@ describe('method guard', () => {
   it('PATCH /api/admin/teachers → 405', async () => {
     const req = new Request('https://x/api/admin/teachers', {
       method: 'PATCH',
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(405)
@@ -802,7 +803,7 @@ describe('security headers', () => {
     ['405 method', async () => {
       const req = new Request('https://x/api/admin/teachers', {
         method: 'PATCH',
-        headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+        headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
       })
       return handleAdmin(req, makeEnv(db))
     }],
@@ -854,7 +855,7 @@ describe('worker routing', () => {
       ADMIN_FAIL_LIMIT: { limit: async () => { throw new Error('binding down') } },
     }
     const req = new Request('https://x/api/admin/teachers', {
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4' },
     })
     const r = await worker.fetch(req, broken)
     expect(r.status).toBe(503)
@@ -917,7 +918,7 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
     state.fail = true
     const env = { ...makeEnv(db), ALLOW_FIRST_CLAIM: '1' as string | undefined }
     const req = new Request('https://x/api/admin/teachers', {
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4' },
     })
     const r = await safeHandleAdmin(req, env)
     expect(r.status).toBe(503)
@@ -932,7 +933,7 @@ describe('handler-level DB failure → 503 (handleAdmin + safety wrapper mirrors
     state.fail = true
     const env = { ...makeEnv(db), ALLOW_FIRST_CLAIM: '1' as string | undefined }
     const req = new Request('https://x/api/admin/teachers', {
-      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
+      headers: { Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`, 'CF-Connecting-IP': '1.2.3.4', 'X-Requested-With': 'fetch' },
     })
     const r = await safeHandleAdmin(req, env)
     expect(r.status).toBe(503)
@@ -962,38 +963,34 @@ describe('admin admins routing — authenticated (via handleAdmin)', () => {
     const googleUserId = await seedUser(freshDb, { email: GOOGLE_ADMIN_EMAIL, sub: GOOGLE_ADMIN_SUB })
     const googleToken = makeRawToken()
     await seedSession(freshDb, googleUserId, googleToken)
-    const req = sessionReq(googleToken, 'POST', '/api/admin/admins', { email: 'x@test.com' })
+    const req = new Request('https://x/api/admin/admins', {
+      method: 'POST',
+      headers: { Cookie: `__Host-cyt_s=${googleToken}`, 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'x' }),
+    })
     req.headers.delete('X-Requested-With')
-    const r = await handleAdmin(req, makeEnvWithFlag(freshDb, true))
+    const r = await handleAdmin(req, makeEnv(freshDb))
     expect(r.status).toBe(403)
   })
 
-  it('POST /api/admin/admins with only the typed-email header → 401 (Google-only route)', async () => {
+  it('POST /api/admin/admins with only the typed-email header (no session) → 401', async () => {
     const req = new Request('https://x/api/admin/admins', {
       method: 'POST',
       headers: { 'X-Admin-Email': TEST_EMAIL, 'X-Requested-With': 'fetch', 'CF-Connecting-IP': '1.2.3.4', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'x@test.com' }),
+      body: JSON.stringify({ username: 'someone' }),
     })
     const r = await handleAdmin(req, makeEnv(db))
     expect(r.status).toBe(401)
   })
 
-  it('POST /api/admin/admins (authenticated via Google session) → 200 with created_by = admin email', async () => {
-    // POST /api/admin/admins requires Google session in Phase 1 — update auth setup.
-    const { db: freshDb, sqlite: freshSqlite } = testDb2()
-    createNewTables(freshSqlite)
-    await seedAdminEmail(freshDb, GOOGLE_ADMIN_EMAIL)
-    const googleUserId = await seedUser(freshDb, { email: GOOGLE_ADMIN_EMAIL, sub: GOOGLE_ADMIN_SUB })
-    const googleToken = makeRawToken()
-    await seedSession(freshDb, googleUserId, googleToken)
-
-    const env = makeEnvWithFlag(freshDb, true)
-    const req = sessionReq(googleToken, 'POST', '/api/admin/admins', { email: 'second@example.com' })
-    const r = await handleAdmin(req, env)
-    expect(r.status).toBe(200)
-    const body = await r.json() as { email: string; created_by: string }
-    expect(body.email).toBe('second@example.com')
-    expect(body.created_by).toBe(GOOGLE_ADMIN_EMAIL)
+  it('POST /api/admin/admins {username} with a session → 201; created_by is the acting admin', async () => {
+    const { seedUser: seedAccount } = await import('./testAccounts.ts')
+    const { userId: targetId } = await seedAccount(db, { username: 'newadmin', password: 'correct-horse-battery' })
+    const req = adminReq('POST', '/api/admin/admins', { username: 'newadmin' })
+    const r = await handleAdmin(req, makeEnv(db))
+    expect(r.status).toBe(201)
+    const row = await db.prepare('SELECT granted_by FROM admin_role WHERE user_id = ?').bind(targetId).first<{ granted_by: string }>()
+    expect(row?.granted_by).toMatch(/^(user:|user#)/)
   })
 
   it('/api/admin/admins/1/x → 404 not_found (unknown sub-path)', async () => {
@@ -1106,178 +1103,30 @@ describe('teacher role (chức vụ)', () => {
 //     POST/DELETE /api/admin/admins, /api/admin/campaigns*
 //   Google session: works for all admin routes
 
-import { vi as vi2 } from 'vitest'
-import {
-  createNewTables,
-  seedAdminEmail,
-  seedUser,
-  seedSession,
-  makeRawToken,
-  SESSION_COOKIE_NAME,
-  TEST_EMAIL as GOOGLE_ADMIN_EMAIL,
-  TEST_SUB as GOOGLE_ADMIN_SUB,
-} from './testGoogle.ts'
-import { testDb as testDb2 } from './testDb.ts'
+// ── Phase 2b: admin = session with admin_role (ADR-9). The typed email header is gone. ──────────
 
-/** Build an env with ADMIN_LEGACY_LOGIN toggled. */
-function makeEnvWithFlag(db: ReturnType<typeof testDb2>['db'], legacyOn: boolean) {
-  return {
-    DB: db,
-    ASSETS: { fetch: async () => new Response('asset') },
-    PUBLIC_IP_LIMIT: { limit: async () => ({ success: true }) },
-    SUBMIT_IP_LIMIT: { limit: async () => ({ success: true }) },
-    CARD_IP_LIMIT: { limit: async () => ({ success: true }) },
-    ADMIN_FAIL_LIMIT: { limit: async (_: { key: string }) => ({ success: true }) },
-    IMAGE_IP_LIMIT: { limit: async () => ({ success: true }) },
-    BOOTSTRAP_EMAIL: undefined as string | undefined,
-    ALLOW_FIRST_CLAIM: undefined as string | undefined,
-    ADMIN_LEGACY_LOGIN: legacyOn ? '1' : undefined,
-  }
-}
-
-/**
- * Build a request with X-Admin-Email (legacy) header.
- * Uses TEST_EMAIL ('admin@example.com') which is seeded by the outer beforeEach,
- * so the email IS in the admin table and requireAdmin reaches the route policy check.
- */
-function legacyReq(method: string, path: string, body?: unknown): Request {
-  const headers: Record<string, string> = {
-    // Use TEST_EMAIL (from testAuth.ts) = 'admin@example.com', which is seeded by the outer beforeEach.
-    'X-Admin-Email': TEST_EMAIL,
-    'CF-Connecting-IP': '1.2.3.4',
-  }
-  if (method !== 'GET') headers['X-Requested-With'] = 'fetch'
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
-  return new Request(`https://x${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
-}
-
-/** Build a request with a session cookie. */
-function sessionReq(sessionToken: string, method: string, path: string, body?: unknown): Request {
-  const headers: Record<string, string> = {
-    'CF-Connecting-IP': '1.2.3.4',
-    Cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
-  }
-  if (method !== 'GET') {
-    headers['X-Requested-With'] = 'fetch'
-    headers['Content-Type'] = 'application/json'
-  }
-  return new Request(`https://x${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
-}
-
-// ── Google session admin works on all existing routes ─────────────────────────
-
-describe('admin route scoping — Google session admin: all routes accessible', () => {
-  let sessionToken: string
-
-  beforeEach(async () => {
-    const { db: freshDb, sqlite } = testDb2()
-    createNewTables(sqlite)
-    db = freshDb  // reuse the outer db variable
-
-    await seedAdminEmail(freshDb, GOOGLE_ADMIN_EMAIL)
-    const userId = await seedUser(freshDb, { email: GOOGLE_ADMIN_EMAIL, sub: GOOGLE_ADMIN_SUB })
-    sessionToken = makeRawToken()
-    await seedSession(freshDb, userId, sessionToken)
-
-    // Also seed an admin row (required by legacy tests below)
-    // already done by seedAdminEmail
+describe('Phase 2b — admin authority', () => {
+  it('typed X-Admin-Email without a session → 401 on every admin route', async () => {
+    const req = new Request('https://x/api/admin/teachers', {
+      headers: { 'X-Admin-Email': TEST_EMAIL, 'CF-Connecting-IP': '1.2.3.4' },
+    })
+    const r = await worker.fetch(req, { DB: db, ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) } } as never)
+    expect(r.status).toBe(401)
   })
 
-  it('Google session: GET /api/admin/teachers → 200', async () => {
-    const r = await handleAdmin(sessionReq(sessionToken, 'GET', '/api/admin/teachers'), makeEnvWithFlag(db, true))
+  it('admin session → GET /api/admin/teachers → 200', async () => {
+    const r = await handleAdmin(adminReq('GET', '/api/admin/teachers'), { DB: db, ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) } } as never)
     expect(r.status).toBe(200)
   })
 
-  it('Google session: GET /api/admin/admins → 200', async () => {
-    const r = await handleAdmin(sessionReq(sessionToken, 'GET', '/api/admin/admins'), makeEnvWithFlag(db, true))
-    expect(r.status).toBe(200)
-  })
-
-  it('Google session: POST /api/admin/admins → not 401 (Google session allowed)', async () => {
-    const r = await handleAdmin(
-      sessionReq(sessionToken, 'POST', '/api/admin/admins', { email: 'new@gmail.com' }),
-      makeEnvWithFlag(db, true),
-    )
-    // Should not be 401 — could be 200 or 409 (conflict), but NOT 401
-    expect(r.status).not.toBe(401)
-  })
-})
-
-// ── Legacy flag ON: 20/11 routes → 200 + log line ────────────────────────────
-
-describe('admin route scoping — ADMIN_LEGACY_LOGIN=1: 20/11 routes work + log line', () => {
-  it('GET /api/admin/teachers with legacy email + flag ON → 200 and logs "admin: legacy login used"', async () => {
-    const errorCalls: unknown[][] = []
-    vi2.spyOn(console, 'error').mockImplementation((...a) => { errorCalls.push(a) })
-
-    const r = await handleAdmin(legacyReq('GET', '/api/admin/teachers'), makeEnvWithFlag(db, true))
-    expect(r.status).toBe(200)
-
-    const legacyLogs = errorCalls.filter((c) => c[0] === 'admin: legacy login used')
-    expect(legacyLogs.length).toBeGreaterThan(0)
-
-    vi2.restoreAllMocks()
-  })
-
-  it('GET /api/admin/admins with legacy email + flag ON → 200 (read-only admins allowed)', async () => {
-    const r = await handleAdmin(legacyReq('GET', '/api/admin/admins'), makeEnvWithFlag(db, true))
-    expect(r.status).toBe(200)
-  })
-})
-
-// ── Legacy flag ON: sensitive routes → 401 ───────────────────────────────────
-
-describe('admin route scoping — ADMIN_LEGACY_LOGIN=1: POST/DELETE /api/admin/admins → 401', () => {
-  it('POST /api/admin/admins with legacy email → 401 (changing admin list requires Google session)', async () => {
-    const r = await handleAdmin(
-      legacyReq('POST', '/api/admin/admins', { email: 'new@gmail.com' }),
-      makeEnvWithFlag(db, true),
-    )
-    expect(r.status).toBe(401)
-  })
-
-  it('DELETE /api/admin/admins/1 with legacy email → 401', async () => {
-    const r = await handleAdmin(
-      legacyReq('DELETE', '/api/admin/admins/1'),
-      makeEnvWithFlag(db, true),
-    )
-    expect(r.status).toBe(401)
-  })
-})
-
-describe('admin route scoping — ADMIN_LEGACY_LOGIN=1: /api/admin/campaigns* → 401 with legacy', () => {
-  it('GET /api/admin/campaigns with legacy email → 401 (new endpoints require Google session)', async () => {
-    const r = await handleAdmin(legacyReq('GET', '/api/admin/campaigns'), makeEnvWithFlag(db, true))
-    expect(r.status).toBe(401)
-  })
-
-  it('POST /api/admin/campaigns with legacy email → 401', async () => {
-    const r = await handleAdmin(
-      legacyReq('POST', '/api/admin/campaigns', { slug: 'test', kind: 'gift_tree', name: 'T' }),
-      makeEnvWithFlag(db, true),
-    )
-    expect(r.status).toBe(401)
-  })
-})
-
-// ── Legacy flag OFF: ALL legacy attempts → 401 ───────────────────────────────
-
-describe('admin route scoping — ADMIN_LEGACY_LOGIN not set: legacy email → 401 everywhere', () => {
-  it('GET /api/admin/teachers with legacy email, NO flag → 401', async () => {
-    const r = await handleAdmin(legacyReq('GET', '/api/admin/teachers'), makeEnvWithFlag(db, false))
-    expect(r.status).toBe(401)
-  })
-
-  it('GET /api/admin/admins with legacy email, NO flag → 401', async () => {
-    const r = await handleAdmin(legacyReq('GET', '/api/admin/admins'), makeEnvWithFlag(db, false))
-    expect(r.status).toBe(401)
+  it('signed-in user without admin_role → 403 on admin routes', async () => {
+    const { seedUser, sessionFor } = await import('./testAccounts.ts')
+    const { userId } = await seedUser(db, { username: 'plainuser', password: 'correct-horse-battery' })
+    const token = await sessionFor(db, userId)
+    const req = new Request('https://x/api/admin/teachers', {
+      headers: { Cookie: `__Host-cyt_s=${token}`, 'CF-Connecting-IP': '1.2.3.4' },
+    })
+    const r = await handleAdmin(req, { DB: db, ADMIN_FAIL_LIMIT: { limit: async () => ({ success: true }) } } as never)
+    expect(r.status).toBe(403)
   })
 })

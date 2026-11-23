@@ -109,66 +109,59 @@ type UserRow = {
   hd: string | null
 }
 
-/** Upsert app_user; returns the user row (with current id). Never logs email or sub. */
+/** Find or create the user for a verified Google sub (Phase 2b: google identity in user_identity).
+ *  Refreshes email/hd on the identity row. Never logs email or sub. Concurrent first sign-ins for the
+ *  same sub: the loser's batch fails on UNIQUE(provider, subject) and it re-reads the winner. */
 async function upsertUser(db: D1, sub: string, email: string, hd: string | undefined): Promise<UserRow> {
   const now = new Date().toISOString()
-  await db
-    .prepare(
-      'INSERT INTO app_user (google_sub, email, hd, nickname, class_name, banned, created_at, last_seen_at)' +
-      ' VALUES (?, ?, ?, \'\', \'\', 0, ?, ?)' +
-      ' ON CONFLICT(google_sub) DO UPDATE SET email = excluded.email, hd = excluded.hd, last_seen_at = excluded.last_seen_at',
-    )
-    .bind(sub, email, hd ?? null, now, now)
-    .run()
-
-  const row = await db
-    .prepare('SELECT id, email, nickname, class_name, banned, hd FROM app_user WHERE google_sub = ?')
+  const existing = await db
+    .prepare("SELECT user_id FROM user_identity WHERE provider = 'google' AND subject = ?")
     .bind(sub)
-    .first<UserRow>()
-
-  if (!row) throw new Error('upsertUser: row missing after insert')
-  return row
-}
-
-/** Check whether a user's email is in the admin list and Google is authoritative for it.
- *  Also pins admin.google_sub on first Google admin sign-in and rejects different subs.
- *  Conditional UPDATE (WHERE google_sub IS NULL) prevents a race where two sign-ins both
- *  see NULL and try to pin — only one wins, the other re-reads and is refused. */
-async function resolveAdmin(
-  db: D1,
-  email: string,
-  sub: string,
-  hd: string | null | undefined,
-): Promise<boolean> {
-  if (!isGoogleAuthoritative(email, hd ?? undefined)) return false
-
-  const adminRow = await db
-    .prepare('SELECT google_sub FROM admin WHERE lower(email) = ?')
-    .bind(email.toLowerCase())
-    .first<{ google_sub: string | null }>()
-
-  if (!adminRow) return false
-
-  if (adminRow.google_sub === null) {
-    // Accept #5: pin only while still unpinned (WHERE google_sub IS NULL).
-    // A racing sign-in by a different sub loses here.
-    const pinned = await db
-      .prepare('UPDATE admin SET google_sub = ? WHERE lower(email) = ? AND google_sub IS NULL')
-      .bind(sub, email.toLowerCase())
+    .first<{ user_id: number }>()
+  if (existing) {
+    await db
+      .prepare("UPDATE user_identity SET email = ?, hd = ?, last_used_at = ? WHERE provider = 'google' AND subject = ?")
+      .bind(email, hd ?? null, now, sub)
       .run()
-    if (!pinned.meta?.changes) {
-      // Another concurrent sign-in won the pin. Re-read to verify our sub won.
-      const now = await db
-        .prepare('SELECT google_sub FROM admin WHERE lower(email) = ?')
-        .bind(email.toLowerCase())
-        .first<{ google_sub: string | null }>()
-      if (now?.google_sub !== sub) return false
-    }
-    return true
+    await db.prepare('UPDATE app_user SET last_seen_at = ? WHERE id = ?').bind(now, existing.user_id).run()
+    const row = await db
+      .prepare('SELECT id, nickname, class_name, banned FROM app_user WHERE id = ?')
+      .bind(existing.user_id)
+      .first<UserRow>()
+    if (!row) throw new Error('upsertUser: row missing')
+    return row
   }
 
-  // Sub already pinned — reject a different sub (recycled email protection).
-  return adminRow.google_sub === sub
+  const id = 1_000_000_000 + (crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000_000)
+  try {
+    await db.batch([
+      db.prepare(
+        "INSERT INTO app_user (id, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, '', '', 0, ?, ?)",
+      ).bind(id, now, now),
+      db.prepare(
+        "INSERT INTO user_identity (user_id, provider, subject, email, hd, ip_hash, created_at, last_used_at)" +
+        " VALUES (?, 'google', ?, ?, ?, '', ?, ?)",
+      ).bind(id, sub, email, hd ?? null, now, now),
+    ])
+  } catch {
+    // Lost a race with a concurrent first sign-in: the winner's row is now the account.
+    const winner = await db
+      .prepare("SELECT user_id FROM user_identity WHERE provider = 'google' AND subject = ?")
+      .bind(sub)
+      .first<{ user_id: number }>()
+    if (!winner) throw new Error('upsertUser: insert failed')
+    return upsertUser(db, sub, email, hd)
+  }
+  return { id, nickname: '', class_name: '', banned: 0 } as UserRow
+}
+
+/** Admin = a row in admin_role (ADR-9). Google sign-in never grants it. */
+async function resolveAdmin(db: D1, userId: number): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 AS x FROM admin_role WHERE user_id = ?')
+    .bind(userId)
+    .first()
+  return row !== null
 }
 
 /** Build the public user object returned in GET /api/me and POST /api/auth/google. */
@@ -291,15 +284,15 @@ export async function handleAuth(
     // On next sign-in, recreate the account as banned so they cannot evade the ban.
     // SUB_HMAC_KEY is required (checked above); never log sub.
     {
-      const subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, claims.sub)
+      const subHmac = await hmacSha256Hex(env.SUB_HMAC_KEY, `google:${claims.sub}`)
       const tombstone = await env.DB
         .prepare('SELECT 1 FROM banned_identity WHERE sub_hmac = ?')
         .bind(subHmac)
         .first<{ result: number }>()
       if (tombstone) {
         await env.DB
-          .prepare('UPDATE app_user SET banned = 1 WHERE google_sub = ?')
-          .bind(claims.sub)
+          .prepare('UPDATE app_user SET banned = 1 WHERE id = ?')
+          .bind(userRow.id)
           .run()
         userRow.banned = 1
       }
@@ -312,7 +305,7 @@ export async function handleAuth(
     const { cookie: sessionCookieVal } = await createSession(env.DB, userRow.id)
 
     // Check isAdmin
-    const isAdmin = await resolveAdmin(env.DB, claims.email, claims.sub, userRow.hd)
+    const isAdmin = await resolveAdmin(env.DB, userRow.id)
 
     return resp({ user: publicUser(userRow, isAdmin) }, 200, [sessionCookieVal, nonceClear])
   }

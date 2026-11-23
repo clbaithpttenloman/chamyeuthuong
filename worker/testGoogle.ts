@@ -255,43 +255,43 @@ export async function sha256Hex(raw: string): Promise<string> {
  * schema for red-phase tests so the test setup is valid even though the implementation
  * doesn't exist.
  */
-export function createNewTables(sqlite: DatabaseSync): void {
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS app_user (
-      id          INTEGER PRIMARY KEY,
-      google_sub  TEXT UNIQUE NOT NULL,
-      email       TEXT NOT NULL,
-      nickname    TEXT NOT NULL DEFAULT '',
-      class_name  TEXT NOT NULL DEFAULT '',
-      banned      INTEGER NOT NULL DEFAULT 0,
-      created_at  TEXT NOT NULL,
-      last_seen_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS session (
-      token_hash TEXT PRIMARY KEY,
-      user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      ip_hash    TEXT NOT NULL DEFAULT ''
-    );
-  `)
-  // Add google_sub column to admin if missing (new column in Phase 1)
-  try {
-    sqlite.exec('ALTER TABLE admin ADD COLUMN google_sub TEXT')
-  } catch {
-    // Column already exists — harmless
-  }
+export function createNewTables(_sqlite: DatabaseSync): void {
+  // Phase 2b: testDb() applies the real SCHEMA (user_identity, password_credential, admin_role).
+  // Nothing to create; kept so existing callers still compile.
 }
 
 /**
  * Seed an admin row (email only). `google_sub` can be set afterwards via `pinAdminSub`.
  */
 export async function seedAdminEmail(db: D1, email: string = TEST_EMAIL): Promise<void> {
+  // Phase 2b: an admin is a user with an admin_role row. The legacy helper name is kept so the
+  // 20/11 tests read the same. The user gets a known session token so makeLegacyAdminReq can
+  // send a session cookie (no email header is accepted any more).
+  const addr = email.toLowerCase().trim()
   const now = new Date().toISOString()
+  const existing = await db
+    .prepare("SELECT user_id FROM user_identity WHERE provider = 'google' AND subject = ?")
+    .bind(`admin-${addr}`)
+    .first<{ user_id: number }>()
+  let userId: number
+  if (existing) {
+    userId = existing.user_id
+  } else {
+    userId = await seedUser(db, { sub: `admin-${addr}`, email: addr, nickname: 'Admin', createdAt: now })
+  }
   await db
-    .prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
-    .bind(email.toLowerCase().trim(), now, 'test-seed')
+    .prepare('INSERT OR IGNORE INTO admin_role (user_id, granted_at, granted_by) VALUES (?, ?, ?)')
+    .bind(userId, now, 'test-seed')
     .run()
+  await db
+    .prepare('INSERT OR IGNORE INTO session (token_hash, user_id, expires_at, created_at, ip_hash) VALUES (?, ?, ?, ?, ?)')
+    .bind(await sha256Hex(legacyToken(addr)), userId, '9999-12-31T23:59:59.000Z', now, '')
+    .run()
+}
+
+/** Deterministic session token for a seeded admin (tests only). */
+export function legacyToken(email: string): string {
+  return `t-${email.toLowerCase().trim()}`
 }
 
 /**
@@ -315,16 +315,18 @@ export async function seedUser(
   const email = opts.email ?? TEST_EMAIL
   const now = opts.createdAt ?? new Date().toISOString()
   await db
-    .prepare(
-      'INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    )
-    .bind(sub, email, opts.nickname ?? 'TestUser', '11A', opts.banned ? 1 : 0, now, now)
+    .prepare('INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(opts.nickname ?? 'TestUser', '11A', opts.banned ? 1 : 0, now, now)
     .run()
-  const row = await db
-    .prepare('SELECT id FROM app_user WHERE google_sub = ?')
-    .bind(sub)
-    .first<{ id: number }>()
-  return row!.id
+  const row = await db.prepare('SELECT MAX(id) AS id FROM app_user').first<{ id: number }>()
+  const userId = row!.id
+  await db
+    .prepare(
+      "INSERT INTO user_identity (user_id, provider, subject, email, hd, ip_hash, created_at, last_used_at) VALUES (?, 'google', ?, ?, NULL, '', ?, ?)",
+    )
+    .bind(userId, sub, email, now, now)
+    .run()
+  return userId
 }
 
 /**
@@ -417,9 +419,10 @@ export function makeLegacyAdminReq(
   email: string,
   opts: { method?: string; path?: string } = {},
 ): Request {
+  // Phase 2b: send the seeded admin's session cookie (see seedAdminEmail).
   const method = opts.method ?? 'GET'
   const headers: Record<string, string> = {
-    'X-Admin-Email': email,
+    Cookie: `${SESSION_COOKIE_NAME}=${legacyToken(email)}`,
     'CF-Connecting-IP': '1.2.3.4',
   }
   if (method !== 'GET') headers['X-Requested-With'] = 'fetch'

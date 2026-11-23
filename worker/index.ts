@@ -9,6 +9,7 @@ import { handleGifts } from './gifts.ts'
 import { handleTree } from './tree.ts'
 import { handleGiftModeration } from './giftModeration.ts'
 import { requireAdmin } from './auth.ts'
+import { handleAdmins } from './admins.ts'
 import { handleAccounts, handleChangePassword } from './accounts.ts'
 import { handleAuth, handleMe } from './me.ts'
 import { error } from './http.ts'
@@ -93,11 +94,17 @@ export default {
         return await handleGifts(request, env as never)
       }
 
-      // Campaign admin CRUD — requires Google session (not legacy email)
+      // Campaign admin CRUD — admin_role session (ADR-9)
       if (pathname.startsWith('/api/admin/campaigns')) {
         const auth = await requireAdmin(request, env)
         if (auth instanceof Response) return auth
-        return await handleAdminCampaigns(request, env, auth.email)
+        return await handleAdminCampaigns(request, env, auth.actor)
+      }
+      // Admin password reset and audit log (ADR-9), routed before the gift moderation prefix below.
+      if (/^\/api\/admin\/users\/\d+\/password$/.test(pathname) || pathname === '/api/admin/audit') {
+        const auth = await requireAdmin(request, env)
+        if (auth instanceof Response) return auth
+        return await handleAdmins(request, env as never, auth)
       }
       // Gift moderation + user ban (stub; wired before handleAdmin so the route exists)
       if (pathname.startsWith('/api/admin/gifts') || pathname.startsWith('/api/admin/users') || pathname.startsWith('/api/admin/tombstones')) {

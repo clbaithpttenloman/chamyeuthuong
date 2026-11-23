@@ -21,7 +21,6 @@ import { error, json } from './http.ts'
 import { ensureSchema } from './schema.ts'
 import { isValidSlug, isEffectivelyOpen } from '../shared/campaign.ts'
 import { readSession } from './session.ts'
-import { isGoogleAuthoritative } from './google.ts'
 import { isToken } from './token.ts'
 import type { D1 } from './types.ts'
 
@@ -482,25 +481,13 @@ async function handleGiftById(publicId: string, request: Request, env: TreeEnv):
   // Owner check
   if (session.userId === gift.user_id) return json(toPublicGiftFlat(gift))
 
-  // Admin check
-  const userRow = await db
-    .prepare('SELECT email, hd, google_sub FROM app_user WHERE id = ? LIMIT 1')
-    .bind(session.userId)
-    .first<{ email: string; hd: string | null; google_sub: string | null }>()
-
-  if (!userRow) return error('not_found')
-
+  // Admin check: a row in admin_role (ADR-9). Banned or must-change admins still see hidden gifts
+  // only through requireAdmin on the admin routes; this read path only needs the role.
   const adminRow = await db
-    .prepare('SELECT google_sub FROM admin WHERE lower(email) = ? LIMIT 1')
-    .bind(userRow.email.toLowerCase())
-    .first<{ google_sub: string | null }>()
-
-  if (!adminRow || !isGoogleAuthoritative(userRow.email, userRow.hd ?? undefined)) {
-    return error('not_found')
-  }
-
-  const isAdmin = adminRow.google_sub === null || adminRow.google_sub === userRow.google_sub
-  if (!isAdmin) return error('not_found')
+    .prepare('SELECT 1 AS x FROM admin_role WHERE user_id = ? LIMIT 1')
+    .bind(session.userId)
+    .first()
+  if (!adminRow) return error('not_found')
 
   return json(toPublicGiftFlat(gift))
 }

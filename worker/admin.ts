@@ -340,26 +340,13 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response>
   const { method } = request
   const parts = pathname.split('/').filter(Boolean)
 
-  // POST/DELETE admin-list changes and all campaign routes always require a Google session.
-  // All 20/11 routes (teachers, templates, images, wishes, moderation, about, GET admins)
-  // accept the legacy X-Admin-Email path while ADMIN_LEGACY_LOGIN = '1'.
-  // /api/admin/campaigns* is handled by handleAdminCampaigns in index.ts (never reaches this
-  // function in production), but requiresGoogle must include 'campaigns' so that if handleAdmin
-  // is called with a campaigns URL (e.g., in tests), legacy auth gets 401 — not 404 — ensuring
-  // unauthenticated callers never learn which paths exist (auth-before-resource-existence).
-  const requiresGoogle =
-    parts.length >= 3 && (
-      parts[2] === 'campaigns' ||
-      (parts[2] === 'admins' && (method === 'POST' || method === 'DELETE'))
-    )
-
-  const authResult = await requireAdmin(request, env, { legacy: !requiresGoogle })
+  const authResult = await requireAdmin(request, env)
   if (authResult instanceof Response) return authResult
-  const { email } = authResult
+  const { actor: email } = authResult
 
   try {
     if (parts.length >= 3 && parts[2] === 'admins') {
-      return await handleAdmins(request, env, email)
+      return await handleAdmins(request, env, authResult)
     }
 
     if (parts.length >= 3 && parts[2] === 'images') {
