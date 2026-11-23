@@ -15,7 +15,8 @@ import type { D1Stmt } from './types.ts'
 // (7 statements: INSERT campaign 1 + 3×ADD COLUMN in CAMPAIGN_UPGRADE_SQLS, then 3×CREATE INDEX
 // in CAMPAIGN_INDEX_SQLS), one re-probe after the campaign upgrade, the role-CHECK probe,
 // the seed-flag probe, and the seed batch.
-const FRESH_COLD_START = SCHEMA.length + 13 + SEED_STATEMENT_COUNT
+// +1 vs Phase 1: the app_user probe that guards against a stale Phase 1 database (Phase 2b).
+const FRESH_COLD_START = SCHEMA.length + 14 + SEED_STATEMENT_COUNT
 
 // ---- SCHEMA shape ----
 
@@ -975,7 +976,7 @@ describe('ensureSchema — upgrades teacher_profile from the 4d3a5df shape', () 
     const before = sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()
     await ensureSchema(db)
     expect(sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'teacher_profile'").get()).toEqual(before)
-    expect(state.ddl).toBe(SCHEMA.length + 5) // SCHEMA + 3 table probes + role-CHECK probe + seed probe, no rebuild
+    expect(state.ddl).toBe(SCHEMA.length + 6) // SCHEMA + 3 table probes + role-CHECK probe + seed probe, no rebuild
   })
 
   it('running the rebuild twice keeps the same rows', async () => {
@@ -1082,7 +1083,7 @@ describe('ensureSchema — teacher_profile.role gains Giám thị', () => {
     t.sqlite.exec(NO_ROLE_TEACHER_PROFILE)
     await ensureSchema(t.db)
     // SCHEMA + 3 column probes + ADD COLUMN + re-probe + role probe + seed probe; a copy would add 4.
-    expect(t.state.ddl).toBe(SCHEMA.length + 7)
+    expect(t.state.ddl).toBe(SCHEMA.length + 8)
   })
 
   it('cascade from teacher still works after the rebuild', async () => {
@@ -1099,7 +1100,7 @@ describe('ensureSchema — teacher_profile.role gains Giám thị', () => {
     await ensureSchema(db)
     const t2 = testDb({ shareWith: sqlite })
     await ensureSchema(t2.db)
-    expect(t2.state.ddl).toBe(SCHEMA.length + 5) // SCHEMA + 3 column probes + role-CHECK probe + seed probe
+    expect(t2.state.ddl).toBe(SCHEMA.length + 6) // SCHEMA + 3 column probes + role-CHECK probe + seed probe
   })
 })
 
@@ -1238,7 +1239,7 @@ describe('ensureSchema — student_card.font / ink', () => {
     const { db, state } = testDb()
     await ensureSchema(db)
     // SCHEMA batch + teacher_profile probe + student_card probe + seed-flag probe
-    expect(state.ddl).toBe(SCHEMA.length + 5)
+    expect(state.ddl).toBe(SCHEMA.length + 6)
     expect(state.prepares).toBe(0)
   })
 })
@@ -1332,7 +1333,7 @@ describe('ensureSchema — one-time image seed', () => {
   it('flag already set → no seed statement is prepared', async () => {
     const { db, sqlite, state } = testDb()
     await ensureSchema(db)
-    expect(state.ddl).toBe(SCHEMA.length + 5)
+    expect(state.ddl).toBe(SCHEMA.length + 6)
     expect(count(sqlite, 'SELECT COUNT(*) AS n FROM image')).toBe(0)
   })
 
@@ -2020,72 +2021,13 @@ describe('ensureSchema — campaign upgrade from pre-card-v3 shape (old teacher_
 // --- Regression: admin tables created before Phase 1 have no google_sub column ---
 // deployedDb() rebuilds admin from the current SCHEMA, so it cannot catch a missing upgrade.
 
-describe('ensureSchema — admin.google_sub upgrade (pre-Phase-1 admin table)', () => {
-  function preGoogleAdminDb(): ReturnType<typeof testDb> {
-    const t = deployedDb()
-    t.sqlite.exec('DROP TABLE admin')
-    t.sqlite.exec(`CREATE TABLE admin (
-  id         INTEGER PRIMARY KEY,
-  email      TEXT    UNIQUE NOT NULL,
-  created_at TEXT           NOT NULL,
-  created_by TEXT           NOT NULL,
-  CHECK (email = lower(email) AND length(email) <= 254)
-)`)
-    t.sqlite.exec("INSERT INTO admin (email, created_at, created_by) VALUES ('a@gmail.com', '2026-11-01', 'bootstrap')")
-    return t
-  }
-
-  it('adds google_sub (NULL) and keeps existing admins', async () => {
-    const { db, sqlite } = preGoogleAdminDb()
-    await ensureSchema(db)
-    const cols = (sqlite.prepare("PRAGMA table_info('admin')").all() as { name: string }[]).map((c) => c.name)
-    expect(cols).toContain('google_sub')
-    expect(sqlite.prepare('SELECT email, google_sub FROM admin').all()).toEqual([
-      { email: 'a@gmail.com', google_sub: null },
-    ])
-  })
-})
-
-// ===================================================================
-// Fix Group 5a — Accept #1: Campaign 1 content shape
-// ===================================================================
-
-describe('Fix Group 5a — Accept #1: campaign 1 content is nested {home:{…}}', () => {
-  it('campaign 1 content on upgraded DB is { home: {...} } nested, not flat', async () => {
-    const { db, sqlite } = deployedDb()
-    await ensureSchema(db)
-    const row = sqlite
-      .prepare('SELECT content FROM campaign WHERE id = 1')
-      .get() as { content: string } | undefined
-    expect(row).toBeDefined()
-    const parsed = JSON.parse(row!.content) as Record<string, unknown>
-    // Nested shape: { home: { kicker, heading, body } }
-    expect(parsed).toHaveProperty('home')
-    expect((parsed.home as Record<string, unknown>).kicker).toBe(SITE_HOME.kicker)
-    // Must NOT be flat (no kicker at top level)
-    expect(parsed).not.toHaveProperty('kicker')
-  })
-
-  it('fresh DB (no prior templates) gets campaign 1 with nested home content after ensureSchema', async () => {
-    const { db, sqlite } = testDb({ schema: false })
-    await ensureSchema(db)
-    const row = sqlite
-      .prepare('SELECT slug, status, content FROM campaign WHERE id = 1')
-      .get() as { slug: string; status: string; content: string } | undefined
-    // Fresh DB should now get campaign 1 (no WHERE EXISTS guard)
-    expect(row).toBeDefined()
-    expect(row?.slug).toBe('20-11')
-    expect(row?.status).toBe('active')
-    const parsed = JSON.parse(row!.content) as Record<string, unknown>
-    expect(parsed).toEqual({ home: SITE_HOME })
-  })
-})
+// Phase 2b: the admin.google_sub upgrade and its test were removed (production never had the column).
 
 // ===================================================================
 // Phase 2 (Noel core) — gift, heart, report, banned_identity tables
 //
 // COLD-START COUNT NOTE:
-//   FRESH_COLD_START = SCHEMA.length + 13 + SEED_STATEMENT_COUNT.
+//   FRESH_COLD_START = SCHEMA.length + 14 + SEED_STATEMENT_COUNT.
 //   Phase 2 adds gift/heart/report/banned_identity to SCHEMA (new CREATE TABLE IF NOT EXISTS
 //   statements — no new UPGRADES probe steps because these are brand-new tables, not ALTER TABLE).
 //   SCHEMA.length is used dynamically, so the constant itself DOES NOT change.

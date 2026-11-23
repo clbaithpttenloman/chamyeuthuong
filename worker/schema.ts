@@ -59,19 +59,60 @@ export const CAMPAIGN_INDEX_SQLS: string[] = [
 export const SCHEMA: string[] = [
   // ---- Phase 1: Google sign-in users + sessions ----
   // These are new tables — no existing data to migrate.
-  // app_user: keyed by Google sub; email refreshed from every verified token.
-  // hd: stored from the token's hd claim (Workspace) — used for isGoogleAuthoritative.
+  // app_user: identity-agnostic profile (ADR-9). Login methods live in user_identity, admin
+  // rights in admin_role, so no email or Google sub is stored here.
   `CREATE TABLE IF NOT EXISTS app_user (
   id           INTEGER PRIMARY KEY,
-  google_sub   TEXT    UNIQUE NOT NULL,
-  email        TEXT    NOT NULL,
   nickname     TEXT    NOT NULL DEFAULT '',
   class_name   TEXT    NOT NULL DEFAULT '',
-  hd           TEXT,
   banned       INTEGER NOT NULL DEFAULT 0 CHECK (banned IN (0,1)),
   created_at   TEXT    NOT NULL,
   last_seen_at TEXT    NOT NULL
 )`,
+  // user_identity: one row per login method. provider 'password' uses the lowercase username as
+  // subject; 'google' (later) uses the Google sub. Unique per (provider, subject).
+  `CREATE TABLE IF NOT EXISTS user_identity (
+  id           INTEGER PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  provider     TEXT    NOT NULL CHECK (provider IN ('password','google')),
+  subject      TEXT    NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+  email        TEXT,
+  hd           TEXT,
+  ip_hash      TEXT    NOT NULL DEFAULT '',
+  created_at   TEXT    NOT NULL,
+  last_used_at TEXT    NOT NULL,
+  CHECK (provider <> 'password' OR (subject NOT GLOB '*[^a-z0-9_]*' AND length(subject) BETWEEN 3 AND 20)),
+  UNIQUE (provider, subject)
+)`,
+  `CREATE INDEX IF NOT EXISTS user_identity_user ON user_identity(user_id)`,
+  `CREATE INDEX IF NOT EXISTS user_identity_created ON user_identity(created_at)`,
+  // password_credential: one row per password identity. Hash is over HMAC(pepper, password).
+  `CREATE TABLE IF NOT EXISTS password_credential (
+  user_id        INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+  hash           TEXT    NOT NULL,
+  salt           TEXT    NOT NULL,
+  iterations     INTEGER NOT NULL CHECK (iterations BETWEEN 10000 AND 100000),
+  must_change    INTEGER NOT NULL DEFAULT 0 CHECK (must_change IN (0,1)),
+  temp_expires_at TEXT,
+  failed_count   INTEGER NOT NULL DEFAULT 0,
+  locked_until   TEXT,
+  updated_at     TEXT    NOT NULL
+)`,
+  // admin_role: presence = admin. Replaces the email list (ADR-9).
+  `CREATE TABLE IF NOT EXISTS admin_role (
+  user_id    INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
+  granted_at TEXT    NOT NULL,
+  granted_by TEXT    NOT NULL
+)`,
+  // admin_audit: who did what to whom. No FK, so history survives deletions. Never holds a password.
+  `CREATE TABLE IF NOT EXISTS admin_audit (
+  id              INTEGER PRIMARY KEY,
+  actor_user_id   INTEGER,
+  action          TEXT    NOT NULL CHECK (action IN ('first_account','reset_password','grant_admin','revoke_admin','ban','unban','delete_gift','remove_tombstone')),
+  target_user_id  INTEGER,
+  at              TEXT    NOT NULL
+)`,
+  `CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at)`,
   // session: stores only the SHA-256 hash of the token (never the raw token).
   `CREATE TABLE IF NOT EXISTS session (
   token_hash TEXT    PRIMARY KEY,
@@ -103,7 +144,6 @@ export const SCHEMA: string[] = [
   email      TEXT    UNIQUE NOT NULL,
   created_at TEXT           NOT NULL,
   created_by TEXT           NOT NULL,
-  google_sub TEXT,
   CHECK (email = lower(email) AND length(email) <= 254)
 )`,
   `CREATE TABLE IF NOT EXISTS image (
@@ -248,9 +288,9 @@ export const SCHEMA: string[] = [
 
 const TEACHER_PROFILE_DDL = SCHEMA.find((q) => q.includes('IF NOT EXISTS teacher_profile ('))!
 
-type Table = 'teacher_profile' | 'student_card' | 'admin'
+type Table = 'teacher_profile' | 'student_card' | 'admin' | 'app_user'
 const columnsSql = (t: Table) => `PRAGMA table_info('${t}')`
-const TABLES: Table[] = ['teacher_profile', 'student_card', 'admin']
+const TABLES: Table[] = ['teacher_profile', 'student_card', 'admin', 'app_user']
 
 /**
  * In-place upgrades for databases created by older deploys, run in order. Each entry checks
@@ -333,13 +373,6 @@ const UPGRADES: {
       }
     },
   },
-  {
-    // ADR-3: the Google sub pinned on an admin's first Google sign-in. Admin tables created
-    // before Phase 1 lack it. A racing isolate loses with "duplicate column name" (one 503).
-    table: 'admin',
-    needed: (cols) => !cols.has('google_sub'),
-    sql: ['ALTER TABLE admin ADD COLUMN google_sub TEXT'],
-  },
 ]
 
 // ---- One-time seed: six mockup backgrounds + one example template each (card v3) ----
@@ -419,6 +452,12 @@ async function runUpgrades(db: D1): Promise<void> {
   // steps changed it.
   const cols = new Map<Table, Set<string>>()
   for (const t of TABLES) cols.set(t, await tableColumns(db, t))
+  // Phase 2b: a database still carrying the Phase 1 app_user (google_sub) came from a branch
+  // build and cannot be upgraded in place (CREATE IF NOT EXISTS would keep it). Fail with an
+  // operator message instead of a later SQL error.
+  if (cols.get('app_user')!.has('google_sub')) {
+    throw new Error('stale app_user (recreate this database, docs/runbooks/staging.md)')
+  }
   for (const u of UPGRADES) {
     if (!u.needed(cols.get(u.table)!)) continue
     if (u.runFn) {
