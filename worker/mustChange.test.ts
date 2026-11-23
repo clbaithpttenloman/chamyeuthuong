@@ -24,7 +24,6 @@ import { resolve } from 'node:path'
 
 // ── RED MECHANISM: cascades from testAccounts.ts → password.ts (not yet written) ─
 import {
-  createAccountTables,
   accountsEnv,
   seedUser,
   sessionFor,
@@ -111,14 +110,12 @@ const PUBLIC_ROUTES: ReadonlyArray<{ path: string }> = [
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 let db: ReturnType<typeof testDb>['db']
-let sqlite: ReturnType<typeof testDb>['sqlite']
 let env: ReturnType<typeof accountsEnv>
 let mustChangeToken: string
 let campaignSlug: string
 
 beforeEach(async () => {
-  ;({ db, sqlite } = testDb())
-  createAccountTables(sqlite)
+  ;({ db } = testDb())
   env = accountsEnv({ db })
 
   // Seed a gift_tree campaign so tree endpoints work

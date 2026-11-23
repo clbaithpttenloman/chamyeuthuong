@@ -168,32 +168,12 @@ Only `NONCE_KEY` (secret) and `GOOGLE_CLIENT_ID` (var) are required for Phase 1.
 
 ## Admin Sign-In
 
-**Phase 1 transition:** admins can sign in via either method:
-- **Google (preferred, enforced eventually):** any signed-in user whose email is in the `admin` list (and Google is authoritative for that email) is an admin
-- **Typed email** (only on the old 20/11 admin routes, while `ADMIN_LEGACY_LOGIN="1"`): no verification; every use logs `admin: legacy login used`. Campaign routes and adding/removing admins need Google.
+**Phase 1 transition (ADR-3, superseded by ADR-9):** 
+In Phase 1, admins could use Google sign-in for the campaign endpoints. This runbook was written for that design.
 
-**Google authority check:** Google is authoritative for an email if:
-- Email ends with `@gmail.com` (case-insensitive), **OR**
-- `email_verified` is true AND `hd` is set (Workspace domain, Google verified the domain)
+**Phase 2b implementation (ADR-9):** Admins and players now sign in with username and password. Google sign-in is optional (not configured yet) and was deferred to a future phase. When Google is configured, it will be an additional identity linked to an existing account, not the primary sign-in path.
 
-**Other emails** (e.g., `admin@school.edu` without Workspace): Google does not vouch for it ("ownership may have changed"), so it cannot be used for admin login even if in the `admin` list.
-
-**Admin sub pinning:**
-
-On a Google admin's first sign-in, `admin.google_sub` is pinned to the verified `sub`. A recycled email cannot inherit the admin role if a different Google account signs in — the second account is refused (403 `forbidden`).
-
-**Example scenario:**
-
-1. Email `giao-vien@gmail.com` is an admin; signs in with Google account A (sub = `abc123`)
-2. `admin.google_sub = 'abc123'` is pinned
-3. Email owner loses access to account A and uses account B (sub = `xyz789`)
-4. Sign-in attempt with account B fails: sub mismatch (403 `forbidden`)
-5. To allow account B, another admin unpins the email, then B signs in (and is pinned):
-   ```bash
-   npx wrangler d1 execute cham-yeu-thuong --remote --command "UPDATE admin SET google_sub = NULL WHERE email = 'giao-vien@gmail.com'"
-   ```
-
-**Typed-email login stays.** It is not removed as part of the campaign platform; that is a separate, later feature. Until Google sign-in is configured, admins use the typed email for the 20/11 sections only.
+This runbook remains for reference and will be updated when Google sign-in is implemented.
 
 ---
 

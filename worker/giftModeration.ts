@@ -26,8 +26,7 @@
  *   GET  /api/admin/tombstones        → 200 [{ id, createdAt }]  (sub_hmac never returned)
  *   DELETE /api/admin/tombstones/<id> → 200 { ok: true }
  *
- * Auth: requireAdmin without opts.legacy (Google session only).
- *       Typed X-Admin-Email + ADMIN_LEGACY_LOGIN='1' → 401.
+ * Auth: requireAdmin (session with admin_role, ADR-9). Typed email headers are never accepted.
  *
  * Every lifecycle change is one D1 batch with recounts (ADR-8 / task Group 4 Constraints).
  */
@@ -36,7 +35,6 @@ import { requireAdmin } from './auth.ts'
 import { ensureSchema } from './schema.ts'
 import { json, error, readJson } from './http.ts'
 import { hmacSha256Hex } from './session.ts'
-import { readSession } from './session.ts'
 import type { D1 } from './types.ts'
 
 type Limiter = { limit(opts: { key: string }): Promise<{ success: boolean }> }
@@ -44,9 +42,6 @@ type Limiter = { limit(opts: { key: string }): Promise<{ success: boolean }> }
 export type GiftModerationEnv = {
   DB: D1
   ADMIN_FAIL_LIMIT: Limiter
-  ADMIN_LEGACY_LOGIN?: string
-  BOOTSTRAP_EMAIL?: string
-  ALLOW_FIRST_CLAIM?: string
   /** Required for unban tombstone removal. Missing → fail closed for unban. */
   SUB_HMAC_KEY?: string
 }
@@ -54,14 +49,10 @@ export type GiftModerationEnv = {
 export async function handleGiftModeration(request: Request, env: GiftModerationEnv): Promise<Response> {
   await ensureSchema(env.DB)
 
-  // Google session only — no opts.legacy (new admin routes require Google, ADR-3)
+  // Admin session with admin_role (ADR-9). requireAdmin returns the acting user id.
   const admin = await requireAdmin(request, env)
   if (admin instanceof Response) return admin
-
-  // Resolve the admin's own app_user.id from the session (needed for self-ban check).
-  // requireAdmin already validated the session, so this read must succeed.
-  const adminSession = await readSession(request, env.DB)
-  const adminUserId = adminSession?.userId
+  const adminUserId = admin.userId
 
   const { pathname } = new URL(request.url)
 
@@ -205,7 +196,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       env.DB.prepare('DELETE FROM banned_identity WHERE rowid = ?').bind(tombstoneId),
       env.DB.prepare(
         'INSERT INTO admin_audit (actor_user_id, action, target_user_id, at) VALUES (?, ?, NULL, ?)',
-      ).bind(adminUserId ?? null, 'remove_tombstone', new Date().toISOString()),
+      ).bind(adminUserId, 'remove_tombstone', new Date().toISOString()),
     ])
     return json({ ok: true })
   }
@@ -327,7 +318,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
         env.DB.prepare('DELETE FROM session WHERE user_id = ?').bind(targetUserId),
         env.DB.prepare(
           'INSERT INTO admin_audit (actor_user_id, action, target_user_id, at) VALUES (?, ?, ?, ?)',
-        ).bind(adminUserId ?? null, 'ban', targetUserId, new Date().toISOString()),
+        ).bind(adminUserId, 'ban', targetUserId, new Date().toISOString()),
         // Report recount for gifts this user reported (item 4): their reports now excluded.
         env.DB.prepare(
           'UPDATE gift SET report_count = (' +
@@ -348,7 +339,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
       // Tombstones are per identity (provider:subject), ADR-9. Fail closed without SUB_HMAC_KEY.
       if (!env.SUB_HMAC_KEY) {
         console.error('giftModeration: SUB_HMAC_KEY missing; unban refused (tombstone cannot be cleared)')
-        return json({ error: 'misconfigured' }, 500)
+        return json({ error: 'misconfigured' }, 503)
       }
       const identities = await env.DB
         .prepare('SELECT provider, subject FROM user_identity WHERE user_id = ?')
@@ -378,7 +369,7 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
         ...tombstoneKeys.map((k) => env.DB.prepare('DELETE FROM banned_identity WHERE sub_hmac = ?').bind(k)),
         env.DB.prepare(
           'INSERT INTO admin_audit (actor_user_id, action, target_user_id, at) VALUES (?, ?, ?, ?)',
-        ).bind(adminUserId ?? null, 'unban', targetUserId, new Date().toISOString()),
+        ).bind(adminUserId, 'unban', targetUserId, new Date().toISOString()),
       ])
     }
 

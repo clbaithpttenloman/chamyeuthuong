@@ -8,14 +8,12 @@
  * After Phase 2b implementation:
  *   - worker/password.ts provides hashPassword, generateTempPassword, PBKDF2_ITERATIONS, PASSWORD_STATS
  *   - worker/schema.ts has the Phase 2b app_user shape (no google_sub) + new tables
- *   - createAccountTables() becomes a safe no-op (IF NOT EXISTS handles everything)
  */
 
 // ── RED MECHANISM: this import fails until worker/password.ts is written ─────
 import { hashPassword, generateTempPassword, PBKDF2_ITERATIONS, PASSWORD_STATS } from './password.ts'
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { DatabaseSync } from 'node:sqlite'
 import { testDb, type D1 } from './testDb.ts'
 import { makeRawToken, sha256Hex, SESSION_COOKIE_NAME } from './testGoogle.ts'
 import type { Env } from './types.ts'
@@ -64,90 +62,6 @@ export function countingLimiter(max: number): Limiter & { keys: string[]; count:
 
 // ── Schema helpers ────────────────────────────────────────────────────────────
 
-/**
- * Create the Phase 2b account tables on a bare sqlite handle.
- *
- * If app_user is still the Phase 1 shape (has google_sub), it is rebuilt.
- * After Phase 2b implementation updates SCHEMA, testDb() creates these tables
- * automatically and this function becomes a safe no-op.
- */
-export function createAccountTables(sqlite: DatabaseSync): void {
-  // Check if app_user is Phase 1 (has google_sub)
-  const appUserCols = new Set(
-    (sqlite.prepare('PRAGMA table_info(app_user)').all() as { name: string }[]).map((c) => c.name),
-  )
-
-  if (appUserCols.has('google_sub')) {
-    // Phase 1 → Phase 2b: drop session first (child of app_user), then app_user.
-    // gift/heart/report FK to app_user.id — SQLite allows dropping the parent even with
-    // referencing tables as long as there are no child ROWS (fresh testDb has none).
-    // After recreating app_user (same id column), those FKs work normally.
-    sqlite.exec('DROP TABLE IF EXISTS session')
-    sqlite.exec('DROP TABLE IF EXISTS app_user')
-    sqlite.exec(`CREATE TABLE app_user (
-      id           INTEGER PRIMARY KEY,
-      nickname     TEXT    NOT NULL DEFAULT '',
-      class_name   TEXT    NOT NULL DEFAULT '',
-      banned       INTEGER NOT NULL DEFAULT 0 CHECK (banned IN (0,1)),
-      created_at   TEXT    NOT NULL,
-      last_seen_at TEXT    NOT NULL
-    )`)
-    sqlite.exec(`CREATE TABLE session (
-      token_hash TEXT    PRIMARY KEY,
-      user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-      expires_at TEXT    NOT NULL,
-      created_at TEXT    NOT NULL,
-      ip_hash    TEXT    NOT NULL DEFAULT ''
-    )`)
-  }
-
-  // New Phase 2b tables (IF NOT EXISTS: no-op once SCHEMA is updated)
-  sqlite.exec(`CREATE TABLE IF NOT EXISTS user_identity (
-    id           INTEGER PRIMARY KEY,
-    user_id      INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-    provider     TEXT    NOT NULL CHECK (provider IN ('password','google')),
-    subject      TEXT    NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
-    ip_hash      TEXT    NOT NULL DEFAULT '',
-    created_at   TEXT    NOT NULL,
-    last_used_at TEXT    NOT NULL,
-    UNIQUE (provider, subject),
-    CHECK (provider <> 'password' OR (
-      subject NOT GLOB '*[^a-z0-9_]*' AND length(subject) BETWEEN 3 AND 20
-    ))
-  )`)
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_user_identity_user ON user_identity(user_id)`)
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_user_identity_created ON user_identity(created_at)`)
-
-  sqlite.exec(`CREATE TABLE IF NOT EXISTS password_credential (
-    user_id         INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
-    hash            TEXT    NOT NULL,
-    salt            TEXT    NOT NULL,
-    iterations      INTEGER NOT NULL CHECK (iterations BETWEEN 10000 AND 100000),
-    must_change     INTEGER NOT NULL DEFAULT 0 CHECK (must_change IN (0,1)),
-    temp_expires_at TEXT,
-    failed_count    INTEGER NOT NULL DEFAULT 0,
-    locked_until    TEXT,
-    updated_at      TEXT    NOT NULL
-  )`)
-
-  sqlite.exec(`CREATE TABLE IF NOT EXISTS admin_role (
-    user_id    INTEGER PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
-    granted_at TEXT    NOT NULL,
-    granted_by TEXT    NOT NULL
-  )`)
-
-  sqlite.exec(`CREATE TABLE IF NOT EXISTS admin_audit (
-    id             INTEGER PRIMARY KEY,
-    actor_user_id  INTEGER,
-    action         TEXT    NOT NULL CHECK (action IN (
-      'first_account','reset_password','grant_admin','revoke_admin',
-      'ban','unban','delete_gift','remove_tombstone'
-    )),
-    target_user_id INTEGER,
-    at             TEXT    NOT NULL
-  )`)
-  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at)`)
-}
 
 // ── Env builders ──────────────────────────────────────────────────────────────
 

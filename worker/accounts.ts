@@ -11,6 +11,7 @@ import { checkPassword, RAW_LIMITS } from '../shared/password.ts'
 import { normalizeUsername } from '../shared/username.ts'
 import { COMMON_PASSWORDS } from './commonPasswords.ts'
 import { error, HttpError, json, readJson } from './http.ts'
+import { ensureSchema } from './schema.ts'
 import { PBKDF2_ITERATIONS, hashPassword, verifyPassword } from './password.ts'
 import {
   SESSION_MAX_AGE,
@@ -204,6 +205,9 @@ function codePoints(s: string): number {
 export async function handleRegister(request: Request, env: AccountsEnv, deps: AccountsDeps = {}): Promise<Response> {
   const now = deps.now?.() ?? new Date()
   const nowIso = now.toISOString()
+  // First DB access creates the schema on a fresh database (the bootstrap case); the other
+  // handlers do the same. Without it the first registration would fail with "no such table".
+  await ensureSchema(env.DB)
 
   if (!env.PASSWORD_PEPPER || !env.IP_HMAC_KEY || !env.SUB_HMAC_KEY) {
     console.error('accounts: misconfigured')
@@ -342,6 +346,7 @@ type CredentialRow = {
 export async function handleLogin(request: Request, env: AccountsEnv, deps: AccountsDeps = {}): Promise<Response> {
   const now = deps.now?.() ?? new Date()
   const nowIso = now.toISOString()
+  await ensureSchema(env.DB)
 
   if (!env.PASSWORD_PEPPER) {
     console.error('accounts: misconfigured')
@@ -448,6 +453,7 @@ export async function handleChangePassword(request: Request, env: AccountsEnv, d
   }
   if (request.method !== 'POST') return error('method')
   if (!csrfOk(request)) return error('forbidden')
+  await ensureSchema(env.DB)
 
   const session = await readSession(request, env.DB)
   if (!session) return error('unauthorized')

@@ -93,7 +93,9 @@ function failResp(code: string, status: number, extraCookies: string[] = []): Re
 // ── CSRF guard ────────────────────────────────────────────────────────────────
 
 function csrfGuard(request: Request): boolean {
-  if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return false
+  // Same-origin or absent only (ADR-9): a sibling subdomain (same-site) cannot write.
+  const site = request.headers.get('Sec-Fetch-Site')
+  if (site !== null && site !== 'same-origin') return false
   if (request.method !== 'GET' && request.headers.get('X-Requested-With') !== 'fetch') return false
   return true
 }

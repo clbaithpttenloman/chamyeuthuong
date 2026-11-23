@@ -23,7 +23,8 @@ export async function requireAdmin(
   // Cross-site and state-changing requests are refused before any lookup. OPTIONS gets 401 for
   // anonymous callers (below), so its header check waits for the session.
   const stateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)
-  if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return error('forbidden')
+  const site = request.headers.get('Sec-Fetch-Site')
+  if (site !== null && site !== 'same-origin' && (stateChanging || site === 'cross-site')) return error('forbidden')
   if (stateChanging && request.headers.get('X-Requested-With') !== 'fetch') return error('forbidden')
 
   await ensureSchema(env.DB)
@@ -95,7 +96,7 @@ export async function mustChangeGate(request: Request, db: Env['DB']): Promise<R
   const method = request.method
   if (MUST_CHANGE_ALLOWED.some((r) => r.method === method && r.path === pathname)) return null
   if (PUBLIC_ANY_PREFIXES.some((p) => pathname.startsWith(p))) return null
-  if (method === 'GET' && PUBLIC_GET_PREFIXES.some((p) => pathname.startsWith(p)) && pathname !== '/api/me/gifts') {
+  if (method === 'GET' && PUBLIC_GET_PREFIXES.some((p) => pathname.startsWith(p))) {
     return null
   }
 

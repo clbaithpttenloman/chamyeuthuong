@@ -34,7 +34,6 @@ import { PASSWORD_STATS, PBKDF2_ITERATIONS } from './password.ts'
 import { testDb } from './testDb.ts'
 import worker from './index.ts'
 import {
-  createAccountTables,
   accountsEnv,
   seedUser,
   sessionFor,
@@ -64,12 +63,10 @@ function hasFlag(setCookieHeader: string, flag: string): boolean {
 // ── Shared setup ──────────────────────────────────────────────────────────────
 
 let db: ReturnType<typeof testDb>['db']
-let sqlite: ReturnType<typeof testDb>['sqlite']
 let env: ReturnType<typeof accountsEnv>
 
 beforeEach(() => {
-  ;({ db, sqlite } = testDb())
-  createAccountTables(sqlite)
+  ;({ db } = testDb())
   env = accountsEnv({ db })
 })
 
@@ -764,7 +761,6 @@ describe('AC-30 registration caps', () => {
   it('concurrent requests at cap-1 → at most one success', async () => {
     // Share a single SQLite DB between two bindings (simulates two concurrent isolates)
     const { db: db1, sqlite: sharedSqlite } = testDb()
-    createAccountTables(sharedSqlite)
     const { db: db2 } = testDb({ shareWith: sharedSqlite })
 
     const capEnv1 = accountsEnv({ db: db1, registerIpDaily: '2' })
@@ -927,7 +923,6 @@ describe('AC-25 first account = admin', () => {
 
   it('concurrent first registrations → exactly one admin', async () => {
     const { db: db1, sqlite: shared } = testDb()
-    createAccountTables(shared)
     const { db: db2 } = testDb({ shareWith: shared })
     const env1 = accountsEnv({ db: db1 })
     const env2 = accountsEnv({ db: db2 })
@@ -1210,5 +1205,20 @@ describe('generated user ids are admin-routable', () => {
     expect(r.status).toBe(201)
     const body = await r.json() as { user: { id: number } }
     expect(String(body.user.id)).toMatch(/^\d{1,9}$/)
+  })
+})
+
+// ── Regression: a brand-new database with no tables (bootstrap) ───────────────
+
+describe('fresh database bootstrap', () => {
+  it('first registration on a database with no schema creates it and succeeds (no "no such table")', async () => {
+    const fresh = testDb({ schema: false })
+    const r = await handleAccounts(
+      jsonReq('POST', '/api/auth/register', { username: 'bootfirst', password: 'correct-horse-battery', nickname: 'B', className: '11A' }),
+      accountsEnv({ db: fresh.db }),
+    )
+    expect(r.status).toBe(201)
+    const admins = await fresh.db.prepare('SELECT COUNT(*) AS c FROM admin_role').first<{ c: number }>()
+    expect(admins!.c).toBe(1)
   })
 })
