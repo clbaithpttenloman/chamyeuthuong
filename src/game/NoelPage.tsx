@@ -40,6 +40,7 @@ import {
   type ReactNode,
 } from 'react'
 import type React from 'react'
+import { Link } from 'react-router-dom'
 import { Scene, type TreeGift } from './Scene.tsx'
 import { focusGiftButton } from './focusReturn.ts'
 import { nextPollDelay } from './poll.ts'
@@ -75,8 +76,10 @@ import { isInAppBrowser } from '../campaign/inAppBrowser.ts'
 
 // GiftSheet is lazy to avoid loading CardView + timelines on first tree render
 const GiftSheet = lazy(() => import('./GiftSheet.tsx'))
-// GoogleSignIn is lazy to avoid loading GSI logic until actually needed
-const GoogleSignIn = lazy(() => import('../auth/GoogleSignIn.tsx'))
+/** Path + query of the current page, so sign-in returns the player here. */
+function currentPath(): string {
+  return window.location.pathname + window.location.search
+}
 // Game dialogs — lazy to avoid loading them on initial tree render
 const CreateGift = lazy(() => import('./CreateGift.tsx'))
 const Leaderboard = lazy(() => import('./Leaderboard.tsx'))
@@ -115,11 +118,9 @@ function flatToNoelGift(g: NoelGiftFlat): NoelGift {
 
 function SignInDialog({
   onClose,
-  onSignedIn,
   returnFocusRef,
 }: {
   onClose: () => void
-  onSignedIn: () => void
   returnFocusRef?: React.RefObject<HTMLElement | null>
 }): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -147,9 +148,11 @@ function SignInDialog({
             ✕
           </button>
         </div>
-        <Suspense fallback={<p className="admin-loading">Đang tải…</p>}>
-          <GoogleSignIn onSignedIn={onSignedIn} />
-        </Suspense>
+        <p>Tạo tài khoản bằng tên đăng nhập và mật khẩu, rồi quay lại đây để thả tim.</p>
+        <p className="noel-signin-links">
+          <Link to={`/dang-nhap?next=${encodeURIComponent(currentPath())}`}>Đăng nhập</Link>{' · '}
+          <Link to={`/dang-ky?next=${encodeURIComponent(currentPath())}`}>Đăng ký</Link>
+        </p>
       </div>
     </div>
   )
@@ -510,11 +513,6 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   }, [])
 
   // ── After sign-in ─────────────────────────────────────────────────────────
-  const handleSignedIn = useCallback(() => {
-    setSignInVisible(false)
-    refreshMe().catch(() => {})
-  }, [refreshMe])
-
   // ── Close sign-in ─────────────────────────────────────────────────────────
   const handleCloseSignIn = useCallback(() => setSignInVisible(false), [])
 
@@ -762,7 +760,6 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
         <ErrorBoundary fallback={<p style={{ padding: '1rem', color: '#ef4444' }}>Không tải được đăng nhập. <button type="button" onClick={() => window.location.reload()}>Tải lại</button></p>}>
           <SignInDialog
             onClose={handleCloseSignIn}
-            onSignedIn={handleSignedIn}
             returnFocusRef={signinReturnRef as React.RefObject<HTMLElement | null>}
           />
         </ErrorBoundary>

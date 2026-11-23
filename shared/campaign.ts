@@ -20,6 +20,8 @@ export const RESERVED_SLUGS: Set<string> = new Set([
   'assets',
   'theme',
   'g',
+  'dang-ky',
+  'dang-nhap',
 ])
 
 /** True iff the value is a valid, non-reserved campaign slug. */

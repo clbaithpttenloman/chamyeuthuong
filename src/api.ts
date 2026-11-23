@@ -2,7 +2,7 @@
  * Typed fetch client for the backend API.
  *
  * Public endpoints: no auth headers.
- * Admin endpoints (/api/admin/*): X-Admin-Email + X-Requested-With (CSRF).
+ * Admin endpoints (/api/admin/*): session cookie + X-Requested-With (CSRF).
  * Auth/session endpoints (/api/auth/*, /api/me): X-Requested-With only (session cookie).
  * Campaign public endpoints (/api/campaigns/*): plain fetch, no auth.
  */
@@ -57,11 +57,15 @@ export type AdminRow = {
 
 // ── Auth / session types ──────────────────────────────────────────────────
 
-/** Signed-in user shape returned by /api/me and /api/auth/google. */
+/** Signed-in user shape returned by /api/me and the account endpoints (ADR-9). */
 export type MeUser = {
+  id?: number
+  username?: string | null
   nickname: string
   className: string
+  banned?: boolean
   isAdmin: boolean
+  mustChangePassword?: boolean
 }
 
 // ── Campaign types ────────────────────────────────────────────────────────
@@ -151,32 +155,14 @@ export function messageFor(e: unknown): string {
   return 'Lỗi kết nối, vui lòng thử lại.'
 }
 
-// ── sessionStorage email helpers ─────────────────────────────────────────
-
-const EMAIL_KEY = 'adminEmail'
-
-export function getAdminEmail(): string | null {
-  return sessionStorage.getItem(EMAIL_KEY)
-}
-
-export function setAdminEmail(email: string): void {
-  sessionStorage.setItem(EMAIL_KEY, email)
-}
-
-export function clearAdminEmail(): void {
-  sessionStorage.removeItem(EMAIL_KEY)
-}
-
 // ── Core fetch helpers ────────────────────────────────────────────────────
 
-/** Admin fetch: adds X-Requested-With + X-Admin-Email (if stored). */
+/** Admin fetch: the session cookie carries the admin identity; X-Requested-With guards CSRF. */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
     ...(init.headers as Record<string, string>),
     'X-Requested-With': 'fetch',
   }
-  const email = getAdminEmail()
-  if (email) headers['X-Admin-Email'] = email
   return fetch(path, { ...init, headers })
 }
 
@@ -191,7 +177,6 @@ async function sessionFetch(path: string, init: RequestInit = {}): Promise<Respo
 
 async function expectOk(res: Response): Promise<Response> {
   if (!res.ok) {
-    if (res.status === 401) clearAdminEmail()
     let code = 'unknown'
     try {
       const body = await res.json() as { error?: string }
@@ -202,7 +187,7 @@ async function expectOk(res: Response): Promise<Response> {
   return res
 }
 
-/** Like expectOk but does NOT clear the admin email (for session-based auth endpoints). */
+/** Throws ApiError with the server's error code for any non-2xx response. */
 async function sessionExpectOk(res: Response): Promise<Response> {
   if (!res.ok) {
     let code = 'unknown'
@@ -292,6 +277,69 @@ export async function getMe(): Promise<{ user: MeUser | null; isAdmin: boolean }
   const res = await fetch('/api/me', { headers: { 'X-Requested-With': 'fetch' } })
   if (!res.ok) return { user: null, isAdmin: false }
   return res.json() as Promise<{ user: MeUser | null; isAdmin: boolean }>
+}
+
+/** POST /api/auth/register — creates the account and signs it in. */
+export async function register(input: { username: string; password: string; nickname: string; className: string }): Promise<MeUser> {
+  const res = await sessionExpectOk(await sessionFetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }))
+  return (await res.json() as { user: MeUser }).user
+}
+
+/** POST /api/auth/login — signs in with username and password. */
+export async function login(input: { username: string; password: string }): Promise<MeUser> {
+  const res = await sessionExpectOk(await sessionFetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }))
+  return (await res.json() as { user: MeUser }).user
+}
+
+/** POST /api/me/password — changes the password; the server issues a new session cookie. */
+export async function changePassword(input: { current: string; next: string }): Promise<MeUser> {
+  const res = await sessionExpectOk(await sessionFetch('/api/me/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }))
+  return (await res.json() as { user: MeUser }).user
+}
+
+export type AdminAccount = { userId: number; username: string | null; nickname: string; grantedAt: string; grantedBy: string }
+export type AuditRow = { id: number; actor: number | null; action: string; targetUserId: number | null; at: string }
+
+/** GET /api/admin/admins — every account with the admin role. */
+export async function listAdminAccounts(): Promise<AdminAccount[]> {
+  return (await expectOk(await apiFetch('/api/admin/admins'))).json() as Promise<AdminAccount[]>
+}
+
+/** POST /api/admin/admins {username} — grants the admin role to an existing account. */
+export async function grantAdminRole(username: string): Promise<void> {
+  await expectOk(await apiFetch('/api/admin/admins', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  }))
+}
+
+/** DELETE /api/admin/admins/<userId> — revokes the admin role. */
+export async function revokeAdminRole(userId: number): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/admins/${userId}`, { method: 'DELETE' }))
+}
+
+/** POST /api/admin/users/<id>/password — returns the one-time temporary password. */
+export async function resetUserPassword(userId: number): Promise<string> {
+  const res = await expectOk(await apiFetch(`/api/admin/users/${userId}/password`, { method: 'POST' }))
+  return (await res.json() as { tempPassword: string }).tempPassword
+}
+
+/** GET /api/admin/audit — newest 200 audit rows. */
+export async function listAuditRows(): Promise<AuditRow[]> {
+  return (await expectOk(await apiFetch('/api/admin/audit'))).json() as Promise<AuditRow[]>
 }
 
 /** PUT /api/me — update nickname (1–30 chars) and className (≤10 chars). */

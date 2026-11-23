@@ -2,7 +2,7 @@
  * src/routes.ts — React Router route definitions.
  *
  * Exported as ROUTES so App.tsx and tests can reference them directly.
- * Routes: / | /gui-thiep | /t/:token | /ve-clb-ai | /admin | /:slug/g/:publicId | /:slug | * (not-found)
+ * Routes: / | /gui-thiep | /t/:token | /ve-clb-ai | /admin | /dang-ky | /dang-nhap | /:slug/g/:publicId | /:slug | * (not-found)
  *
  * /:slug/g/:publicId — share link (FR-25a); renders CampaignPage which passes focusPublicId
  *   to NoelPage, rotating the tree to that gift and opening the GiftSheet on mount.
@@ -25,7 +25,9 @@ import About from './pages/About'
 import Admin from './pages/Admin'
 import CampaignPage from './pages/CampaignPage'
 import Home from './pages/Home'
+import Login from './pages/Login'
 import QrPage from './pages/QrPage'
+import Register from './pages/Register'
 import SendPage from './pages/SendPage'
 
 export type RouteEntry = { path: string; element: ReactNode }
@@ -56,6 +58,8 @@ export const ROUTES: RouteEntry[] = [
   { path: '/t/:token', element: createElement(QrPage) },
   { path: '/ve-clb-ai', element: createElement(About) },
   { path: '/admin', element: createElement(Admin) },
+  { path: '/dang-ky', element: createElement(Register) },
+  { path: '/dang-nhap', element: createElement(Login) },
   // Share link: /:slug/g/:publicId — more specific than /:slug, so placed first
   // CampaignPage reads both params; passes focusPublicId to NoelPage (FR-25a)
   { path: '/:slug/g/:publicId', element: createElement(CampaignPage) },

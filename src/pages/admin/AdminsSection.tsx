@@ -1,176 +1,195 @@
 /**
- * AdminsSection — manage which emails have admin access.
- * Extracted from Admin.tsx so each section lives in its own file.
+ * AdminsSection — who holds the admin role (ADR-9).
+ *
+ * Admins are accounts, not emails: grant by username, revoke from the list, reset a password
+ * (shown once), and read the audit log. The server enforces the rules (no self-revoke, never the
+ * last admin); this section only shows the refusal in Vietnamese.
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
-  type AdminRow,
   ApiError,
-  addAdmin,
-  listAdmins,
-  messageFor,
-  removeAdmin,
+  grantAdminRole,
+  listAdminAccounts,
+  listAuditRows,
+  resetUserPassword,
+  revokeAdminRole,
+  type AdminAccount,
+  type AuditRow,
 } from '../../api'
 
-function isValidEmailFormat(raw: string): boolean {
-  const trimmed = raw.trim()
-  if (!/^[\x00-\x7F]*$/.test(trimmed)) return false
-  const email = trimmed.toLowerCase()
-  if (!email || email.length > 254) return false
-  const atIdx = email.indexOf('@')
-  if (atIdx <= 0 || atIdx !== email.lastIndexOf('@')) return false
-  const local = email.slice(0, atIdx)
-  const domain = email.slice(atIdx + 1)
-  if (!/^[a-z0-9._%+\-]+$/.test(local)) return false
-  const labels = domain.split('.')
-  if (labels.length < 2) return false
-  return labels.every((l) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(l))
+type Props = { onAccessError: (e: unknown) => boolean }
+
+const ERROR_TEXT: Record<string, string> = {
+  not_found: 'Không tìm thấy tài khoản với tên đăng nhập này.',
+  conflict: 'Tài khoản này đã là quản trị viên.',
+  cannot_revoke_self: 'Bạn không thể tự gỡ quyền quản trị của mình.',
+  last_admin: 'Phải còn ít nhất một quản trị viên.',
+  bad_request: 'Dữ liệu không hợp lệ.',
+  unavailable: 'Có lỗi xảy ra, vui lòng thử lại.',
 }
 
-export default function AdminsSection({
-  onAccessError,
-}: {
-  onAccessError: (e: unknown) => boolean
-}) {
-  const [admins, setAdmins] = useState<AdminRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
-  const [emailInput, setEmailInput] = useState('')
+function textFor(e: unknown): string {
+  if (e instanceof ApiError) return ERROR_TEXT[e.code] ?? 'Có lỗi xảy ra, vui lòng thử lại.'
+  return 'Lỗi kết nối, vui lòng thử lại.'
+}
 
-  useEffect(() => {
-    setLoading(true)
-    listAdmins()
-      .then((rows) => { setAdmins(rows) })
-      .catch((e) => {
-        if (!onAccessError(e)) {
-          setError(messageFor(e))
-        }
-      })
-      .finally(() => { setLoading(false) })
+const ACTION_TEXT: Record<string, string> = {
+  first_account: 'Tài khoản đầu tiên',
+  reset_password: 'Đặt lại mật khẩu',
+  grant_admin: 'Cấp quyền quản trị',
+  revoke_admin: 'Gỡ quyền quản trị',
+  ban: 'Khóa tài khoản',
+  unban: 'Mở khóa tài khoản',
+  delete_gift: 'Xóa quà',
+  remove_tombstone: 'Gỡ khóa đã xóa',
+}
+
+export default function AdminsSection({ onAccessError }: Props) {
+  const [admins, setAdmins] = useState<AdminAccount[]>([])
+  const [audit, setAudit] = useState<AuditRow[]>([])
+  const [username, setUsername] = useState('')
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [tempPassword, setTempPassword] = useState<{ userId: number; value: string } | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const [a, log] = await Promise.all([listAdminAccounts(), listAuditRows()])
+      setAdmins(a)
+      setAudit(log)
+    } catch (e) {
+      if (!onAccessError(e)) setError(textFor(e))
+    }
   }, [onAccessError])
 
-  async function handleAdd(e: React.FormEvent) {
+  useEffect(() => { void load() }, [load])
+
+  async function handleGrant(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-    if (!isValidEmailFormat(emailInput)) {
-      setError('Email không hợp lệ')
-      return
-    }
+    setMessage(null)
+    const name = username.trim().toLowerCase()
+    if (!name) return
     try {
-      const created = await addAdmin(emailInput)
-      setAdmins((as) => [...as, created])
-      setAdding(false)
-      setEmailInput('')
+      await grantAdminRole(name)
+      setUsername('')
+      setMessage(`Đã cấp quyền quản trị cho ${name}.`)
+      await load()
     } catch (err) {
-      if (!onAccessError(err)) {
-        if (err instanceof ApiError && err.status === 409) {
-          setError('Email đã là quản trị viên')
-        } else if (err instanceof ApiError && err.status === 400) {
-          setError('Email không hợp lệ')
-        } else {
-          setError(messageFor(err))
-        }
-      }
+      if (!onAccessError(err)) setError(textFor(err))
     }
   }
 
-  async function handleRemove(a: AdminRow) {
-    if (!confirm(`Xóa quản trị viên "${a.email}"? Hành động này không thể hoàn tác.`)) return
+  async function handleRevoke(userId: number, label: string) {
     setError(null)
+    setMessage(null)
     try {
-      await removeAdmin(a.id)
-      setAdmins((as) => as.filter((x) => x.id !== a.id))
+      await revokeAdminRole(userId)
+      setMessage(`Đã gỡ quyền quản trị của ${label}.`)
+      await load()
     } catch (err) {
-      if (!onAccessError(err)) {
-        if (err instanceof ApiError && err.status === 409) {
-          setError('Không thể xóa quản trị viên cuối cùng')
-        } else {
-          setError(messageFor(err))
-        }
-      }
+      if (!onAccessError(err)) setError(textFor(err))
+    }
+  }
+
+  async function handleReset(userId: number) {
+    setError(null)
+    setMessage(null)
+    try {
+      const value = await resetUserPassword(userId)
+      setTempPassword({ userId, value })
+      await load()
+    } catch (err) {
+      if (!onAccessError(err)) setError(textFor(err))
     }
   }
 
   return (
-    <div>
-      <div className="admin-subsection-header">
-        <h2>Quản trị viên</h2>
-        <button
-          onClick={() => { setAdding(true); setError(null) }}
-          disabled={adding}
-        >
-          + Thêm quản trị viên
-        </button>
-      </div>
+    <div className="admins-section">
+      <h2>Quản trị viên</h2>
+      {error && <p className="admin-signin-error" role="alert">{error}</p>}
+      {message && <p role="status">{message}</p>}
 
-      {error && <p className="admin-error" role="alert">{error}</p>}
+      <form className="admin-form" onSubmit={(e) => { void handleGrant(e) }}>
+        <label htmlFor="admin-grant-username">
+          Tên đăng nhập cần cấp quyền
+          <input
+            id="admin-grant-username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            maxLength={20}
+            autoComplete="off"
+          />
+        </label>
+        <div className="form-actions">
+          <button type="submit" disabled={!username.trim()}>Cấp quyền quản trị</button>
+        </div>
+      </form>
 
-      {adding && (
-        <form className="admin-form" onSubmit={(e) => { void handleAdd(e) }}>
-          <h2>Thêm quản trị viên</h2>
-          <label>
-            Email <span aria-hidden="true">*</span>
-            <input
-              type="email"
-              value={emailInput}
-              onChange={(e) => setEmailInput(e.target.value)}
-              maxLength={254}
-              required
-              autoFocus
-            />
-          </label>
-          <div className="form-actions">
-            <button type="submit">Thêm</button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => { setAdding(false); setEmailInput(''); setError(null) }}
-            >
-              Hủy
-            </button>
-          </div>
-        </form>
-      )}
+      <table className="admin-table">
+        <thead>
+          <tr>
+            <th scope="col">Tên đăng nhập</th>
+            <th scope="col">Biệt danh</th>
+            <th scope="col">Cấp lúc</th>
+            <th scope="col"><span className="sr-only">Thao tác</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {admins.map((a) => (
+            <tr key={a.userId}>
+              <td>{a.username ?? '—'}</td>
+              <td>{a.nickname}</td>
+              <td>{new Date(a.grantedAt).toLocaleString('vi-VN')}</td>
+              <td>
+                <button type="button" className="btn-ghost" onClick={() => { void handleReset(a.userId) }}>
+                  Đặt lại mật khẩu
+                </button>{' '}
+                <button type="button" className="btn-ghost" onClick={() => { void handleRevoke(a.userId, a.username ?? `#${a.userId}`) }}>
+                  Gỡ quyền
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
 
-      {loading && <p className="admin-loading">Đang tải...</p>}
-
-      {!loading && admins.length === 0 && (
-        <p className="admin-empty">Chưa có quản trị viên nào.</p>
-      )}
-
-      {!loading && admins.length > 0 && (
-        <div className="table-wrap">
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Thêm bởi</th>
-                <th>Ngày thêm</th>
-                <th>Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {admins.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.email}</td>
-                  <td>{a.created_by}</td>
-                  <td>{new Date(a.created_at).toLocaleDateString('vi-VN')}</td>
-                  <td className="admin-actions">
-                    <button
-                      onClick={() => { void handleRemove(a) }}
-                      className="btn-danger"
-                      aria-label={`Xóa quản trị viên ${a.email}`}
-                    >
-                      Xóa
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {tempPassword && (
+        <div role="status" className="temp-password">
+          <p>
+            Mật khẩu tạm thời cho tài khoản #{tempPassword.userId} (chỉ hiện một lần, có hiệu lực 72 giờ):
+          </p>
+          <p><code>{tempPassword.value}</code></p>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => { void navigator.clipboard?.writeText(tempPassword.value) }}
+          >
+            Sao chép
+          </button>{' '}
+          <button type="button" className="btn-ghost" onClick={() => setTempPassword(null)}>Đã ghi lại</button>
         </div>
       )}
+
+      <h3>Lịch sử thao tác</h3>
+      <table className="admin-table">
+        <thead>
+          <tr>
+            <th scope="col">Thời gian</th>
+            <th scope="col">Thao tác</th>
+            <th scope="col">Tài khoản tác động</th>
+          </tr>
+        </thead>
+        <tbody>
+          {audit.map((r) => (
+            <tr key={r.id}>
+              <td>{new Date(r.at).toLocaleString('vi-VN')}</td>
+              <td>{ACTION_TEXT[r.action] ?? r.action}</td>
+              <td>{r.targetUserId ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

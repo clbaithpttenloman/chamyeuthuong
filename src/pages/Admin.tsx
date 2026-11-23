@@ -1,34 +1,19 @@
 /**
  * Admin — /admin
  *
- * Two authentication paths (Phase 1, legacy flag on):
- *   1. Google session: "Đăng nhập bằng Google" → useMe() detects isAdmin
- *   2. Legacy email: existing email form → listAdminTeachers() verify
+ * Signed in with a username and password (ADR-9). The account must hold the admin role and must not
+ * have to change its password. Anyone else is sent to /dang-nhap. There is no typed-email login.
  *
  * Admin sections:
  *   Duyệt thiệp | Mẫu thiệp | Thầy cô | Thư viện lời chúc | Thư viện ảnh
  *   Giới thiệu CLB | Quản trị viên | Chiến dịch
  *
- * CampaignsSection requires a Google session; it shows a hint when called via legacy email.
- *
- * First page load: at most 2 admin API calls
- *   1. getMe() — Google session detection (from useMe hook)
- *   2. listAdminTeachers() — legacy email verify + data for teacher filter
- *   AboutSection loads GET /api/admin/about only when that tab is opened.
+ * AboutSection loads GET /api/admin/about only when that tab is opened.
  */
-import { revokeAdminSession } from './admin/signOut.ts'
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { AdminTeacher } from '../../shared/api.ts'
-import {
-  ApiError,
-  clearAdminEmail,
-  getAdminEmail,
-  listAdminTeachers,
-  logout,
-  messageFor,
-  setAdminEmail,
-} from '../api'
-import GoogleSignIn from '../auth/GoogleSignIn.tsx'
+import { ApiError, listAdminTeachers, logout } from '../api'
 import { useMe } from '../auth/useMe.ts'
 import AboutSection from './admin/AboutSection.tsx'
 import AdminsSection from './admin/AdminsSection.tsx'
@@ -51,74 +36,15 @@ function useNoIndex() {
   }, [])
 }
 
-function isValidEmailFormat(raw: string): boolean {
-  const trimmed = raw.trim()
-  if (!/^[\x00-\x7F]*$/.test(trimmed)) return false
-  const email = trimmed.toLowerCase()
-  if (!email || email.length > 254) return false
-  const atIdx = email.indexOf('@')
-  if (atIdx <= 0 || atIdx !== email.lastIndexOf('@')) return false
-  const local = email.slice(0, atIdx)
-  const domain = email.slice(atIdx + 1)
-  if (!/^[a-z0-9._%+\-]+$/.test(local)) return false
-  const labels = domain.split('.')
-  if (labels.length < 2) return false
-  return labels.every((l) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(l))
-}
-
-// ── Sign-in page ──────────────────────────────────────────────────────────
-
-type SignInPageProps = {
-  emailError: string | null
-  onEmailSubmit: (e: string) => void
-  onGoogleSignedIn: () => void
-}
-
-function SignInPage({ emailError, onEmailSubmit, onGoogleSignedIn }: SignInPageProps) {
-  const [email, setEmail] = useState('')
-
+/** Shown when nobody is signed in, or the signed-in account is not an admin. */
+function SignInPage({ message }: { message: string | null }) {
   return (
     <section className="admin-signin">
       <h1>Quản lý</h1>
-
-      {/* Google sign-in (primary path in Phase 1+) */}
-      <div style={{ marginBottom: '1.5rem' }}>
-        <h2 style={{ fontSize: '1rem', marginTop: 0, marginBottom: '0.75rem' }}>
-          Đăng nhập bằng Google
-        </h2>
-        <GoogleSignIn onSignedIn={onGoogleSignedIn} />
-      </div>
-
-      <hr style={{ margin: '1.5rem 0', borderColor: '#fed7aa' }} />
-
-      {/* Legacy email path (while ADMIN_LEGACY_LOGIN = "1") */}
-      <div>
-        <h2 style={{ fontSize: '1rem', marginTop: 0, marginBottom: '0.5rem' }}>
-          Hoặc nhập email quản trị
-        </h2>
-        {emailError && <p className="admin-signin-error" role="alert">{emailError}</p>}
-        <form
-          className="admin-form"
-          style={{ background: 'none', border: 'none', padding: 0 }}
-          onSubmit={(e) => { e.preventDefault(); onEmailSubmit(email.trim().toLowerCase()) }}
-        >
-          <label htmlFor="admin-email-input">
-            Email
-            <input
-              id="admin-email-input"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              maxLength={254}
-              required
-              autoComplete="email"
-            />
-          </label>
-          <div className="form-actions">
-            <button type="submit">Đăng nhập bằng email</button>
-          </div>
-        </form>
-      </div>
+      {message && <p className="admin-signin-error" role="alert">{message}</p>}
+      <p>
+        <Link to="/dang-nhap?next=/admin">Đăng nhập bằng tên đăng nhập và mật khẩu</Link>
+      </p>
     </section>
   )
 }
@@ -144,138 +70,83 @@ const SECTION_LABELS: Record<Section, string> = {
 export default function Admin() {
   useNoIndex()
 
-  // ── Google session path ──────────────────────────────────────────────
   const me = useMe()
-  // Track whether Google sign-in was confirmed in this session
-  // (avoids depending on me.isAdmin after a re-render that might not have refreshed yet).
-  const [googleVerified, setGoogleVerified] = useState(false)
-
-  // Sync googleVerified when useMe resolves an existing session.
-  useEffect(() => {
-    if (!me.loading && me.isAdmin) setGoogleVerified(true)
-  }, [me.loading, me.isAdmin])
-
-  // ── Legacy email path ────────────────────────────────────────────────
-  const [adminEmail, setAdminEmailState] = useState<string | null>(() => getAdminEmail())
-  const [emailError, setEmailError] = useState<string | null>(null)
-  const [signOutError, setSignOutError] = useState<string | null>(null)
-  const [legacyVerified, setLegacyVerified] = useState(false)
-  const [checking, setChecking] = useState(false)
+  const verified = me.user !== null && me.isAdmin && !me.user.mustChangePassword
 
   const [teachers, setTeachers] = useState<AdminTeacher[]>([])
   const [pendingCount, setPendingCount] = useState(0)
   /** Count of reported gifts awaiting review (shown in the "Kiểm duyệt quà" tab badge). */
   const [giftReviewCount, setGiftReviewCount] = useState(0)
-
+  const [signOutError, setSignOutError] = useState<string | null>(null)
   const [section, setSection] = useState<Section>('moderation')
 
-  // Combined: verified if either path succeeds.
-  const verified = googleVerified || legacyVerified
-
+  /** Session expired or revoked (401) → re-read /api/me so the sign-in page shows. */
   const handleAccessError = useCallback((e: unknown): boolean => {
     if (e instanceof ApiError) {
       if (e.status === 401) {
-        clearAdminEmail()
-        setAdminEmailState(null)
-        setLegacyVerified(false)
-        setChecking(false)
-        setEmailError('Email này chưa có quyền quản trị')
         setTeachers([])
+        me.refresh()
         return true
       }
       if (e.status === 403) return true
     }
     return false
-  }, [])
+  }, [me])
 
   /** Stable callback for GiftModerationSection so loadGifts is not re-fired on count changes. */
   const handleReportedCountChange = useCallback((count: number) => {
     setGiftReviewCount(count)
   }, [])
 
-  // Load teachers for the legacy email path
+  // Teachers feed the moderation and teacher tabs. Loaded once the admin is verified.
   useEffect(() => {
-    if (!adminEmail || legacyVerified) return
-    let cancelled = false
-    setChecking(true)
-    setEmailError(null)
-    listAdminTeachers()
-      .then((ts) => {
-        if (cancelled) return
-        setTeachers(ts)
-        const pending = ts.reduce((sum, t) => sum + t.cardCounts.pending, 0)
-        setPendingCount(pending)
-        setLegacyVerified(true)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        clearAdminEmail()
-        setAdminEmailState(null)
-        if (e instanceof ApiError && e.status === 401) {
-          setEmailError('Email này chưa có quyền quản trị')
-        } else {
-          setEmailError(messageFor(e))
-        }
-      })
-      .finally(() => { if (!cancelled) setChecking(false) })
-    return () => { cancelled = true }
-  }, [adminEmail, legacyVerified])
-
-  // Load teachers for the Google session path (after googleVerified becomes true)
-  useEffect(() => {
-    if (!googleVerified || teachers.length > 0) return
+    if (!verified || teachers.length > 0) return
     listAdminTeachers()
       .then((ts) => {
         setTeachers(ts)
         setPendingCount(ts.reduce((sum, t) => sum + t.cardCounts.pending, 0))
       })
       .catch(() => { /* non-critical; ModerationSection handles its own load */ })
-  }, [googleVerified, teachers.length])
-
-  function handleEmailSubmit(email: string) {
-    if (!isValidEmailFormat(email)) { setEmailError('Email không hợp lệ'); return }
-    setAdminEmail(email)
-    setAdminEmailState(email)
-    setEmailError(null)
-  }
+  }, [verified, teachers.length])
 
   async function handleSignOut() {
-    // Revoke the Google session if one is active; on failure stay signed in and say so.
     setSignOutError(null)
-    const { ok } = await revokeAdminSession(me.user !== null || googleVerified, logout)
-    if (!ok) {
-      setSignOutError('Đăng xuất thất bại. Phiên đăng nhập vẫn còn, vui lòng thử lại.')
-      return
+    try {
+      await logout()
+    } catch (e) {
+      // 401: the session is already gone, so the admin is signed out.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setSignOutError('Đăng xuất thất bại. Phiên đăng nhập vẫn còn, vui lòng thử lại.')
+        return
+      }
     }
-    // Reset all auth state
-    setGoogleVerified(false)
-    clearAdminEmail()
-    setAdminEmailState(null)
-    setLegacyVerified(false)
-    setChecking(false)
-    setEmailError(null)
     setTeachers([])
     setPendingCount(0)
     setSection('moderation')
+    me.refresh()
   }
 
-  // Show loading while Google session check is in progress (before legacy email can help)
+  if (me.loading) {
+    return <section className="admin-signin"><p>Đang kiểm tra…</p></section>
+  }
   if (!verified) {
-    if (me.loading || checking) {
-      return <section className="admin-signin"><p>Đang kiểm tra…</p></section>
+    if (me.user !== null && me.isAdmin && me.user.mustChangePassword) {
+      return <SignInPage message="Bạn cần đổi mật khẩu trước khi vào trang quản lý." />
     }
-    return (
-      <SignInPage
-        emailError={emailError}
-        onEmailSubmit={handleEmailSubmit}
-        onGoogleSignedIn={() => { me.refresh(); setGoogleVerified(true) }}
-      />
-    )
+    if (me.user !== null) {
+      return (
+        <section className="admin-signin">
+          <h1>Quản lý</h1>
+          <p className="admin-signin-error" role="alert">Tài khoản này không có quyền quản trị.</p>
+          <button type="button" className="btn-ghost" onClick={() => { void handleSignOut() }}>Đăng xuất</button>
+          {signOutError && <p className="admin-signin-error" role="alert">{signOutError}</p>}
+        </section>
+      )
+    }
+    return <SignInPage message={null} />
   }
 
-  const signedInLabel = me.user?.nickname
-    ? `${me.user.nickname} (Google)`
-    : adminEmail ?? ''
+  const signedInLabel = me.user?.username ?? me.user?.nickname ?? ''
 
   return (
     <section className="admin-page">
@@ -288,7 +159,7 @@ export default function Admin() {
             onClick={() => { void handleSignOut() }}
             className="btn-ghost"
           >
-            {googleVerified ? 'Đăng xuất' : 'Đổi email'}
+            Đăng xuất
           </button>
           {signOutError && <p className="admin-signin-error" role="alert">{signOutError}</p>}
         </div>
@@ -330,7 +201,8 @@ export default function Admin() {
             onReportedCountChange={handleReportedCountChange}
             onAccessError={handleAccessError}
           />
-        )}        {section === 'templates' && (
+        )}
+        {section === 'templates' && (
           <TemplateSection onAccessError={handleAccessError} />
         )}
         {section === 'teachers' && (
