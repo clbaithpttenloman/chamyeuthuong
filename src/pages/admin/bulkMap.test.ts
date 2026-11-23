@@ -22,6 +22,7 @@ import { handleAdmin } from '../../../worker/admin.ts'
 import { newToken } from '../../../worker/token.ts'
 import { testDb, type D1 } from '../../../worker/testDb.ts'
 import { TEST_EMAIL } from '../../../worker/testAuth.ts'
+import { legacyToken, seedAdminEmail } from '../../../worker/testGoogle.ts'
 import type { BulkTeacherInputItem } from '../../../shared/api.ts'
 
 function makeEnv(db: D1) {
@@ -48,7 +49,7 @@ function makeEnv(db: D1) {
 
 function adminReq(method: string, path: string, body?: unknown) {
   const headers: Record<string, string> = {
-    'X-Admin-Email': TEST_EMAIL,
+    Cookie: `__Host-cyt_s=${legacyToken(TEST_EMAIL)}`,
     'CF-Connecting-IP': '1.2.3.4',
   }
   if (method !== 'GET') headers['X-Requested-With'] = 'fetch'
@@ -67,9 +68,7 @@ beforeEach(async () => {
   ;({ db } = testDb())
   seq = 0
   vi.mocked(newToken).mockImplementation(() => `bm${String(seq++).padStart(14, '0')}`)
-  const now = new Date().toISOString()
-  await db.prepare('INSERT INTO admin (email, created_at, created_by) VALUES (?, ?, ?)')
-    .bind(TEST_EMAIL, now, 'test-seed').run()
+  await seedAdminEmail(db, TEST_EMAIL)
 })
 
 // ── toBulkItems unit tests ─────────────────────────────────────────────────
