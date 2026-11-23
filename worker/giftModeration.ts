@@ -201,7 +201,12 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
   const tombstoneDeleteMatch = pathname.match(/^\/api\/admin\/tombstones\/(\d+)$/)
   if (request.method === 'DELETE' && tombstoneDeleteMatch) {
     const tombstoneId = parseInt(tombstoneDeleteMatch[1]!, 10)
-    await env.DB.prepare('DELETE FROM banned_identity WHERE rowid = ?').bind(tombstoneId).run()
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM banned_identity WHERE rowid = ?').bind(tombstoneId),
+      env.DB.prepare(
+        'INSERT INTO admin_audit (actor_user_id, action, target_user_id, at) VALUES (?, ?, NULL, ?)',
+      ).bind(adminUserId ?? null, 'remove_tombstone', new Date().toISOString()),
+    ])
     return json({ ok: true })
   }
 

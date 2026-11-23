@@ -298,9 +298,16 @@ export function legacyToken(email: string): string {
  * Pin `google_sub` for an existing admin row.
  */
 export async function pinAdminSub(db: D1, email: string, sub: string): Promise<void> {
+  // Phase 2b: there is no admin.google_sub any more. "Pin" now means: the user who owns this
+  // Google subject becomes an admin (admin_role). Email alone never grants admin.
+  const owner = await db
+    .prepare("SELECT user_id FROM user_identity WHERE provider = 'google' AND subject = ?")
+    .bind(sub)
+    .first<{ user_id: number }>()
+  if (!owner) return
   await db
-    .prepare('UPDATE admin SET google_sub = ? WHERE email = ?')
-    .bind(sub, email.toLowerCase().trim())
+    .prepare('INSERT OR IGNORE INTO admin_role (user_id, granted_at, granted_by) VALUES (?, ?, ?)')
+    .bind(owner.user_id, new Date().toISOString(), `test-pin:${email.toLowerCase().trim()}`)
     .run()
 }
 

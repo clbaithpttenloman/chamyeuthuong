@@ -1010,7 +1010,7 @@ describe('handleGiftModeration — Phase 2b tombstone', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { hashPassword } = (await import('./password.ts')) as any
 
-    const username = `p2btomb${Date.now()}`
+    const username = `p2btomb${Date.now()}`.slice(0, 20)
     const password = 'TombPass123!'
     const pepper = 'test-password-pepper-32bytesx!'
     const now = new Date().toISOString()
@@ -1028,7 +1028,8 @@ describe('handleGiftModeration — Phase 2b tombstone', () => {
     ).bind(userId, cred.hash, cred.salt, cred.iterations, now).run()
     const userToken = await createP2bSession(ptDb, userId)
 
-    const r = await handleAccounts(
+    const { default: appWorker } = (await import('./index.ts')) as { default: { fetch: (r: Request, e: unknown) => Promise<Response> } }
+    const r = await appWorker.fetch(
       new Request('https://x/api/me', {
         method: 'DELETE',
         headers: {
@@ -1057,7 +1058,7 @@ describe('handleGiftModeration — Phase 2b tombstone', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { hashPassword } = (await import('./password.ts')) as any
 
-    const username = `p2btomb2${Date.now()}`
+    const username = `p2btomb2${Date.now()}`.slice(0, 20)
     const googleSub = `tomb-g-${Date.now()}`
     const password = 'TombPass123!'
     const pepper = 'test-password-pepper-32bytesx!'
@@ -1080,7 +1081,8 @@ describe('handleGiftModeration — Phase 2b tombstone', () => {
     ).bind(userId, cred.hash, cred.salt, cred.iterations, now).run()
     const userToken = await createP2bSession(ptDb, userId)
 
-    await handleAccounts(
+    const { default: appWorker2 } = (await import('./index.ts')) as { default: { fetch: (r: Request, e: unknown) => Promise<Response> } }
+    await appWorker2.fetch(
       new Request('https://x/api/me', {
         method: 'DELETE',
         headers: {
