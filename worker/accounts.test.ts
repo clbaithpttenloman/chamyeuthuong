@@ -1222,3 +1222,20 @@ describe('fresh database bootstrap', () => {
     expect(admins!.c).toBe(1)
   })
 })
+
+// ── Regression: change password is rate limited before any hash (ADR-9) ────────
+
+describe('change password limit', () => {
+  it('USER_WRITE_LIMIT refusing → 429 and no hash computed', async () => {
+    const { userId } = await seedUser(db, { username: 'pwlimited', password: 'correct-horse-battery' })
+    const token = await sessionFor(db, userId)
+    const limited = { ...accountsEnv({ db }), USER_WRITE_LIMIT: { limit: async () => ({ success: false }) } }
+    const before = PASSWORD_STATS.hashes
+    const r = await worker.fetch(
+      jsonReq('POST', '/api/me/password', { current: 'correct-horse-battery', next: 'new-horse-staple-battery' }, { token }),
+      limited as never,
+    )
+    expect(r.status).toBe(429)
+    expect(PASSWORD_STATS.hashes).toBe(before)
+  })
+})

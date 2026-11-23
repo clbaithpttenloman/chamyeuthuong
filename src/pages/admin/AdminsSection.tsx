@@ -40,6 +40,8 @@ const ACTION_TEXT: Record<string, string> = {
   revoke_admin: 'Gỡ quyền quản trị',
   ban: 'Khóa tài khoản',
   unban: 'Mở khóa tài khoản',
+  hide_gift: 'Ẩn quà',
+  restore_gift: 'Khôi phục quà',
   delete_gift: 'Xóa quà',
   remove_tombstone: 'Gỡ khóa đã xóa',
 }

@@ -243,19 +243,28 @@ export async function handleGiftModeration(request: Request, env: GiftModeration
           "UPDATE gift SET status = 'visible', report_count = 0, status_before_ban = NULL " +
           "WHERE id = ? AND status != 'deleted'",
         ).bind(giftId),
+        // Audit in the same batch, only when the gift row changed (ADR-8, FR-36).
+        env.DB.prepare(
+          "INSERT INTO admin_audit (actor_user_id, action, target_user_id, at)" +
+          " SELECT ?, 'restore_gift', (SELECT user_id FROM gift WHERE id = ?), ? WHERE changes() = 1",
+        ).bind(adminUserId, giftId, new Date().toISOString()),
       ])
       // Check the gift UPDATE result (index 1) for 0 changes → 404
       if (result[1]!.meta.changes === 0) return json({ error: 'not_found' }, 404)
     } else {
       // Hide or delete: set status, clear status_before_ban (item 3: prevents a later unban
       // from using a stale saved status), 404 on 0 changes (unknown id or deleted gift).
-      const result = await env.DB
-        .prepare(
+      const audited = status === 'deleted' ? 'delete_gift' : 'hide_gift'
+      const result = await env.DB.batch([
+        env.DB.prepare(
           "UPDATE gift SET status = ?, status_before_ban = NULL WHERE id = ? AND status != 'deleted'",
-        )
-        .bind(status, giftId)
-        .run()
-      if (result.meta.changes === 0) return json({ error: 'not_found' }, 404)
+        ).bind(status, giftId),
+        env.DB.prepare(
+          "INSERT INTO admin_audit (actor_user_id, action, target_user_id, at)" +
+          " SELECT ?, ?, (SELECT user_id FROM gift WHERE id = ?), ? WHERE changes() = 1",
+        ).bind(adminUserId, audited, giftId, new Date().toISOString()),
+      ])
+      if (result[0]!.meta.changes === 0) return json({ error: 'not_found' }, 404)
     }
 
     return json({ ok: true })

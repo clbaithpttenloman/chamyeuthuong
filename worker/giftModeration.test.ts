@@ -250,6 +250,9 @@ describe('handleGiftModeration — PATCH gifts/<id>', () => {
     expect(r.status).toBe(200)
     const row = giftSqlite3.prepare('SELECT status FROM gift WHERE id = ?').get(giftId) as { status: string }
     expect(row.status).toBe('hidden_admin')
+    // FR-36: the moderation action is audited with the acting admin and the gift owner
+    const audit = giftSqlite3.prepare("SELECT action, target_user_id FROM admin_audit WHERE action = 'hide_gift'").get() as { action: string; target_user_id: number } | undefined
+    expect(audit?.target_user_id).toBe(ownId3)
   })
 
   it('delete → gift becomes deleted', async () => {

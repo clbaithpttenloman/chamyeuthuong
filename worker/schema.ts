@@ -108,7 +108,7 @@ export const SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS admin_audit (
   id              INTEGER PRIMARY KEY,
   actor_user_id   INTEGER,
-  action          TEXT    NOT NULL CHECK (action IN ('first_account','reset_password','grant_admin','revoke_admin','ban','unban','delete_gift','remove_tombstone')),
+  action          TEXT    NOT NULL CHECK (action IN ('first_account','reset_password','grant_admin','revoke_admin','ban','unban','hide_gift','restore_gift','delete_gift','remove_tombstone')),
   target_user_id  INTEGER,
   at              TEXT    NOT NULL
 )`,

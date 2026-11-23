@@ -87,7 +87,8 @@ async function revokeAdmin(db: D1, id: number, auth: AdminAuth): Promise<Respons
 
 async function resetPassword(db: D1, env: { PASSWORD_PEPPER?: string }, targetId: number, auth: AdminAuth): Promise<Response> {
   if (targetId === auth.userId) return error('bad_request')
-  const target = await db.prepare('SELECT 1 AS x FROM app_user WHERE id = ?').bind(targetId).first()
+  // Only accounts with a password identity can be reset (a Google-only account has no credential).
+  const target = await db.prepare('SELECT 1 AS x FROM password_credential WHERE user_id = ?').bind(targetId).first()
   if (!target) return error('not_found')
   if (!env.PASSWORD_PEPPER) return error('unavailable')
 

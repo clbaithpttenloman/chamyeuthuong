@@ -31,6 +31,7 @@ export type AccountsEnv = {
   AUTH_LIMIT: Limiter
   AUTH_SUB_LIMIT: Limiter
   REGISTER_LIMIT: Limiter
+  USER_WRITE_LIMIT?: Limiter
   PASSWORD_PEPPER?: string
   SUB_HMAC_KEY?: string
   IP_HMAC_KEY?: string
@@ -57,7 +58,7 @@ const IP_HASH_DAYS = 30
 const DUMMY_CREDENTIAL = {
   hash: 'W9jmdSYVrFNBy4R3Fh23WYhj9FWG5cstxwzh71ukoLw=',
   salt: 'BwcHBwcHBwcHBwcHBwcHBw==',
-  iterations: 50_000,
+  iterations: PBKDF2_ITERATIONS,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -457,6 +458,14 @@ export async function handleChangePassword(request: Request, env: AccountsEnv, d
 
   const session = await readSession(request, env.DB)
   if (!session) return error('unauthorized')
+  // Each attempt costs a PBKDF2 derivation, so the write limit runs before any hash (ADR-9, NFR-3).
+  // Fail closed: without the limiter binding the endpoint does not run.
+  if (!env.USER_WRITE_LIMIT) {
+    console.error('accounts: misconfigured')
+    return json({ error: 'misconfigured' }, 503)
+  }
+  const writeLimit = await env.USER_WRITE_LIMIT.limit({ key: String(session.userId) })
+  if (!writeLimit.success) return json({ error: 'rate_limited' }, 429)
 
   let body: { current?: unknown; next?: unknown }
   try {
