@@ -390,6 +390,7 @@ export function googleCredentialEnv(opts: { clientId?: string } = {}): GoogleCre
 
 /** Full env for `handleAuth` / `handleMe` (worker/me.ts). */
 export type MeTestEnv = {
+  PASSWORD_PEPPER?: string
   DB: D1
   GOOGLE_CLIENT_ID: string
   NONCE_KEY: string

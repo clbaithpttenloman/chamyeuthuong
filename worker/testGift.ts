@@ -122,6 +122,7 @@ export function giftModerationEnv(
  * Missing key MUST fail closed (refuse the deletion for banned users).
  */
 export type DeletionEnv = {
+  PASSWORD_PEPPER?: string
   DB: D1
   GOOGLE_CLIENT_ID: string
   NONCE_KEY: string

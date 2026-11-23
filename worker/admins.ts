@@ -85,7 +85,7 @@ async function revokeAdmin(db: D1, id: number, auth: AdminAuth): Promise<Respons
   return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } })
 }
 
-async function resetPassword(db: D1, env: Pick<Env, 'PASSWORD_PEPPER'>, targetId: number, auth: AdminAuth): Promise<Response> {
+async function resetPassword(db: D1, env: { PASSWORD_PEPPER?: string }, targetId: number, auth: AdminAuth): Promise<Response> {
   if (targetId === auth.userId) return error('bad_request')
   const target = await db.prepare('SELECT 1 AS x FROM app_user WHERE id = ?').bind(targetId).first()
   if (!target) return error('not_found')

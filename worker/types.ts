@@ -57,6 +57,8 @@ export type Env = {
   SUB_HMAC_KEY?: string
   /** Secret for HMAC-hashing IP addresses. Set via `wrangler secret put IP_HMAC_KEY`. */
   IP_HMAC_KEY?: string
+  /** Secret pepper for password hashing (HMAC before PBKDF2). Never rotated; back it up. */
+  PASSWORD_PEPPER?: string
   /** Set to '1' in Phase 1 to allow legacy X-Admin-Email login on 20/11 routes (transition only). */
   ADMIN_LEGACY_LOGIN?: string
   // ---- Phase 2: Gift tree rate limits ----

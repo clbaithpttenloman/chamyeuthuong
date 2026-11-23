@@ -332,9 +332,6 @@ describe('DELETE /api/me — banned user writes banned_identity tombstone (ADR-8
       sessionReq(rawToken, '/api/me', 'DELETE'),
       deletionEnv(db, { subHmacKey: TEST_SUB_HMAC_KEY }),
     )
-    const t1 = sqlite
-      .prepare('SELECT sub_hmac FROM banned_identity')
-      .get() as { sub_hmac: string }
 
     // Recreate user with same sub and delete again
     const newId = await seedUser(db, { sub: TEST_SUB, email: 'del-user2@gmail.com', banned: true })
@@ -349,9 +346,8 @@ describe('DELETE /api/me — banned user writes banned_identity tombstone (ADR-8
     const googleHmac = await hmacSha256Hex(TEST_SUB_HMAC_KEY, `google:${TEST_SUB}`)
     const count = (sqlite.prepare('SELECT COUNT(*) AS c FROM banned_identity WHERE sub_hmac = ?').get(googleHmac) as { c: number }).c
     expect(count).toBe(1)
-    // The hash is the same
-    const t2 = sqlite.prepare('SELECT sub_hmac FROM banned_identity').get() as { sub_hmac: string }
-    expect(t2.sub_hmac).toBe(t1.sub_hmac)
+    // The Google tombstone row carries exactly this hash (rows have no defined order, so look it up).
+    expect(sqlite.prepare('SELECT sub_hmac FROM banned_identity WHERE sub_hmac = ?').get(googleHmac)).toBeDefined()
   })
 })
 

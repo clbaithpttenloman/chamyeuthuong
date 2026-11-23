@@ -19,7 +19,7 @@
  */
 import { HttpError, json, readJson } from './http.ts'
 import { verifyOwnPassword } from './accounts.ts'
-import { verifyGoogleCredential, isGoogleAuthoritative } from './google.ts'
+import { verifyGoogleCredential } from './google.ts'
 import type { JWTVerifyGetKey } from './google.ts'
 import {
   SESSION_COOKIE,
