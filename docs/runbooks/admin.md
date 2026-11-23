@@ -2,7 +2,68 @@
 
 ---
 
-## Noel Campaign Setup (Phase 2, Launch 10/12/2026)
+## Accounts (Phase 2b)
+
+### Sign-In
+
+**Players and admins register and sign in with a username and password** (Phase 2b, ADR-9).
+
+- **Register:** `/dang-ky` — username (3–20 chars: a–z, 0–9, _), password (8–128 chars), nickname, class. **The first account registered on an empty database automatically becomes an admin.**
+- **Sign in:** `/dang-nhap` — username, password. 10 wrong attempts lock the username for 15 minutes.
+- **Forgot password:** Ask an admin to reset it via the admin page.
+
+### First Admin (Production Cut-Over)
+
+**Pre-check:** `SELECT COUNT(*) FROM app_user` must be 0 (or the table does not exist).
+
+**Procedure:**
+1. Create a Time Travel bookmark on the production D1 (Cloudflare Dashboard → D1 → select database → **Time Travel** tab). Name it `pre-noel-production` for reference.
+2. Deploy the new Worker code: `git push && npx wrangler deploy`
+3. Test the registration on a preview URL (if available, requires preview deployments enabled) **that uses the production D1**:
+   - Visit the preview URL and open `/dang-ky`
+   - Register a test account with a unique username (e.g., `testadmin2026`)
+   - Sign in and visit `/admin` — confirm you see the admin dashboard
+4. If the admin dashboard loaded, you have successfully registered the first account as admin. Delete this test account from the admin page and proceed.
+5. **If the admin dashboard shows 403 or lists other admins:** someone else registered first. Roll back immediately:
+   - In Cloudflare Workers, switch to the previous Worker version
+   - Restore the D1 bookmark (this discards all account registrations since the bookmark)
+   - Repeat the procedure (or rendezvous with colleagues to avoid a registration race)
+6. If the race was lost and rollback is complete, re-deploy and try again, unannounced, at a quieter time.
+7. After successful first registration, the other admins register and are granted admin roles in the admin page by the first admin.
+
+**Important:** Rolling back the Worker code re-enables the old typed-email login for the 20/11 endpoints only. The admin table is never modified by Phase 2b code, so a rollback is fully reversible.
+
+### Secrets (Never Rotate)
+
+**Required secrets** (Cloudflare Workers → Environments → Production → Secrets):
+
+- `PASSWORD_PEPPER`: 32 random hex characters (use `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put PASSWORD_PEPPER`). Never rotate this — rotating the pepper invalidates every password, and there is no recovery except admin-issued resets for every user.
+- `IP_HMAC_KEY`: 32 random hex characters. Used for registration rate-limit tracking (per IP, per day). Can be rotated if needed (old IP hashes are blanked after 30 days anyway).
+- `SUB_HMAC_KEY`: 32 random hex characters. Used for creating ban tombstones (deletion + ban evasion prevention). Never rotate this — rotating it invalidates all existing tombstones, so banned users can register again.
+
+**Backup:** Keep backups of all three secrets in the club's password manager. If lost, there is no recovery path; re-deploying with new secrets will invalidate passwords/bans.
+
+**Staging:** Use different secret values for staging (randomized, documented separately for load tests).
+
+### Registration Rate Limits
+
+Configured in `wrangler.jsonc`:
+- **REGISTER_IP_DAILY**: 300 (default) accounts per IP per calendar day (Vietnam time)
+- **REGISTER_GLOBAL_DAILY**: 2,000 (default) total accounts per day globally
+
+A school behind one NAT (all students sharing one IP) can register at 300/day. If the limit is hit during on-ramp, raise these variables in `wrangler.jsonc` and redeploy: `wrangler deploy`.
+
+If you need to adjust limits mid-event, edit `wrangler.jsonc`:
+```jsonc
+{
+  "vars": {
+    "REGISTER_IP_DAILY": "500",
+    "REGISTER_GLOBAL_DAILY": "5000"
+  }
+}
+```
+
+Then: `git add wrangler.jsonc && git commit -m "Raise registration caps" && git push`
 
 ### Step 1: Create the Campaign
 
@@ -29,6 +90,7 @@ Create or assign templates that will be available for students to choose backgro
 - `tree_slots`: 15 (gifts ranked 1–15 displayed on the tree, near the star first)
 - `ground_slots`: 10 (gifts ranked 16–25 on the ground below the tree)
 - `hearts_per_day`: 5 (each player gets 5 hearts per Vietnam day)
+- `heart_min_account_age_hours`: 24 (0–72). A new account must be this old before it can give hearts. Set 0 for a test campaign; keep the default for the live event so students cannot farm hearts with fresh accounts.
 - `gifts_per_user`: 3 (each player can create 3 non-deleted gifts in the campaign)
 - `report_threshold`: 3 (when 3 distinct users report a gift, it auto-hides)
 
@@ -68,77 +130,103 @@ If Noel 2026 needs to be taken offline before 24/12 23:59:
 
 ---
 
-## Schema Changes (Phase 2)
+## Noel Campaign Setup (Phase 2b, Launch 10/12/2026)
 
-### New Tables
+### New Tables (Phase 2b)
 
-Automatically created on first Phase 2 request; no manual SQL needed:
+Automatically created on first Phase 2b request; no manual SQL needed:
 
 ```sql
--- User accounts (Google ID tokens)
+-- User accounts (username + password identity)
 app_user (
-  id, google_sub UNIQUE, email, nickname, class_name, hd, banned, created_at, last_seen_at
+  id PK, nickname, class_name, banned 0|1, created_at, last_seen_at
 )
 
--- Session tokens (HttpOnly cookies, SHA-256 hashed)
-session (
-  token_hash PRIMARY KEY, user_id FK, expires_at, created_at, ip_hash
+-- User identities (password, Google later)
+user_identity (
+  id PK, user_id FK, provider (password|google), subject, 
+  email (Google only), hd (Google only), ip_hash (password registration tracking),
+  created_at, last_used_at,
+  UNIQUE(provider, subject)
 )
 
--- Wish tree gifts
+-- Password hashes (PBKDF2-SHA256)
+password_credential (
+  user_id PK FK, hash, salt, iterations, must_change 0|1, temp_expires_at,
+  failed_count, locked_until, updated_at
+)
+
+-- Admin role (role on the user, not the email)
+admin_role (
+  user_id PK FK→app_user, granted_at, granted_by
+)
+
+-- Admin audit log (kept 180 days)
+admin_audit (
+  id PK, actor_user_id, action, target_user_id NULL, at,
+  INDEX admin_audit_at ON admin_audit(at)
+)
+
+-- Ban tombstones (deletion + ban evasion prevention)
+banned_identity (
+  sub_hmac PK, created_at
+  -- sub_hmac = HMAC(SUB_HMAC_KEY, provider || ':' || subject)
+)
+
+-- Campaign (gift tree, 20/11, etc.)
+campaign (
+  id PK, slug UNIQUE, kind (teacher_cards|gift_tree), name, tagline,
+  content JSON, theme_colors JSON, settings JSON,
+  starts_at, ends_at, status (draft|active|closed), created_at, created_by,
+  UNIQUE INDEX one_active ON campaign(status) WHERE status = 'active'
+)
+
+-- Noel gifts
 gift (
-  id, public_id UNIQUE, campaign_id FK, user_id FK, box_style, ornament_style, layout,
-  background_template_id FK, font, ink, message, nickname, class_name, heart_count, report_count,
-  status (visible|hidden_auto|hidden_admin|deleted), status_before_ban, created_at
+  id PK, public_id UNIQUE, campaign_id FK, user_id FK, box_style, ornament_style,
+  layout, background_template_id FK, font, ink, message, nickname, class_name,
+  heart_count, report_count, status (visible|hidden_auto|hidden_admin|deleted),
+  status_before_ban, created_at,
+  INDEX gift_rank ON gift(campaign_id, status, heart_count DESC, created_at)
 )
 
--- Daily hearts (unique per user per gift per day)
+-- Daily hearts
 heart (
-  gift_id FK, user_id FK, day, created_at, PRIMARY KEY (gift_id, user_id)
+  gift_id FK CASCADE, user_id FK CASCADE, day TEXT, created_at,
+  PRIMARY KEY(gift_id, user_id),
+  INDEX heart_user_day ON heart(user_id, day)
 )
 
 -- Gift reports
 report (
-  gift_id FK, user_id FK, reason (inappropriate|spam|other), acknowledged, created_at,
-  PRIMARY KEY (gift_id, user_id)
-)
-
--- Banned account tombstones (user deletion + ban evasion prevention)
-banned_identity (
-  sub_hmac, created_at
-  -- sub_hmac = HMAC(SUB_HMAC_KEY, google_sub); no email, no content
+  gift_id FK CASCADE, user_id FK CASCADE, reason (inappropriate|spam|other),
+  acknowledged 0|1, created_at,
+  PRIMARY KEY(gift_id, user_id)
 )
 ```
 
 ### Existing Tables — New Columns
 
 ```sql
-ALTER TABLE campaign ADD COLUMN … (if not exists)
-  -- Noel campaigns use this table; created by admin API
-
 ALTER TABLE template ADD COLUMN campaign_id INTEGER NOT NULL DEFAULT 1
-  -- Associates templates with campaigns; 20/11 templates get campaign_id = 1
-
 ALTER TABLE wish ADD COLUMN campaign_id INTEGER NOT NULL DEFAULT 1
-  -- Unused in Phase 2 but added for consistency
-
 ALTER TABLE student_card ADD COLUMN campaign_id INTEGER NOT NULL DEFAULT 1
-  -- Unused in Phase 2 but added for consistency
+-- (Indexes added after the ADD COLUMN steps)
 
-ALTER TABLE admin ADD COLUMN google_sub TEXT
-  -- Stores the Google sub of the admin's first Google sign-in; never updated after
+-- Production 20/11 admin table is left untouched (not read, not written)
+ALTER TABLE admin ... -- unchanged
 ```
 
-### Indexes
+### Stale Branch Databases
 
-```sql
-CREATE INDEX idx_gift_rank ON gift (campaign_id, status, heart_count DESC, created_at)
-CREATE INDEX idx_heart_user_day ON heart (user_id, day)
-CREATE INDEX idx_report_user ON report (user_id)
-CREATE INDEX idx_template_campaign_id ON template (campaign_id)
-CREATE INDEX idx_wish_campaign_id ON wish (campaign_id)
-CREATE INDEX idx_student_card_campaign_id ON student_card (campaign_id)
+If you have a local or staging D1 from an earlier branch build (with Phase 1's `app_user(google_sub, email, hd)` columns):
+
+**The schema check will refuse to start:**
 ```
+ERROR: schema: stale app_user (recreate this database, docs/runbooks/staging.md)
+```
+
+**Solution:** Recreate the staging D1 and re-seed. See `docs/runbooks/staging.md`.
 
 ---
 
@@ -146,23 +234,21 @@ CREATE INDEX idx_student_card_campaign_id ON student_card (campaign_id)
 
 ### Pre-Deploy (5–7 days before 10/12)
 
-- [ ] **Time Travel bookmark:** Go to Cloudflare → D1 → select `cham-yeu-thuong` (production) → **Time Travel** tab → set bookmark for the latest backup before Phase 2 deploy. Name it `pre-noel-rollback`. This is your "undo" if Phase 2 needs to be reverted.
-- [ ] **Production custom domain ready** (or fallback to `*.workers.dev`). Custom domain is needed for Cache API to work; on `*.workers.dev` the per-isolate LRU memo is the only cache.
-- [ ] **Google OAuth:** Verify the production OAuth client is created and configured:
-  - Client ID in `wrangler.jsonc` `vars` GOOGLE_CLIENT_ID
-  - Authorized JavaScript origins: production custom domain (e.g., `https://noel.truongtenloman.edu.vn`) and localhost for dev
-  - No redirect URIs (using the popup flow)
-- [ ] **Secrets set** on production: `NONCE_KEY` and `SUB_HMAC_KEY` (required), `IP_HMAC_KEY` (optional, not read yet), each with `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put <NAME>`
+- [ ] **Time Travel bookmark:** Go to Cloudflare → D1 → select `cham-yeu-thuong` (production) → **Time Travel** tab → set bookmark for the latest backup before Phase 2b deploy. Name it `pre-noel-rollback`. This is your "undo" if Phase 2b needs to be reverted.
+- [ ] **Secrets set** on production: `PASSWORD_PEPPER`, `IP_HMAC_KEY` (both required), `SUB_HMAC_KEY` (required), each with `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put <NAME>`. Back them up in the club's password manager immediately.
+- [ ] **Registration caps** checked in `wrangler.jsonc` (default 300 per IP per day, 2000 global): raise if needed for launch day volume
+- [ ] **Staging D1 recreated** (Phase 1 database with the old `app_user` schema will be rejected; recreate and re-seed per `docs/runbooks/staging.md`)
 
 ### Deploy Day (10/12, before 00:00)
 
 - [ ] Code is reviewed (all gates passed; no outstanding issues)
 - [ ] Staging load test passed (see `docs/runbooks/staging.md`)
 - [ ] Real-phone performance checked: ≥ 50 fps on a mid-range Android with 25 gifts and snow
-- [ ] All admins sign in once with Google to verify OAuth is working and their email is in the admin list
+- [ ] Secrets verified: `PASSWORD_PEPPER`, `IP_HMAC_KEY`, `SUB_HMAC_KEY` are set on production
 - [ ] Run: `git push && npx wrangler deploy`
-- [ ] Verify: `/` loads and shows Noel campaign home (or 20/11 if Noel is still draft); `/noel-2026` redirects to `/` (or shows draft page if not activated)
-- [ ] Activate the Noel campaign in `/admin` → **Chiến dịch** (sets status='active', closes 20/11)
+- [ ] Verify: `/` loads and shows Noel campaign home (or 20/11 if Noel is still draft); `/dang-nhap` loads
+- [ ] **Register the first admin account** (see "First Admin (Production Cut-Over)" section above)
+- [ ] Grant other admins in `/admin` → **Quản trị viên** tab
 - [ ] Test: create a gift, give a heart, report a gift, view the tree, check the leaderboard
 - [ ] Monitor: check Cloudflare analytics dashboard for errors, latency spikes, rate-limit triggers
 
@@ -179,8 +265,15 @@ No action needed; the campaign automatically becomes "closed" at the `ends_at` t
 
 ### Rollback (if needed)
 
-1. **Immediate** (code issue, not data): `git revert <commit>` and redeploy with `git push && npx wrangler deploy`
-2. **Full rollback** (corruption, data loss): Use Cloudflare Time Travel to restore the DB to the pre-Phase-2 bookmark. This requires access to Cloudflare Dashboard. **Destructive:** all Phase 2 data (gifts, hearts, reports) from the current live environment are lost.
+**Immediate (code issue, not data):** 
+- In Cloudflare Workers, switch to the previous Worker version
+- Or: `git revert <commit> && git push && npx wrangler deploy`
+
+**Full rollback (corruption, data loss):** 
+- Use Cloudflare Time Travel to restore the DB to the pre-Phase-2b bookmark
+- This requires access to Cloudflare Dashboard
+- **Destructive:** all Phase 2b data (accounts, gifts, hearts, reports) are lost
+- After rollback, the old typed-email admin login is re-enabled for the 20/11 endpoints only
 
 ---
 
@@ -208,83 +301,14 @@ If a QR link is accidentally shared publicly or forwarded beyond the intended te
 
 ### Example Flow
 
-1. Admin prints QR codes and hands them to teachers (or emails the `/t/<token>` URL)
-2. Teacher scans QR → sees their cards + gets a "Send card" button
-3. Students visit home (`/`) → press "Gửi thiệp" → pick a template → find the teacher (search / tổ filter) → write
-4. Or students use a teacher's private QR → see their cards → click "Send"
-5. Card is pending until admin approves
-6. Approved card shows up on that teacher's QR page
+1. Admin registers a username/password account (first account auto-becomes admin)
+2. Other admins register and are granted admin roles in the admin page
+3. Admins configure campaigns, templates, images
+4. During the event, admins moderate gifts and manage users
 
 ---
 
-## ⚠️ Important: Email is NOT Verified
-
-The admin email is typed in the browser and sent to the Worker as the `X-Admin-Email` header — **there is no identity verification**. Anyone who knows or guesses an admin email can edit cards, delete teachers, approve/hide content, and add more admins. This is **accepted risk R1** (see plan and decisions).
-
-**Mitigation:**
-- Keep admin emails **private** — do not share publicly
-- Rate limit (60 requests per 60 s per IP) slows guessing; doubled from 30/60 to allow upload sessions
-- Disable `BOOTSTRAP_EMAIL` after first admin is claimed
-- Remove `ALLOW_FIRST_CLAIM` secret immediately after initial setup
-- SSO version preserved in git (`tag sso-google-signin`, commit cec9a58) if a future OAuth deployment is needed
-
----
-
-## First Deploy
-
-### Step 1: Choose Bootstrap Method
-
-Before the first deploy, set **one** of these in `wrangler.jsonc`:
-
-**Option A: `BOOTSTRAP_EMAIL` (recommended)**
-
-```jsonc
-{
-  "vars": {
-    "BOOTSTRAP_EMAIL": "admin@school.edu"
-  }
-}
-```
-
-- Only this email can claim the empty admin table
-- Stays inert once an admin exists
-- Safe to leave in the config
-
-**Option B: `ALLOW_FIRST_CLAIM=1` (temporary)**
-
-```bash
-wrangler secret put ALLOW_FIRST_CLAIM
-# Paste: 1
-```
-
-- Any email can claim the first admin slot
-- Delete immediately after setup
-
-### Step 2: Deploy
-
-```bash
-git add wrangler.jsonc
-git commit -m "Bootstrap admin config"
-git push
-# OR
-npx wrangler deploy
-```
-
-### Step 3: Sign In
-
-Visit `/admin` and type the bootstrap email. The admin list appears — you are the first admin. ✓
-
-### Step 4: Clean Up
-
-If using `ALLOW_FIRST_CLAIM`:
-```bash
-wrangler secret delete ALLOW_FIRST_CLAIM
-npx wrangler deploy
-```
-
----
-
-## Setup Workflow (Day Before 20/11)
+## Setup Workflow (Before Campaign Launch)
 
 Schema changes run automatically on the first request after a deploy. Before deploying, follow **Schema upgrades** under Local Development below (Time Travel restore point, orphan check).
 
@@ -607,40 +631,20 @@ Example: `  ADMIN@EXAMPLE.COM  ` → `admin@example.com`
 
 ### Regain Access (Locked Out)
 
-#### Step 1: Update Bootstrap Email
+---
 
-Edit `wrangler.jsonc`:
+## Recovery: Locked-Out Sole Admin (Phase 2b)
 
-```jsonc
-{
-  "vars": {
-    "BOOTSTRAP_EMAIL": "recovery@school.edu"
-  }
-}
-```
-
-Or set it as a secret for laptop deploys:
+If the sole admin is locked out or deleted, use this recovery SQL to grant admin to an existing user:
 
 ```bash
-wrangler secret put BOOTSTRAP_EMAIL
-# Paste: recovery@school.edu
+npx wrangler d1 execute cham-yeu-thuong --remote --command \
+  "INSERT INTO admin_role (user_id, granted_at, granted_by) \
+   SELECT user_id, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'operator' \
+   FROM user_identity WHERE provider = 'password' AND subject = '<username>';"
 ```
 
-#### Step 2: Empty Admin Table
-
-```bash
-npx wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM admin"
-```
-
-#### Step 3: Deploy
-
-```bash
-npx wrangler deploy
-```
-
-#### Step 4: Sign In
-
-Visit `/admin` and type the recovery email. You become the first admin again.
+Replace `<username>` with the target account's username. This grants the admin role without changing the password. If no other account exists, register a new one first, then grant it.
 
 ---
 
@@ -650,10 +654,12 @@ All students on school Wi-Fi share one IP. Per-IP rate limits apply:
 
 | Endpoint | Limit | Impact |
 |---|---|---|
-| `POST /api/cards` | 20 per 60 s | **tight on 20/11** |
-| `GET /api/qr/:token` | 60 per 60 s | QR scanners |
-| Public reads | 120 per 60 s | generous |
-| Admin requests | 60 per 60 s | upload sessions + R1 brake |
+| `POST /api/auth/register` | 20 per 60 s, 300 per IP per day, 2000 global per day | registration on-ramp |
+| `POST /api/auth/login` | 10 per 60 s per IP, then per username | sign-in attempts |
+| `POST /api/campaigns/<slug>/gifts` | 6 per day per user | create gifts |
+| `POST /api/gifts/<id>/heart` | 20 per 60 s per user | give hearts |
+| Public reads | 3000 per 60 s per IP (cache misses only) | browsing |
+| Admin requests | 10 per 60 s per user | moderation + config |
 
 ### Raise Limits for the Event
 
@@ -760,15 +766,14 @@ With no stored row, `/api/about` serves the seed from `worker/aboutSeed.ts` righ
 
 Create `.dev.vars` (gitignored):
 
-**Option 1: Bootstrap Email**
+**Option 1: Bootstrap with placeholder secrets (simplest for local testing)**
 ```
-BOOTSTRAP_EMAIL=you@example.com
+PASSWORD_PEPPER=local_test_pepper_32chars_exactly
+IP_HMAC_KEY=local_test_ip_hmac_key_32chars_xxx
+SUB_HMAC_KEY=local_test_sub_hmac_key_32chars_xx
 ```
 
-**Option 2: Allow Any Email**
-```
-ALLOW_FIRST_CLAIM=1
-```
+(Local-only placeholders; use real random keys in staging/production: `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put <NAME>`)
 
 ### Run
 
@@ -782,22 +787,20 @@ Terminal 2:
 npm run dev
 ```
 
-Visit `http://localhost:5173` (frontend) and `/admin` to sign in.
+Visit `http://localhost:5173` (frontend) and `/dang-nhap` to sign in.
 
 ### Local D1 Database
 
 Tables are created automatically on the first request via idempotent `CREATE TABLE IF NOT EXISTS` statements.
 
-**If you have an old local D1 database** (from before this privacy model plan):
-- Old schema may have `teacher_profile.public_id` and `template_image.slot='photo'`
-- `ensureSchema` upgrades `teacher_profile` in place (see Schema upgrades below), so an old local database keeps working.
-- To start from an empty database anyway:
+**If you have an old local D1 database** (from before Phase 2b, with the old `app_user` schema):
+- The schema check will refuse to start with error `schema: stale app_user (recreate this database, docs/runbooks/staging.md)`
+- To start fresh:
 
 ```bash
-# Remove local D1 state
 rm -rf .wrangler/state
-
-# Restart worker
+# Restart npm run worker:dev
+```
 npm run worker:dev
 ```
 
@@ -851,15 +854,20 @@ npx wrangler d1 time-travel restore cham-yeu-thuong --bookmark=<bookmark from st
 ### Curl Tests
 
 ```bash
-curl -H "X-Admin-Email: you@example.com" \
-     -H "X-Requested-With: fetch" \
-     http://localhost:8787/api/admin/teachers
+# Register a test account
+curl -X POST -H "Content-Type: application/json" -H "X-Requested-With: fetch" \
+  -d '{"username":"testadmin","password":"TestPass123!","nickname":"Test","className":"10A"}' \
+  http://localhost:8787/api/auth/register
 
-curl -H "X-Admin-Email: you@example.com" \
-     -H "X-Requested-With: fetch" \
-     -H "Content-Type: application/json" \
-     -d '{"title":"Thầy","name":"Test"}' \
-     http://localhost:8787/api/admin/teachers
+# Sign in and save session cookie
+curl -X POST -H "Content-Type: application/json" -H "X-Requested-With: fetch" \
+  -c cookies.txt \
+  -d '{"username":"testadmin","password":"TestPass123!"}' \
+  http://localhost:8787/api/auth/login
+
+# Admin requests (require session cookie and X-Requested-With header)
+curl -b cookies.txt -H "X-Requested-With: fetch" \
+  http://localhost:8787/api/admin/admins
 ```
 
 ---
@@ -1041,30 +1049,36 @@ Private tokens never appear in public responses.
 
 ### Email-Based Admin (Risk R1)
 
-**Problem:** no identity verification; anyone guessing an admin email can edit content.
+**Problem:** With typed-email login, no identity verification; anyone guessing an admin email can edit content. This was superseded by username/password accounts in Phase 2b.
 
-**Mitigation:** rate limit (60 req/min), keep emails private, enable bootstrap only at first deploy, SSO version in git (`tag sso-google-signin`).
+**Mitigation (Phase 2b):** passwords, rate limits, login lockout (10 failures → 15 min lock), session management. Sole admin recovery uses SQL (see "Recovery: Locked-Out Sole Admin" section).
 
 ---
 
 ## Recovery Steps
 
-### Locked Out
+### Locked-Out Player or Admin
 
-1. Update `BOOTSTRAP_EMAIL` in `wrangler.jsonc`
-2. Delete all admins: `npx wrangler d1 execute cham-yeu-thuong --remote --command "DELETE FROM admin"`
-3. Deploy: `npx wrangler deploy`
-4. Sign in with recovery email
+1. The account is locked for 15 minutes after 10 wrong password attempts
+2. Wait 15 minutes or ask an admin to reset the password
+3. Temporary password is shown once; user must change it on first sign-in
+
+### Password Reset by Admin
+
+1. Go to `/admin` → **Quản trị viên** → Users
+2. Find the user and click **Đặt lại mật khẩu**
+3. The temporary password is shown once (never logged)
+4. User receives the password out of band (in person or via secure channel)
 
 ### Card Stuck in Pending
 
-1. Go to `/admin` → Duyệt thiệp
-2. Find the card
-3. Click **Approve** or **Delete**
+1. Go to `/admin` → Kiểm duyệt quà
+2. Find the gift
+3. Click **Khôi phục** (restore), **Ẩn** (hide), or **Xóa** (delete)
 
-### Card Accidentally Deleted
+### Gift Accidentally Deleted
 
-Not recoverable (delete is permanent). Apologize and ask the student to re-send.
+Not recoverable (delete is permanent). Apologize and ask the user to recreate it.
 
 ### Image Remains Cached After Deletion
 
