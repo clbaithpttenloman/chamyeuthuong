@@ -1,27 +1,27 @@
-# Chạm yêu thương — Campaign Platform with Google Sign-In & Student Cards
+# Chạm yêu thương — Campaign Platform with Accounts & Student Cards
 
 **Mission:** Technology creates wishes; emotion creates meaning.  
 **Built by:** CLB AI — THPT Ten Lơ Man  
 **Active Campaign:** Noel 2026 (gift tree, 10/12–24/12). Past: 20/11 (teacher cards).
 
-A platform that runs different campaigns. **Phase 2** (Noel) is a 2.5D wish tree: students sign in with Google, create gifts (card inside a decorative box on the tree), and give hearts to others' gifts. Gifts are ranked by hearts and placed on the tree. Admins moderate reports and manage a gift queue.
+A platform that runs different campaigns. **Phase 2b** (Noel) is a 2.5D wish tree: players and admins sign in with a username and password; players create gifts (card inside a decorative box on the tree) and give hearts to others' gifts. Gifts are ranked by hearts and placed on the tree. Admins moderate reports, manage users, and reset passwords.
 
-**Phase 1** (campaigns + Google sign-in) remains for campaign setup and 20/11 admin routes (cards, templates, teachers).
-
-**Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
+**Phase 1** (campaigns) remains for campaign setup and 20/11 admin routes (cards, templates, teachers). Google sign-in is optional and not yet configured.
 
 **Tech stack:** Vite + React + TypeScript (frontend), Cloudflare Workers + D1 (backend), deployed to Cloudflare.
 
 ## Site Structure
 
-**Routes (Phase 2 — Noel):**
+**Routes (Phase 2b — Noel):**
 
 | Route | Purpose |
 |---|---|
+| `/dang-ky` | Register — username, password, nickname, class. |
+| `/dang-nhap` | Sign in — username, password. |
 | `/` | Home — Noel intro, player sign-in button, "Treo quà" (create gift), "Bảng xếp hạng" (leaderboard), "Tất cả quà" (all gifts). No sign-in required to view. |
-| `/:slug` | Campaign home by slug (e.g., `/noel-2026`). Kind determines component: `gift_tree` → Noel scene, `teacher_cards` → 20/11 home (legacy). Drafts and unknown slugs show 404. Reserved: `admin`, `api`, `t`, `gui-thiep`, `ve-clb-ai`, `assets`, `theme`, `g` |
+| `/:slug` | Campaign home by slug (e.g., `/noel-2026`). Kind determines component: `gift_tree` → Noel scene, `teacher_cards` → 20/11 home (legacy). Drafts and unknown slugs show 404. Reserved: `admin`, `api`, `t`, `gui-thiep`, `ve-clb-ai`, `assets`, `theme`, `g`, `dang-ky`, `dang-nhap` |
 | `/:slug/g/:publicId` | Share link — opens the tree with that gift already opened. Sign-out users can view; actions (heart, report) prompt sign-in. |
-| `/admin` | Admin dashboard — campaigns, gift moderation, users (ban/unban), tombstones. Google sign-in required for all new admin routes. |
+| `/admin` | Admin dashboard — campaigns, gift moderation, users (ban/unban, password reset, grant admin), audit log. Username/password sign-in required. |
 
 **(Phase 1 legacy routes — still working):**
 
@@ -37,24 +37,28 @@ A platform that runs different campaigns. **Phase 2** (Noel) is a 2.5D wish tree
 
 ## How It Works
 
-### Noel Player Journey (Phase 2)
+### Noel Player Journey (Phase 2b)
 
-1. **Visit home** (`/`) — read the intro, view leaderboard preview; no sign-in required to browse
-2. **Sign in with Google** — to create gifts, give hearts, or report
-3. **Create a gift** — "Treo quà": choose box style → ornament style → write a card (message, nickname, class) → see preview → hang it on the tree (slot auto-assigned by hearts after creation)
-4. **View the tree** — 3D tree that spins (drag/swipe or ←/→ keys). Top 15 gifts by hearts on the tree; next 10 on the ground; rest in "Tất cả quà"
-5. **Open a gift** — tap/click or keyboard; shows card, sender, hearts, rank, and action buttons
-6. **Give hearts** — up to 5 per day; hearts refresh at Vietnam midnight; locked in once given
-7. **Report or delete** — report inappropriate gifts (needs 3 reports to auto-hide); delete your own visible gifts to free a slot
-8. **Share** — each gift has a share link (`/:slug/g/:publicId`) that opens it directly
-9. **My gifts** — view your own gifts and delete them individually
-10. **Account** — delete your account and all gifts (admin moderation queue must be empty first)
+1. **Register** (`/dang-ky`) — username (3–20 chars: a–z, 0–9, _), password (8–128 chars), nickname, class. First account auto-becomes admin.
+2. **Sign in** (`/dang-nhap`) — username, password. 10 wrong attempts lock the username for 15 minutes. If you forgot your password, ask an admin to reset it.
+3. **Visit home** (`/`) — read the intro, view leaderboard preview; no sign-in required to browse
+4. **Create a gift** — "Treo quà": choose box style → ornament style → write a card (message, nickname, class) → see preview → hang it on the tree (slot auto-assigned by hearts after creation)
+5. **View the tree** — 3D tree that spins (drag/swipe or ←/→ keys). Top 15 gifts by hearts on the tree; next 10 on the ground; rest in "Tất cả quà"
+6. **Open a gift** — tap/click or keyboard; shows card, sender, hearts, rank, and action buttons
+7. **Give hearts** — up to 5 per day; hearts refresh at Vietnam midnight; locked in once given. Accounts younger than 24 hours cannot give hearts.
+8. **Report or delete** — report inappropriate gifts (needs 3 reports to auto-hide); delete your own visible gifts to free a slot
+9. **Share** — each gift has a share link (`/:slug/g/:publicId`) that opens it directly
+10. **My gifts** — view your own gifts and delete them individually
+11. **Account** — change password or delete your account and all gifts (admin moderation queue must be empty first)
 
 **Admin moderation** (on-call during 10/12–24/12):
 - Queue: gifts awaiting review (auto-hidden by 3 reports, or admin-hidden)
 - Actions: restore (acknowledges reports), hide, delete, or ban the user
 - User ban: hides all their gifts, removes their hearts (recounted), signs them out; ban can be undone
-- Banned users: staying permanently banned (a deleted banned account leaves a tombstone; a new sign-in with that Google account stays banned)
+- Banned users: staying permanently banned (a deleted banned account leaves a tombstone; a new sign-in with that username stays banned)
+- Password reset: generate a temporary 72-hour password, shown once, displayed only to the admin
+- Admins: list by username, grant by username, revoke by user id, self/last-admin guards in place
+- Audit: read-only log of admin actions (last 200, kept 180 days)
 
 ### 20/11 Student Journey (Phase 1 legacy)
 
@@ -72,14 +76,9 @@ A platform that runs different campaigns. **Phase 2** (Noel) is a 2.5D wish tree
 ### Admin Workflow (Setup Order)
 
 1. **Deploy** the site
-2. **Claim admin** — go to `/admin`, type the bootstrap email (or set `ALLOW_FIRST_CLAIM=1`)
-3. **Add teachers** — bulk paste list `Thầy|Cô Tên | Môn | Tổ` (1–100) or add one at a time
-4. **Upload images** — JPG/PNG/WebP, max 1280 px, ≤ 300 KB (browser compresses, strips EXIF)
-5. **Create templates** — pick layout, upload a background image, set active
-6. **Print QR codes** — from the Thầy cô section; each QR is a private link to that teacher's card page. `Rotate` gives a new token (old QR becomes invalid)
-7. **Distribute QR privately** — email, print, or hand to each teacher. Students access the public home page (`/`), or use the private QR to see that teacher's cards
-8. **Share the site link** (`/`) — students send cards
-9. **Moderate on 20/11** — approve or hide pending cards in "Duyệt thiệp"
+2. **Register the first account** — go to `/dang-ky`, create a username and password. This account auto-becomes admin. Verify in `/admin`.
+3. **Grant other admins** — in the admin page, **Quản trị viên** tab, grant admin role by username
+4. Create campaigns, templates, and moderate as needed
 
 ### Admin Moderation
 
@@ -773,13 +772,279 @@ Rate limit: **20/60 s per IP** (tight for school NAT on 20/11; raise in wrangler
 
 ## Admin API
 
-All endpoints behind `requireAdmin` (typed email sent as `X-Admin-Email` header, checked against D1).
+All endpoints require a session cookie from `/api/auth/login` (username/password sign-in). All admin endpoints check for the `admin_role` row; last admin cannot be revoked or deleted. Admin actions are logged in the audit table.
 
-Rate limit: **60/60 s per IP** (doubled from 30/60 to allow upload sessions).
+Rate limit: **10/60 s per user** (admin-specific limits), plus a global **60/60 s per IP** rate limit.
 
-All admin endpoints require `X-Requested-With: fetch` header (CSRF defense).
+All admin endpoints require `X-Requested-With: fetch` header (CSRF defense) and `Sec-Fetch-Site` to be `same-origin` or absent.
 
-### Teachers
+### Authentication
+
+#### POST /api/auth/register
+Register a new account.
+
+**Request:**
+```json
+{
+  "username": "example",
+  "password": "mypassword123",
+  "nickname": "Example Name",
+  "className": "11A"
+}
+```
+
+- `username`: 3–20 lowercase alphanumeric + underscore; not in reserved list (admin, quantri, root, system, clbai, giamthi, support); required
+- `password`: 8–128 characters, must not contain the username, normalized to NFC (Vietnamese keyboard compatibility); required
+- `nickname`: 1–30 characters; optional
+- `className`: ≤ 10 characters; optional
+- **201** on success (sets session cookie, redirects to home or `?next=`)
+- **409** `username_taken` if username exists
+- **429** `register_limit` if daily cap (300/IP, 2000 global) exceeded
+- **400** for invalid input
+
+#### POST /api/auth/login
+Sign in with username and password.
+
+**Request:**
+```json
+{
+  "username": "example",
+  "password": "mypassword123"
+}
+```
+
+- **200** on success (sets session cookie)
+- **401** `invalid_credentials` for unknown user, wrong password, or locked username (all return the same error)
+- **429** for rate limit exceeded (10/60 s per IP, then per username once verified)
+- **403** `banned` if the account is banned
+- **403** `password_change_required` if password was reset by an admin and must be changed before other actions
+
+#### POST /api/auth/logout
+Clear the session.
+
+- **200** on success
+- No request body needed
+
+### User Profile & Account
+
+#### GET /api/me?campaign=<slug>
+Get the signed-in user's profile and state.
+
+**Response:**
+```json
+{
+  "user": {
+    "id": 123,
+    "username": "example",
+    "nickname": "Example Name",
+    "className": "11A",
+    "banned": 0
+  },
+  "isAdmin": 1,
+  "mustChangePassword": 0,
+  "heartsLeft": 3,
+  "heartedGiftIds": [1, 2, 5],
+  "created_at": "2026-12-10T08:00:00Z"
+}
+```
+
+- `username` (string): the account's username
+- `isAdmin` (1 or 0): whether the signed-in user is an admin
+- `mustChangePassword` (1 or 0): password must be changed before other actions (after admin reset)
+- `heartsLeft` (number): hearts remaining today for this campaign
+- `heartedGiftIds` (array): IDs of gifts this user has hearted today
+- **200** on success
+- **401** if not signed in
+- **Cache-Control: no-store** (never cached)
+
+#### PUT /api/me
+Update profile.
+
+**Request:**
+```json
+{
+  "nickname": "New Name",
+  "className": "12B"
+}
+```
+
+- `nickname`: 1–30 characters; optional
+- `className`: ≤ 10 characters; optional
+- **200** on success
+- **401** if not signed in
+- **403** `password_change_required` if password must be changed
+- Rate limited (10/60 s per user)
+
+#### POST /api/me/password
+Change password (requires current password).
+
+**Request:**
+```json
+{
+  "current": "oldpassword123",
+  "next": "newpassword456"
+}
+```
+
+- `current`: verified against the credential
+- `next`: same validation as registration (8–128 chars, no username in it, NFC normalized)
+- **200** on success (revokes all other sessions, creates a new one)
+- **401** `invalid_credentials` if `current` is wrong
+- **403** `password_change_required` (this endpoint is allowed even with the flag set)
+- **429** for rate limit
+- Counts wrong attempts toward the 10-attempt lockout
+
+#### DELETE /api/me
+Delete your account.
+
+**Request:**
+```json
+{
+  "password": "mypassword123"
+}
+```
+
+- Requires password verification
+- Deletes all gifts, hearts, reports, and identities
+- Writes a ban tombstone for each identity so a new registration with the same username stays banned
+- **204** on success
+- **401** `invalid_credentials` if password is wrong
+- **409** `pending_review` if any of your gifts are still in moderation (hidden or reported)
+- **409** `last_admin` if you are the last admin
+- **403** `password_change_required`
+- **429** for rate limit
+
+### Admin: Users & Admins
+
+#### GET /api/admin/admins
+List admins by username.
+
+**Response:**
+```json
+[
+  {
+    "id": 123,
+    "username": "example",
+    "nickname": "Example Name",
+    "granted_at": "2026-12-10T08:00:00Z"
+  }
+]
+```
+
+- `granted_at`: when the admin role was granted
+- **200** on success
+- **401** if not signed in
+- **403** if not an admin
+
+#### POST /api/admin/admins
+Grant admin role to a user by username.
+
+**Request:**
+```json
+{
+  "username": "newadmin"
+}
+```
+
+- `username`: must exist; unknown username → **404**
+- **200** on success
+- **401** / **403** (not admin)
+- **409** if the user already is an admin
+
+#### DELETE /api/admin/admins/<id>
+Revoke admin role.
+
+- `id`: user ID
+- **204** on success
+- **401** / **403** (not admin)
+- **409** if this is the last admin
+- **409** if the user is not an admin
+
+#### POST /api/admin/users/<id>/password
+Generate a temporary password (admin reset).
+
+**Response:**
+```json
+{
+  "temporaryPassword": "abc123def456gh"
+}
+```
+
+- Generates a 12-character temporary password, valid for 72 hours
+- User must change it on first sign-in (enforced by `mustChangePassword`)
+- Revokes all of that user's current sessions
+- **200** on success
+- **401** / **403** (not admin)
+- **409** if the user is yourself
+- Password is shown once and never logged or stored in plain text
+
+#### PATCH /api/admin/users/<id>
+Ban or unban a user.
+
+**Request:**
+```json
+{
+  "banned": 1
+}
+```
+
+- **200** on success
+- **401** / **403** (not admin)
+- **409** `is_admin` if trying to ban an admin (revoke admin first)
+- When banning: hides all gifts, removes hearts (recounts), revokes sessions
+- When unbanning: restores gift visibility, re-adds hearts
+
+### Admin: Gifts & Reports
+
+#### GET /api/admin/gifts?status=<status>
+List gifts by status.
+
+**Query:**
+- `status`: one of `reported`, `hidden` (auto-hidden + admin-hidden), `all`
+- **200** array of gifts with metadata
+- **401** / **403** (not admin)
+
+#### PATCH /api/admin/gifts/<id>
+Update gift status (restore, hide, delete).
+
+**Request:**
+```json
+{
+  "status": "visible|hidden|deleted"
+}
+```
+
+- `status`: target status
+- Restore: sets `status='visible'`, acknowledges all reports, resets `report_count` to 0
+- Delete: removes the gift entirely
+- **200** on success
+- **401** / **403** (not admin)
+- **404** if gift not found
+- Audit logged
+
+### Admin: Audit Log
+
+#### GET /api/admin/audit
+Read the newest 200 audit rows (no paging parameter).
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "action": "grant_admin",
+    "actor_username": "admin1",
+    "target_username": "user2",
+    "at": "2026-12-10T08:00:00Z"
+  }
+]
+```
+
+- Actions: `first_account`, `reset_password`, `grant_admin`, `revoke_admin`, `ban`, `unban`, `delete_gift`
+- **200** array of audit rows
+- **401** / **403** (not admin)
+
+### Authentication Errors (all endpoints)
 
 #### GET /api/admin/teachers
 List all teachers with card counts.
@@ -1318,13 +1583,12 @@ npm install
 
 Create `.dev.vars` (gitignored):
 ```
-BOOTSTRAP_EMAIL=you@example.com
+PASSWORD_PEPPER=local_test_pepper_32chars_exactly
+IP_HMAC_KEY=local_test_ip_hmac_key_32chars_xxx
+SUB_HMAC_KEY=local_test_sub_hmac_key_32chars_xx
 ```
 
-Or to allow any email to claim first admin:
-```
-ALLOW_FIRST_CLAIM=1
-```
+(Local-only placeholders; use real random keys in staging/production via `npx wrangler secret put`)
 
 ### Run
 
@@ -1338,11 +1602,11 @@ Terminal 2 — Vite:
 npm run dev
 ```
 
-Visit `http://localhost:5173` for the frontend, and `/admin` to sign in.
+Visit `http://localhost:5173` for the frontend, and `/dang-nhap` to sign in.
 
-Tables are created automatically on the first request.
+Tables are created automatically on the first request. The first account registered becomes admin.
 
-**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Today: drop `teacher_profile.public_id` from databases created by 4d3a5df (including production), add `teacher_profile.role` (chức vụ, default Giáo viên) where it is missing, and copy `teacher_profile` into a table with the current role CHECK when its stored role list is older (Giám thị added; SQLite cannot alter a CHECK). Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
+**Schema upgrades:** tables are created with `CREATE TABLE IF NOT EXISTS`, and `ensureSchema` then runs the upgrade steps in `worker/schema.ts` (`UPGRADES`). Phase 2b: drop stale `app_user(google_sub)` and create `user_identity`, `password_credential`, `admin_role` tables. Any future column change needs its own upgrade step. Before deploying one, follow "Schema upgrades" in `docs/runbooks/admin.md` (Time Travel restore point). To start a local database from scratch:
 
 ```bash
 rm -rf .wrangler/state
@@ -1351,24 +1615,63 @@ rm -rf .wrangler/state
 
 The next request creates all tables from scratch.
 
-### Testing
+### Local Development
 
-```bash
-npm test
+Create `.dev.vars` (gitignored):
+```
+PASSWORD_PEPPER=PLACEHOLDER_LOCAL_PEPPER
+IP_HMAC_KEY=PLACEHOLDER_LOCAL_IP_HMAC_KEY
+SUB_HMAC_KEY=PLACEHOLDER_LOCAL_SUB_HMAC_KEY
 ```
 
-Runs `eslint src` and `vitest run` on unit tests.
+(Local-only placeholders; use real random keys in staging/production: `printf '%s' "$(openssl rand -hex 32)" | npx wrangler secret put <NAME>`)
+
+### Run
+
+Terminal 1:
+```bash
+npm run worker:dev
+```
+
+Terminal 2:
+```bash
+npm run dev
+```
+
+Visit `http://localhost:5173` (frontend) and `/dang-nhap` to sign in.
+
+Tables are created automatically on the first request.
+
+**If you have an old local D1 database** (from before Phase 2b, with the `google_sub` column in `app_user`):
+
+```bash
+rm -rf .wrangler/state
+# Restart npm run worker:dev
+```
+
+The staging D1 also needs to be recreated (see `docs/runbooks/staging.md`).
 
 ### Curl Examples
 
 ```bash
-curl -H "X-Admin-Email: you@example.com" \
-     -H "X-Requested-With: fetch" \
-     http://localhost:8787/api/admin/teachers
+# Register
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"username":"example","password":"mypassword123","nickname":"Example","className":"11A"}' \
+     http://localhost:8787/api/auth/register
 
-curl -H "Content-Type: application/json" \
-     -d '{"teacherId":1,"templateId":1,"message":"Em cảm ơn thầy."}' \
-     http://localhost:8787/api/cards
+# Sign in and get session cookie
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"username":"example","password":"mypassword123"}' \
+     -c cookies.txt \
+     http://localhost:8787/api/auth/login
+
+# Check profile (requires session)
+curl -b cookies.txt http://localhost:8787/api/me
+
+# Admin endpoints (require admin role + session + X-Requested-With header)
+curl -b cookies.txt \
+     -H "X-Requested-With: fetch" \
+     http://localhost:8787/api/admin/admins
 ```
 
 ---
@@ -1389,7 +1692,7 @@ Runs TypeScript check, Vite bundle, and header validation.
 npx wrangler deploy
 ```
 
-See `docs/runbooks/admin.md` for first-deploy setup (bootstrap email, initial admin, adding teachers).
+See `docs/runbooks/admin.md` for first-deploy setup (production cut-over sequence).
 
 ---
 
@@ -1413,8 +1716,8 @@ The school can remove this later by editing `_headers`.
 - **Backend:** Cloudflare Workers + D1 (SQLite on Cloudflare)
 - **Static:** Vite build output served by Workers
 - **Images:** base64 TEXT in D1 with immutable edge caching (1 year)
-- **Rate limits:** per-IP, per-minute, via Cloudflare rate-limiting bindings
-- **Auth:** typed email (unverified, risk R1) checked against D1 admin list
+- **Rate limits:** per-IP, per-username, per-user, via Cloudflare rate-limiting bindings
+- **Auth:** username + password (PBKDF2-SHA256), session cookie (HttpOnly, 14 days)
 
 **How the Worker runs:**
 - All `/api/*` routes → Worker (checked before static assets)

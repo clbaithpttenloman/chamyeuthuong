@@ -31,7 +31,10 @@ Verified 2026-11-17 for the student cards platform.
 - `crypto.getRandomValues(new Uint8Array(n))` is available in Workers and Node for token generation.
 - Tests: `node:sqlite` `DatabaseSync(':memory:')` wrapped in the D1 shape (see `../phamhuuthien/worker/testDb.ts`).
 
-## Admin email normalisation (verified 2026-11-16)
+## Admin email normalisation (verified 2026-11-16) — SUPERSEDED
+
+> Superseded by ADR-9 (Phase 2b): admins are accounts with an `admin_role` row. The `X-Admin-Email` header and `worker/email.ts` are no longer used for authorisation. Kept only as history.
+
 
 - Typed email sent as `X-Admin-Email` header; checked against D1 admin list. Email is normalised (trim, lower-case, ASCII, ≤254 chars, pattern validation) by `worker/email.ts:normalizeEmail()` shared with `admins.ts`. No cryptographic identity verification (accepted risk R1 — see decisions.md). SSO version preserved in git (tag `sso-google-signin`, commit cec9a58).
 
