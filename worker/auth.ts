@@ -1,6 +1,6 @@
 import { error } from './http.ts'
 import { ensureSchema } from './schema.ts'
-import { readSession } from './session.ts'
+import { getCookieValue, readSession, SESSION_COOKIE, sha256Hex } from './session.ts'
 import type { Env } from './types.ts'
 
 /**
@@ -20,18 +20,20 @@ export async function requireAdmin(
   const { success } = await env.ADMIN_FAIL_LIMIT.limit({ key: ip })
   if (!success) return error('rate_limited')
 
+  // Cross-site and state-changing requests are refused before any lookup. OPTIONS gets 401 for
+  // anonymous callers (below), so its header check waits for the session.
+  const stateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)
+  if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return error('forbidden')
+  if (stateChanging && request.headers.get('X-Requested-With') !== 'fetch') return error('forbidden')
+
   await ensureSchema(env.DB)
   // Admins must be able to sign in and see the change-password prompt, so `must_change` is not
   // checked here; the admin routes below refuse it (default-deny, plan.md).
   const session = await readSession(request, env.DB)
   if (!session) return error('unauthorized')
-
-  // CSRF after the session check, so an anonymous caller learns nothing from the status code.
-  if (request.method !== 'GET' && request.headers.get('X-Requested-With') !== 'fetch') {
+  if (request.method === 'OPTIONS' && request.headers.get('X-Requested-With') !== 'fetch') {
     return error('forbidden')
   }
-  if (request.headers.get('Sec-Fetch-Site') === 'cross-site') return error('forbidden')
-
 
   const row = await env.DB
     .prepare(
@@ -63,4 +65,47 @@ function json403(code: string): Response {
       'X-Robots-Tag': 'noindex',
     },
   })
+}
+
+/** Routes a must_change session may still call (plan.md, default-deny). */
+const MUST_CHANGE_ALLOWED: ReadonlyArray<{ method: string; path: string }> = [
+  { method: 'GET', path: '/api/me' },
+  { method: 'POST', path: '/api/me/password' },
+  { method: 'POST', path: '/api/auth/logout' },
+]
+
+/** Routes that never read the session, whatever the method (anonymous by design). */
+const PUBLIC_ANY_PREFIXES = [
+  '/api/image/', '/api/wall', '/api/templates', '/api/wishes', '/api/about',
+  '/api/auth/', '/api/campaigns/active', '/api/cards', '/api/qr/',
+]
+
+/** Read-only public routes: GET is anonymous, other methods need a session. */
+const PUBLIC_GET_PREFIXES = ['/api/campaigns/', '/api/gifts/']
+
+/**
+ * Router-level default-deny for a password-change-required session (ADR-9, AC-25a).
+ * Returns a 403 Response to send instead of routing, or null to continue. Only consults the
+ * database when a session cookie is present, so anonymous traffic costs nothing extra.
+ */
+export async function mustChangeGate(request: Request, db: Env['DB']): Promise<Response | null> {
+  const token = getCookieValue(request, SESSION_COOKIE)
+  if (!token) return null
+  const { pathname } = new URL(request.url)
+  const method = request.method
+  if (MUST_CHANGE_ALLOWED.some((r) => r.method === method && r.path === pathname)) return null
+  if (PUBLIC_ANY_PREFIXES.some((p) => pathname.startsWith(p))) return null
+  if (method === 'GET' && PUBLIC_GET_PREFIXES.some((p) => pathname.startsWith(p)) && pathname !== '/api/me/gifts') {
+    return null
+  }
+
+  const row = await db
+    .prepare(
+      'SELECT pc.must_change FROM session s JOIN password_credential pc ON pc.user_id = s.user_id' +
+        ' WHERE s.token_hash = ? AND s.expires_at > ?',
+    )
+    .bind(await sha256Hex(token), new Date().toISOString())
+    .first<{ must_change: number }>()
+  if (!row || row.must_change !== 1) return null
+  return json403('password_change_required')
 }

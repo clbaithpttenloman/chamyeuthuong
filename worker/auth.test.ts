@@ -93,8 +93,8 @@ async function seedUser2b(
 
   // Insert into Phase 1 app_user (google_sub required NOT NULL; use a placeholder)
   sqlite.prepare(
-    "INSERT INTO app_user (google_sub, email, nickname, class_name, banned, created_at, last_seen_at) VALUES (?, ?, ?, '', ?, ?, ?)",
-  ).run(`_placeholder_${username}`, '', 'TestUser', opts.banned ? 1 : 0, now, now)
+    "INSERT INTO app_user (nickname, class_name, banned, created_at, last_seen_at) VALUES ('TestUser', '', ?, ?, ?)",
+  ).run(opts.banned ? 1 : 0, now, now)
 
   const userId = (sqlite.prepare('SELECT MAX(id) AS id FROM app_user').get() as { id: number }).id
 

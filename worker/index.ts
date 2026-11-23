@@ -8,7 +8,7 @@ import { handleCampaigns, handleAdminCampaigns } from './campaigns.ts'
 import { handleGifts } from './gifts.ts'
 import { handleTree } from './tree.ts'
 import { handleGiftModeration } from './giftModeration.ts'
-import { requireAdmin } from './auth.ts'
+import { mustChangeGate, requireAdmin } from './auth.ts'
 import { handleAdmins } from './admins.ts'
 import { handleAccounts, handleChangePassword } from './accounts.ts'
 import { handleAuth, handleMe } from './me.ts'
@@ -50,6 +50,10 @@ export default {
     const { pathname } = new URL(request.url)
 
     try {
+      if (pathname.startsWith('/api/')) {
+        const gate = await mustChangeGate(request, env.DB)
+        if (gate) return gate
+      }
       if (pathname.startsWith('/api/image/')) return await handlePublicImage(request, env, ctx)
       if (pathname === '/api/wall' || pathname === '/api/templates' || pathname === '/api/wishes') {
         return await handlePublic(request, env)
