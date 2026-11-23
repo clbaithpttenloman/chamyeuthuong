@@ -39,12 +39,7 @@ import {
   seedUser,
   sessionFor,
   jsonReq,
-  TEST_PEPPER,
-  TEST_SUB_HMAC_KEY,
-  TEST_IP_HMAC_KEY,
   SESSION_COOKIE_NAME,
-  allowLimiter,
-  countingLimiter,
 } from './testAccounts.ts'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -457,7 +452,7 @@ describe('AC-23 / AC-35 change password', () => {
     expect(r.status).toBe(200)
 
     // token2 should now be invalid
-    const rMe = await worker.fetch(
+    await worker.fetch(
       new Request('https://x/api/me', {
         headers: {
           Cookie: `${SESSION_COOKIE_NAME}=${token2}`,

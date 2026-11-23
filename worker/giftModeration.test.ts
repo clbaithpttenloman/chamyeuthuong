@@ -405,15 +405,8 @@ describe('GET /api/admin/gifts — card fields and report reasons', () => {
 // Fix Group 8a — new tests for items 1, 3, 4, 10
 // ═════════════════════════════════════════════════════════════════════════════
 
-import { handleAuth, handleMe } from './me.ts'
-import {
-  makeNonce,
-  validToken,
-  localJwks,
-  TEST_NONCE_KEY,
-  NONCE_COOKIE_NAME,
-} from './testGoogle.ts'
-import { deletionEnv, TEST_SUB_HMAC_KEY } from './testGift.ts'
+import { NONCE_COOKIE_NAME } from './testGoogle.ts'
+import { TEST_SUB_HMAC_KEY } from './testGift.ts'
 
 // ── Item 1: unban removes banned_identity tombstone ───────────────────────────
 
@@ -425,18 +418,6 @@ describe('handleGiftModeration — unban removes banned_identity tombstone (item
   const TARGET_SUB = 'target-tombstone-sub'
   const TARGET_EMAIL = 'target-tombstone@gmail.com'
 
-  function makeSignInReq(credential: string, nonceCookie: string): Request {
-    return new Request('https://x/api/auth/google', {
-      method: 'POST',
-      headers: {
-        'CF-Connecting-IP': '1.2.3.4',
-        'Content-Type': 'application/json',
-        'X-Requested-With': 'fetch',
-        Cookie: `${NONCE_COOKIE_NAME}=${nonceCookie}`,
-      },
-      body: JSON.stringify({ credential }),
-    })
-  }
 
   beforeEach(async () => {
     ;({ db: tombstoneDb, sqlite: tombstoneSqlite } = testDb())
@@ -1006,7 +987,6 @@ describe('handleGiftModeration — Phase 2b tombstone', () => {
   it('DELETE /api/me (banned user, password identity) writes one banned_identity row with correct sub_hmac', async () => {
     // Dynamic imports fail when these modules are not yet implemented (Phase 2b red phase).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { handleAccounts } = (await import('./accounts.ts')) as any
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { hashPassword } = (await import('./password.ts')) as any
 
@@ -1054,7 +1034,6 @@ describe('handleGiftModeration — Phase 2b tombstone', () => {
 
   it('user with password AND google identity → two banned_identity rows on DELETE /api/me', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { handleAccounts } = (await import('./accounts.ts')) as any
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { hashPassword } = (await import('./password.ts')) as any
 

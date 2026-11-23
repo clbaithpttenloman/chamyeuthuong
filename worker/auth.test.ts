@@ -169,7 +169,7 @@ describe('requireAdmin — Phase 2b: session + admin_role (RED: returns wrong sh
 
   it('actor field is "user:<username>" — the password identity subject', async () => {
     // RED: same reason — Phase 1 returns Response, not the new shape.
-    const { userId, token, username } = await seedUser2b(db, sqlite, { admin: true, username: 'aliceadmin' })
+    const { userId, token } = await seedUser2b(db, sqlite, { admin: true, username: 'aliceadmin' })
     const r = await requireAdmin(makeReq(token), makeEnv(db))
     expect(r).toMatchObject({ userId, actor: 'user:aliceadmin' })
   })

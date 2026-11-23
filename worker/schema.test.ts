@@ -2726,7 +2726,6 @@ describe('Phase 2b schema — ensureSchema idempotent twice with Phase 2b tables
     await ensureSchema(db)
     // Clear the cache to force a second real run
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const anyDb = db as unknown as Record<string, unknown>
     // The WeakMap cache is per-binding so a second call on the same object is cached.
     // Create a second round manually: re-execute every SCHEMA statement.
     for (const sql of SCHEMA) {

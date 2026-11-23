@@ -100,7 +100,7 @@ function seedUser(
   return userId
 }
 
-async function sessionFor(db: D1, sqlite: DatabaseSync, userId: number): Promise<string> {
+async function sessionFor(db: D1, _sqlite: DatabaseSync, userId: number): Promise<string> {
   const raw = makeRawToken()
   const hash = await sha256Hex(raw)
   const now = new Date().toISOString()
@@ -123,7 +123,7 @@ function req(method: string, path: string, body?: unknown): Request {
 }
 
 function makeEnv(db: D1) {
-  return { DB: db, PASSWORD_PEPPER: 'test-pepper-for-admin-reset' }
+  return { DB: db, PASSWORD_PEPPER: 'test-pepper-for-admin-reset' } as never
 }
 
 /** Phase 2b auth object passed as 3rd arg to handleAdmins. */
@@ -172,7 +172,7 @@ describe('GET /api/admin/admins — Phase 2b: list admins by username', () => {
   it('response includes all current admin_role holders', async () => {
     // RED: Phase 1 reads from admin table.
     const userId1 = seedUser(sqlite, { username: 'adm1', admin: true, nickname: 'Admin One' })
-    const userId2 = seedUser(sqlite, { username: 'adm2', admin: true, nickname: 'Admin Two' })
+    seedUser(sqlite, { username: 'adm2', admin: true, nickname: 'Admin Two' })
     const r = await handleAdmins(req('GET', '/api/admin/admins'), makeEnv(db), auth(userId1, 'adm1') as never)
     expect(r.status).toBe(200)
     const list = await r.json() as Array<{ username: string }>
@@ -215,7 +215,7 @@ describe('POST /api/admin/admins — Phase 2b: grant admin role by username', ()
   it('already admin → 409 conflict', async () => {
     // RED: Phase 1 would detect UNIQUE violation on admin.email but returns different error shape.
     const callerUserId = seedUser(sqlite, { username: 'granter3', admin: true })
-    const targetUserId = seedUser(sqlite, { username: 'alreadyadmin', admin: true })
+    seedUser(sqlite, { username: 'alreadyadmin', admin: true })
     const r = await handleAdmins(
       req('POST', '/api/admin/admins', { username: 'alreadyadmin' }),
       makeEnv(db),
@@ -450,7 +450,6 @@ describe('POST /api/admin/users/<id>/password — Phase 2b: admin reset', () => 
     const auditFull = sqlite.prepare(
       "SELECT * FROM admin_audit WHERE action = 'reset_password'",
     ).get() as Record<string, unknown> | undefined
-    const vals = Object.values(auditFull ?? {}).map(String)
     // The temp password must not appear in any column value
     // We don't know the temp password value here, but we can check columns don't hold
     // obviously-password-shaped data. The real check is that no column is named "password".
