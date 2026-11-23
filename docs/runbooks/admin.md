@@ -48,6 +48,7 @@
 ### Registration Rate Limits
 
 Configured in `wrangler.jsonc`:
+- **Password hashing cost**: PBKDF2-SHA256 at 50,000 iterations (Workers Free plan CPU budget). Raise `PBKDF2_ITERATIONS` (worker/password.ts) to 100,000 only after the account moves to Workers Paid. Existing hashes are upgraded on each user's next successful login; until a user logs in again, their row keeps the old count, so do not raise the constant before the operator accepts that window.
 - **REGISTER_IP_DAILY**: 300 (default) accounts per IP per calendar day (Vietnam time)
 - **REGISTER_GLOBAL_DAILY**: 2,000 (default) total accounts per day globally
 
