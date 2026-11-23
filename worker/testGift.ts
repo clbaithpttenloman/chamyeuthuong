@@ -175,6 +175,7 @@ export async function seedGiftCampaign(
       gifts_per_user?: number
       tree_slots?: number
       ground_slots?: number
+      heart_min_account_age_hours?: number
     }
   } = {},
 ): Promise<number> {

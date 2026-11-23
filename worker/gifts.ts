@@ -415,9 +415,12 @@ async function handleHeart(publicId: string, request: Request, env: GiftsEnv): P
       "  AND c.status = 'active' AND ? BETWEEN c.starts_at AND c.ends_at " +
       '  AND g.user_id != ? ' +
       '  AND u.banned = 0 ' +
+      // Accounts must be older than heart_min_account_age_hours before they can give hearts (ADR-9).
+      "  AND (COALESCE(json_extract(c.settings, '$.heart_min_account_age_hours'), 24) <= 0" +
+      "       OR (julianday(?) - julianday(u.created_at)) * 24 >= COALESCE(json_extract(c.settings, '$.heart_min_account_age_hours'), 24)) " +
       '  AND (SELECT COUNT(*) FROM heart h WHERE h.user_id = ? AND h.day = ?) < ' +
       "      COALESCE(json_extract(c.settings, '$.hearts_per_day'), 5)",
-    ).bind(userId, day, nowDt, userId, publicId, nowDt, userId, userId, day),
+    ).bind(userId, day, nowDt, userId, publicId, nowDt, userId, nowDt, userId, day),
     env.DB.prepare(
       'UPDATE gift SET heart_count = (SELECT COUNT(*) FROM heart WHERE gift_id = id) WHERE public_id = ?',
     ).bind(publicId),
@@ -431,6 +434,8 @@ async function handleHeart(publicId: string, request: Request, env: GiftsEnv): P
         'SELECT g.id, g.status, g.user_id, ' +
         '       c.status AS camp_status, c.starts_at, c.ends_at, ' +
         "       COALESCE(json_extract(c.settings, '$.hearts_per_day'), 5) AS hearts_per_day, " +
+        "       COALESCE(json_extract(c.settings, '$.heart_min_account_age_hours'), 24) AS min_age_hours, " +
+        '       u.created_at AS user_created_at, ' +
         '       u.banned, ' +
         '       (SELECT COUNT(*) FROM heart h WHERE h.gift_id = g.id AND h.user_id = ?) AS heart_exists, ' +
         '       (SELECT COUNT(*) FROM heart h WHERE h.user_id = ? AND h.day = ?) AS day_hearts ' +
@@ -444,6 +449,7 @@ async function handleHeart(publicId: string, request: Request, env: GiftsEnv): P
         id: number; status: string; user_id: number;
         camp_status: string; starts_at: string; ends_at: string; hearts_per_day: number;
         banned: number; heart_exists: number; day_hearts: number;
+        min_age_hours: number; user_created_at: string;
       }>()
 
     if (!diag || diag.status !== 'visible') return json({ error: 'gift_not_found' }, 404)
@@ -454,6 +460,8 @@ async function handleHeart(publicId: string, request: Request, env: GiftsEnv): P
     )
     if (!campOpen) return json({ error: 'campaign_closed' }, 409)
     if (diag.banned) return json({ error: 'banned' }, 403)
+    const ageHours = (new Date(nowDt).getTime() - new Date(diag.user_created_at).getTime()) / 3_600_000
+    if (diag.min_age_hours > 0 && ageHours < diag.min_age_hours) return json({ error: 'account_too_new' }, 403)
     if (diag.user_id === userId) return json({ error: 'own_gift' }, 403)
     if (diag.heart_exists > 0) return json({ error: 'already_hearted' }, 409)
     if (diag.day_hearts >= diag.hearts_per_day) return json({ error: 'hearts_exhausted' }, 429)

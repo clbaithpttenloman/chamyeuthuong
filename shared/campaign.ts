@@ -45,6 +45,7 @@ export interface GiftTreeSettings {
   gifts_per_user: number    // 1–10, default 3
   tree_slots: number        // 5–25, default 15
   ground_slots: number      // 0–15, default 10
+  heart_min_account_age_hours: number  // 0–72, default 24: new accounts wait this long before hearts
 }
 
 /** Discriminated result used by validateSettings. */
@@ -58,6 +59,7 @@ const GIFT_TREE_DEFAULTS: GiftTreeSettings = {
   gifts_per_user: 3,
   tree_slots: 15,
   ground_slots: 10,
+  heart_min_account_age_hours: 24,
 }
 
 const GIFT_TREE_RANGES: Record<keyof GiftTreeSettings, [number, number]> = {
@@ -66,6 +68,7 @@ const GIFT_TREE_RANGES: Record<keyof GiftTreeSettings, [number, number]> = {
   gifts_per_user: [1, 10],
   tree_slots: [5, 25],
   ground_slots: [0, 15],
+  heart_min_account_age_hours: [0, 72],
 }
 
 /**

@@ -68,7 +68,8 @@ beforeEach(async () => {
   ;({ db, sqlite } = testDb())
   createNewTables(sqlite)
   createGiftTables(sqlite)
-  campaignId = await seedGiftCampaign(db, { settings: { hearts_per_day: 5 } })
+  // heart_min_account_age_hours: 0 so these users (created now) can give hearts; the 24 h rule has its own test (heartAge.test.ts).
+  campaignId = await seedGiftCampaign(db, { settings: { hearts_per_day: 5, heart_min_account_age_hours: 0 } })
   templateId = await seedTemplate(db, campaignId)
   // Owner creates the gift
   ownerId = await seedUser(db, { sub: 'owner-sub-001', email: 'owner@gmail.com' })
@@ -355,7 +356,7 @@ describe('POST /api/gifts/<publicId>/heart — concurrency invariant (ADR-7)', (
     const { db: db2 } = testDb({ shareWith: shared })
 
     // Set up data on db1
-    const campId = await seedGiftCampaign(db1)
+    const campId = await seedGiftCampaign(db1, { settings: { heart_min_account_age_hours: 0 } })
     const tmplId = await seedTemplate(db1, campId)
     const ownId = await seedUser(db1, { sub: 'owner-race-001', email: 'owner-race@gmail.com' })
     const gifter1Id = await seedUser(db1, { sub: 'gifter-race-001', email: 'gifter-race1@gmail.com' })
@@ -390,7 +391,7 @@ describe('POST /api/gifts/<publicId>/heart — concurrency invariant (ADR-7)', (
     createGiftTables(shared2)
     const { db: db2 } = testDb({ shareWith: shared2 })
 
-    const campId = await seedGiftCampaign(db1)
+    const campId = await seedGiftCampaign(db1, { settings: { heart_min_account_age_hours: 0 } })
     const tmplId = await seedTemplate(db1, campId)
     const ownId = await seedUser(db1, { sub: 'owner-dbl-001', email: 'owner-dbl@gmail.com' })
     const gif1Id = await seedUser(db1, { sub: 'gifter-dbl-001', email: 'gifter-dbl@gmail.com' })

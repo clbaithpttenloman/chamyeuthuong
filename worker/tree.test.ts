@@ -1074,7 +1074,7 @@ describe('POST /api/gifts/<publicId>/heart — second-precision window check (it
         (slug, kind, name, tagline, content, theme_colors, settings,
          starts_at, ends_at, status, created_at, created_by)
       VALUES ('noel', 'gift_tree', 'Noel', '', '{}', '{}',
-        '{"tree_slots":15,"ground_slots":10,"hearts_per_day":5,"gifts_per_user":3,"report_threshold":3}',
+        '{"tree_slots":15,"ground_slots":10,"hearts_per_day":5,"gifts_per_user":3,"report_threshold":3,"heart_min_account_age_hours":0}',
         ?, ?, 'active', datetime('now'), 'test')
     `).run(campaignStart, campaignEnd)
 

@@ -599,7 +599,7 @@ describe('handleGiftModeration — ban/unban recompute report_count in-batch (it
     createNewTables(rc4Sqlite)
     createGiftTables(rc4Sqlite)
     rc4AdminToken = await seedGiftAdminSession(rc4Db)
-    rc4CampId = await seedGiftCampaign(rc4Db, { id: 25, slug: 'noel-rcount-test', settings: { report_threshold: 5 } })
+    rc4CampId = await seedGiftCampaign(rc4Db, { id: 25, slug: 'noel-rcount-test', settings: { report_threshold: 5, heart_min_account_age_hours: 0 } })
     rc4TmplId = await seedTemplate(rc4Db, rc4CampId)
     rc4OwnerId = await seedUser(rc4Db, { sub: 'rc4-owner-001', email: 'rc4owner@gmail.com' })
     const { id: gid } = await seedGift(rc4Db, rc4OwnerId, rc4CampId, rc4TmplId, {
