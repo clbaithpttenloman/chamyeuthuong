@@ -4,7 +4,7 @@
  * Fixtures are built byte by byte so each rule is tested on a known input.
  */
 import { describe, it, expect } from 'vitest'
-import { inspectTheme } from './themeInspect.ts'
+import { inspectTheme, METADATA_MESSAGE } from './themeInspect.ts'
 
 function u32be(n: number): number[] {
   return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]
@@ -112,8 +112,95 @@ describe('JPEG', () => {
     expect(r).toEqual({ ok: true, info: { mime: 'image/jpeg', width: 1080, height: 1920, hasAlpha: false, animated: false, exif: false } })
   })
 
+  it('APP1 Exif segment → refused with the EXIF message, not a size error', () => {
+    const exifJpeg = new Uint8Array([
+      0xff, 0xd8,
+      0xff, 0xe1, 0x00, 0x08, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+      ...jpeg(1080, 1920).slice(2),
+    ])
+    expect(inspectTheme('image/jpeg', exifJpeg)).toEqual({ ok: false, error: METADATA_MESSAGE })
+  })
+
   it('truncated JPEG → error', () => {
     expect(inspectTheme('image/jpeg', new Uint8Array([0xff, 0xd8, 0xff])).ok).toBe(false)
+  })
+})
+
+describe('WebP metadata', () => {
+  it('ICC colour profile alone is not metadata (same policy as PNG and JPEG)', () => {
+    const r = inspectTheme('image/webp', webpVp8x(256, 256, 0, [...ascii('ICCP'), ...u32le(4), 0, 0, 0, 0]))
+    expect(r.ok && r.info.exif).toBe(false)
+  })
+
+  it('EXIF chunk → refused with the EXIF message', () => {
+    const exifWebp = webpVp8x(256, 256, 0, [...ascii('EXIF'), ...u32le(4), 0, 0, 0, 0])
+    expect(inspectTheme('image/webp', exifWebp)).toEqual({ ok: false, error: METADATA_MESSAGE })
+  })
+})
+
+describe('PNG structure', () => {
+  it('a first chunk that is not IHDR → refused as a broken file', () => {
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+    const bytes = new Uint8Array([...sig, ...pngChunk('tEXt', [...ascii('a'), 0, ...ascii('b')]), ...pngChunk('IEND', [])])
+    expect(inspectTheme('image/png', bytes).ok).toBe(false)
+  })
+})
+
+describe('metadata beyond EXIF (text chunks, XMP, comments) is refused', () => {
+  it('PNG tEXt chunk (for example Author or GPS text) → metadata flag', () => {
+    const r = inspectTheme('image/png', png(256, 256, 6, [pngChunk('tEXt', [...ascii('Author'), 0, ...ascii('x')])]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('PNG iTXt chunk (XMP carrier) → metadata flag', () => {
+    const r = inspectTheme('image/png', png(256, 256, 6, [pngChunk('iTXt', ascii('XML:com.adobe.xmp'))]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('JPEG APP1 XMP packet (not Exif) → metadata flag with the real size', () => {
+    const payload = [...ascii('http://ns.adobe.com/xap/1.0/'), 0]
+    const xmpSegment = [0xff, 0xe1, (payload.length + 2) >> 8, (payload.length + 2) & 255, ...payload]
+    const r = inspectTheme('image/jpeg', new Uint8Array([0xff, 0xd8, ...xmpSegment, ...jpeg(1080, 1920).slice(2)]))
+    expect(r.ok && r.info.exif && r.info.width === 1080).toBe(true)
+  })
+
+  it('JPEG COM comment segment → metadata flag', () => {
+    const comment = [0xff, 0xfe, 0x00, 0x04, 0x68, 0x69] // COM, length 4 = 2 bytes of text
+    const r = inspectTheme('image/jpeg', new Uint8Array([0xff, 0xd8, ...comment, ...jpeg(256, 256).slice(2)]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('PNG zTXt chunk → metadata flag', () => {
+    const r = inspectTheme('image/png', png(256, 256, 6, [pngChunk('zTXt', [...ascii('Comment'), 0, 0, 0x78, 0x9c])]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('JPEG APP13 (Photoshop/IPTC) segment → metadata flag', () => {
+    const payload = [...ascii('Photoshop 3.0'), 0]
+    const app13 = [0xff, 0xed, (payload.length + 2) >> 8, (payload.length + 2) & 255, ...payload]
+    const r = inspectTheme('image/jpeg', new Uint8Array([0xff, 0xd8, ...app13, ...jpeg(256, 256).slice(2)]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('XMP packet after the image data (no marker) → caught by the signature search', () => {
+    const tail = ascii('http://ns.adobe.com/xap/1.0/')
+    const r = inspectTheme('image/jpeg', new Uint8Array([...jpeg(256, 256), ...tail]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('extended XMP namespace after the image data → caught by the signature search', () => {
+    const r = inspectTheme('image/jpeg', new Uint8Array([...jpeg(256, 256), ...ascii('http://ns.adobe.com/xmp/extension/')]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('Exif signature after the image data (no marker) → caught by the signature search', () => {
+    const r = inspectTheme('image/jpeg', new Uint8Array([...jpeg(256, 256), 0x45, 0x78, 0x69, 0x66, 0, 0]))
+    expect(r.ok && r.info.exif).toBe(true)
+  })
+
+  it('clean JPEG with an ICC-free header → no metadata flag', () => {
+    const r = inspectTheme('image/jpeg', jpeg(256, 256))
+    expect(r.ok && r.info.exif).toBe(false)
   })
 })
 

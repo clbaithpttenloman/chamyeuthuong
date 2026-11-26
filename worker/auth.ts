@@ -77,7 +77,7 @@ const MUST_CHANGE_ALLOWED: ReadonlyArray<{ method: string; path: string }> = [
 
 /** Routes that never read the session, whatever the method (anonymous by design). */
 const PUBLIC_ANY_PREFIXES = [
-  '/api/image/', '/api/wall', '/api/templates', '/api/wishes', '/api/about',
+  '/api/image/', '/api/theme-image/', '/api/wall', '/api/templates', '/api/wishes', '/api/about',
   '/api/auth/', '/api/campaigns/active', '/api/cards', '/api/qr/',
 ]
 

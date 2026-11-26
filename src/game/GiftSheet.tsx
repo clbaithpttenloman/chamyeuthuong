@@ -36,7 +36,7 @@ import {
   type GiftForCard,
 } from './giftHelpers.ts'
 import { errorMessage } from './errors.ts'
-import { DEFAULT_THEME_URLS } from './defaultTheme.ts'
+import { useThemeUrls, type ThemeUrls } from './defaultTheme.ts'
 import { ApiError } from '../api.ts'
 import type { MeUser, ReportReason } from '../api.ts'
 import site from '../content/site.json'
@@ -113,6 +113,7 @@ export default function GiftSheet({
   returnFocusRef,
 }: GiftSheetProps): ReactNode {
   const reduced = prefersReducedMotion()
+  const theme = useThemeUrls()
   const dialogRef = useRef<HTMLDivElement>(null)
 
   // onClose ref so the focus-trap effect runs once (not on every parent re-render)
@@ -253,8 +254,8 @@ export default function GiftSheet({
   })
 
   // ── Box image URL for animation ───────────────────────────────────────
-  const boxKey = `box_${gift.boxStyle}_closed` as keyof typeof DEFAULT_THEME_URLS
-  const boxUrl = DEFAULT_THEME_URLS[boxKey] ?? DEFAULT_THEME_URLS.box_1_closed
+  const boxKey = `box_${gift.boxStyle}_closed` as keyof ThemeUrls
+  const boxUrl = theme[boxKey] ?? theme.box_1_closed
 
   // ── Render ────────────────────────────────────────────────────────────
 

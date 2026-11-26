@@ -10,6 +10,7 @@ import { handleTree } from './tree.ts'
 import { handleGiftModeration } from './giftModeration.ts'
 import { mustChangeGate, requireAdmin } from './auth.ts'
 import { handleAdmins } from './admins.ts'
+import { handleThemes, handleThemeImage } from './themes.ts'
 import { handleAccounts, handleChangePassword } from './accounts.ts'
 import { handleAuth, handleMe } from './me.ts'
 import { error } from './http.ts'
@@ -21,6 +22,7 @@ import type { Env, ExecutionContext } from './types.ts'
  *
  * Routes (in order):
  *   /api/image/:token        - handlePublicImage
+ *   /api/theme-image/:token  - handleThemeImage (public, Phase 3)
  *   /api/wall                - handlePublic
  *   /api/templates           - handlePublic (campaign 1 only)
  *   /api/wishes              - handlePublic
@@ -38,6 +40,7 @@ import type { Env, ExecutionContext } from './types.ts'
  *   /api/campaigns/...       - handleCampaigns (public campaign read)
  *   /api/gifts/<id> GET      - handleTree  (gift by public id)
  *   /api/gifts/...           - handleGifts (gift delete, heart, report)
+ *   /api/admin/campaigns/:id/theme[/:slot] - handleThemes (admin theme list, upload/reset, Phase 3)
  *   /api/admin/campaigns...  - handleAdminCampaigns (Google session required)
  *   /api/admin/gifts*        - handleGiftModeration (Google session, stub)
  *   /api/admin/users*        - handleGiftModeration (Google session, stub)
@@ -55,6 +58,7 @@ export default {
         if (gate) return gate
       }
       if (pathname.startsWith('/api/image/')) return await handlePublicImage(request, env, ctx)
+      if (pathname.startsWith('/api/theme-image/')) return await handleThemeImage(request, env as never, ctx)
       if (pathname === '/api/wall' || pathname === '/api/templates' || pathname === '/api/wishes') {
         return await handlePublic(request, env)
       }
@@ -98,6 +102,12 @@ export default {
         return await handleGifts(request, env as never)
       }
 
+      // Theme slot upload/reset (Phase 3). Must precede the /api/admin/campaigns prefix below.
+      if (/^\/api\/admin\/campaigns\/\d+\/theme(\/[a-z0-9_]+)?$/.test(pathname)) {
+        const auth = await requireAdmin(request, env)
+        if (auth instanceof Response) return auth
+        return await handleThemes(request, env as never, auth)
+      }
       // Campaign admin CRUD — admin_role session (ADR-9)
       if (pathname.startsWith('/api/admin/campaigns')) {
         const auth = await requireAdmin(request, env)

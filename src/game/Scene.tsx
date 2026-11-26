@@ -72,7 +72,7 @@ import { slotLayout, type Slot } from './cone.ts'
 import { createSpin } from './spin.ts'
 import { startSnow } from './particles.ts'
 import { animateStar, flashOrnament } from './timelines.ts'
-import { DEFAULT_THEME_URLS, TREE_GEOMETRY } from './defaultTheme.ts'
+import { useThemeUrls, TREE_GEOMETRY, type ThemeUrls } from './defaultTheme.ts'
 import { computeSceneLayout, type SceneLayout } from './layout.ts'
 import {
   createGestureState,
@@ -172,17 +172,16 @@ function prefersReducedMotion(): boolean {
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-function skyUrl(): string {
-  if (typeof window === 'undefined') return DEFAULT_THEME_URLS.sky_portrait
-  return window.innerWidth > window.innerHeight
-    ? DEFAULT_THEME_URLS.sky_landscape
-    : DEFAULT_THEME_URLS.sky_portrait
+function skyUrl(urls: ThemeUrls): string {
+  if (typeof window === 'undefined') return urls.sky_portrait
+  return window.innerWidth > window.innerHeight ? urls.sky_landscape : urls.sky_portrait
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
 export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicId }: SceneProps): ReactNode {
   const reduced = useMemo(() => prefersReducedMotion(), [])
+  const theme = useThemeUrls()
 
   const sceneRef      = useRef<HTMLDivElement>(null)
   const treeImgRef    = useRef<HTMLImageElement>(null)
@@ -499,7 +498,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
 
   // ── Render ─────────────────────────────────────────────────────────────
 
-  const sky = skyUrl()
+  const sky = skyUrl(theme)
 
   return (
     <div
@@ -534,7 +533,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
           z=3 (behind) or z=6 (front) — set dynamically.
           Behind ornaments: pointer-events:none, tabIndex=-1 (not tappable/focusable). */}
       {treeGifts.map(gift => {
-        const orn = `ornament_${gift.ornamentStyle}` as keyof typeof DEFAULT_THEME_URLS
+        const orn = `ornament_${gift.ornamentStyle}` as keyof ThemeUrls
         return (
           <button
             key={gift.publicId}
@@ -547,7 +546,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             onFocus={() => handleOrnamentFocus(gift)}
           >
             <img
-              src={DEFAULT_THEME_URLS[orn] ?? DEFAULT_THEME_URLS.ornament_1}
+              src={theme[orn] ?? theme.ornament_1}
               alt=""
               aria-hidden="true"
               className="noel-orn-img"
@@ -568,7 +567,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       {/* z=4 — tree image: left/top/width/height set by JS layout */}
       <img
         ref={treeImgRef}
-        src={DEFAULT_THEME_URLS.tree}
+        src={theme.tree}
         className="noel-tree-img"
         alt=""
         aria-hidden="true"
@@ -577,7 +576,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
 
       {/* z=5 — ground layer: height 22% of scene; min-width 104%; obj-fit cover */}
       <img
-        src={DEFAULT_THEME_URLS.layer_ground}
+        src={theme.layer_ground}
         className="noel-ground"
         alt=""
         aria-hidden="true"
@@ -586,7 +585,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
 
       {/* z=7+ — ground boxes: positioned via layout effect (bottom-centre anchor) */}
       {groundGifts.map((gift, i) => {
-        const box = `box_${gift.boxStyle}_closed` as keyof typeof DEFAULT_THEME_URLS
+        const box = `box_${gift.boxStyle}_closed` as keyof ThemeUrls
         return (
           <button
             key={gift.publicId}
@@ -603,7 +602,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
             }}
           >
             <img
-              src={DEFAULT_THEME_URLS[box] ?? DEFAULT_THEME_URLS.box_1_closed}
+              src={theme[box] ?? theme.box_1_closed}
               alt=""
               aria-hidden="true"
               className="noel-box-img"
@@ -625,7 +624,7 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
       >
         <img
           ref={starImgRef}
-          src={DEFAULT_THEME_URLS.star}
+          src={theme.star}
           className="noel-star-img"
           alt=""
           draggable={false}

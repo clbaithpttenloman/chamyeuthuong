@@ -32,7 +32,7 @@ import {
   type ReactNode,
 } from 'react'
 import CardView from '../components/CardView.tsx'
-import { DEFAULT_THEME_URLS } from './defaultTheme.ts'
+import { useThemeUrls, type ThemeUrls } from './defaultTheme.ts'
 import { giftToCardViewProps } from './giftHelpers.ts'
 import { errorMessage } from './errors.ts'
 import {
@@ -149,6 +149,7 @@ export default function CreateGift({
   onClose,
   returnFocusRef,
 }: CreateGiftProps): ReactNode {
+  const theme = useThemeUrls()
   const reduced = prefersReducedMotion()
   const dialogRef = useRef<HTMLDivElement>(null)
   const wrapBoxRef = useRef<HTMLDivElement>(null)
@@ -433,8 +434,8 @@ export default function CreateGift({
                 count={6}
                 selected={draft.boxStyle}
                 urlFor={(i) =>
-                  DEFAULT_THEME_URLS[`box_${i}_closed` as keyof typeof DEFAULT_THEME_URLS] ??
-                  DEFAULT_THEME_URLS.box_1_closed
+                  theme[`box_${i}_closed` as keyof ThemeUrls] ??
+                  theme.box_1_closed
                 }
                 altFor={(i) => `Hộp quà ${i}`}
                 onChange={(v) => setDraft((d) => ({ ...d, boxStyle: v }))}
@@ -448,8 +449,8 @@ export default function CreateGift({
                 count={6}
                 selected={draft.ornamentStyle}
                 urlFor={(i) =>
-                  DEFAULT_THEME_URLS[`ornament_${i}` as keyof typeof DEFAULT_THEME_URLS] ??
-                  DEFAULT_THEME_URLS.ornament_1
+                  theme[`ornament_${i}` as keyof ThemeUrls] ??
+                  theme.ornament_1
                 }
                 altFor={(i) => `Vật trang trí ${i}`}
                 onChange={(v) => setDraft((d) => ({ ...d, ornamentStyle: v }))}
@@ -506,9 +507,9 @@ export default function CreateGift({
                 <div ref={wrapBoxRef} className="create-gift-wrap-box" aria-hidden="true">
                   <img
                     src={
-                      DEFAULT_THEME_URLS[
-                        `box_${draft.boxStyle ?? 1}_closed` as keyof typeof DEFAULT_THEME_URLS
-                      ] ?? DEFAULT_THEME_URLS.box_1_closed
+                      theme[
+                        `box_${draft.boxStyle ?? 1}_closed` as keyof ThemeUrls
+                      ] ?? theme.box_1_closed
                     }
                     alt=""
                     draggable={false}

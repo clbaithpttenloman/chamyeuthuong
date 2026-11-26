@@ -280,6 +280,21 @@ export const SCHEMA: string[] = [
 )`,
   // report_user: speeds up per-user report count (daily cap check) and DELETE by user.
   `CREATE INDEX IF NOT EXISTS report_user ON report(user_id)`,
+  // Phase 3: theme images, one row per campaign slot (ADR-6). Size CHECK is the largest slot (1 MB).
+  `CREATE TABLE IF NOT EXISTS theme_image (
+  id          INTEGER PRIMARY KEY,
+  campaign_id INTEGER NOT NULL REFERENCES campaign(id),
+  slot        TEXT    NOT NULL,
+  token       TEXT    UNIQUE NOT NULL,
+  mime        TEXT    NOT NULL CHECK (mime IN ('image/png','image/jpeg','image/webp')),
+  size        INTEGER NOT NULL CHECK (size > 0 AND size <= 1048576),
+  width       INTEGER NOT NULL,
+  height      INTEGER NOT NULL,
+  data        TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL,
+  created_by  TEXT    NOT NULL
+)`,
+  `CREATE INDEX IF NOT EXISTS theme_image_campaign_slot ON theme_image (campaign_id, slot)`,
   // ---- Seeds: 12 example wishes + meta flag (run once, guarded by meta flag) ----
   ...SEEDS,
   // ---- About seed (INSERT OR IGNORE — idempotent) ----

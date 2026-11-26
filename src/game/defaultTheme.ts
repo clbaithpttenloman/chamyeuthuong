@@ -6,6 +6,8 @@
  * These values match the pixel dimensions of tree.webp exactly.
  */
 
+import { createContext, useContext, useMemo } from 'react'
+
 const BASE = '/theme/gift_tree/default'
 
 export const DEFAULT_THEME_URLS = {
@@ -51,3 +53,20 @@ export const TREE_GEOMETRY = {
 } as const
 
 export type DefaultThemeSlot = keyof typeof DEFAULT_THEME_URLS
+
+export type ThemeUrls = Record<DefaultThemeSlot, string>
+
+/** Uploaded theme URLs for the current campaign (slot → /api/theme-image/<token>). Empty = all defaults. */
+export const ThemeOverridesContext = createContext<Readonly<Record<string, string>>>({})
+
+/** Default URL for every slot, replaced per slot by the campaign's uploaded image when one exists. */
+export function useThemeUrls(): ThemeUrls {
+  const overrides = useContext(ThemeOverridesContext)
+  return useMemo(() => {
+    const out: Record<string, string> = { ...DEFAULT_THEME_URLS }
+    for (const [slot, url] of Object.entries(overrides)) {
+      if (slot in DEFAULT_THEME_URLS && url) out[slot] = url
+    }
+    return out as ThemeUrls
+  }, [overrides])
+}

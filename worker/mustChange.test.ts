@@ -68,6 +68,10 @@ export const SESSION_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: 'DELETE', path: '/api/admin/admins/1' },
   { method: 'GET',    path: '/api/admin/audit' },
   { method: 'POST',   path: '/api/admin/users/1/password' },
+  // ── Phase 3 theme routes ──
+  { method: 'POST',   path: '/api/admin/campaigns/1/theme/star' },
+  { method: 'DELETE', path: '/api/admin/campaigns/1/theme/star' },
+  { method: 'GET',    path: '/api/admin/campaigns/1/theme' },
 ]
 
 /**
@@ -85,6 +89,7 @@ export const MUST_CHANGE_ALLOWED: ReadonlyArray<{ method: string; path: string }
  */
 const PUBLIC_ROUTES: ReadonlyArray<{ path: string }> = [
   { path: '/api/image/' },
+  { path: '/api/theme-image/' },
   { path: '/api/wall' },
   { path: '/api/templates' },
   { path: '/api/wishes' },

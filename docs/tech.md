@@ -616,3 +616,26 @@ Used on gift create, also by client-side form validation (`src/game/createGiftVa
 - **`Sec-Fetch-Site`**: values `same-origin`, `same-site`, `cross-site`, `none`; a same-origin `fetch` sends `same-origin`; sent only to potentially trustworthy (HTTPS/localhost) URLs and Baseline since March 2023, so absence means an old browser or a non-browser client ([MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Site)). Account endpoints accept `same-origin` or absent.
 - **Rate-limit binding**: `limit({ key, delta? })` → `{ success }`; a successful call counts, a refused one does not; there is no read-only check; counts are approximate and per Cloudflare location ([Workers rate limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/), page updated 2026-11-12). So any limit meant to bound hashing must be called before the hash.
 - **IPv6 /64 key**: `CF-Connecting-IP` holds the client address as text (IPv4 dotted or IPv6). Key = IPv4 as is; IPv6 → expand `::`, take the first four 16-bit groups, join with `:` and append `::/64`. Pure function `ipKey()` in `worker/accounts.ts`, unit-tested.
+
+## Theme image inspection and storage (Noel, Phase 3, 2026-11-23)
+
+- **Scope:** static PNG, JPEG and WebP only. Animated files, sprite grids and overlays are not accepted yet.
+- **Metadata** (EXIF, XMP, text chunks, comments) is refused. PNG: `eXIf`, `tEXt`, `zTXt`, `iTXt` chunks. JPEG: APP1, APP13 and COM
+  segments before the scan, plus an Exif/XMP signature search over the whole file. The 20/11 parsers only flag EXIF, so the theme path adds this check.
+- **Format is read from bytes, not the file name or the Content-Type header.** Magic bytes first, then
+  `worker/themeInspect.ts` reads the header:
+  - PNG: IHDR width and height, colour type 4 or 6 or a `tRNS` chunk means alpha, an `acTL` chunk means animated, an `eXIf` chunk means EXIF.
+  - WebP: VP8X flags (bit 0x10 alpha, 0x02 animation), VP8L alpha bit (bit 28 of the u32 at offset 21), `ANIM`/`ANMF` chunks mean animated, `EXIF` and `XMP ` chunks are metadata. `ICCP` (colour profile) is allowed.
+  - JPEG: SOF0–SOF15 (except DHT, JPG, DAC) give the size. JPEG has no alpha. An APP1 `Exif` segment means EXIF.
+- **Dimensions** reuse `checkDimensions` and `magicOk` from `worker/images.ts` (20/11 image library).
+- **Storage:** D1 table `theme_image` with base64 `data`. Size CHECK ≤ 1,048,576 bytes per row (largest slot is 800 KB).
+  The per-campaign total (15,728,640 bytes) is checked inside the INSERT, and the old row of the same slot
+  is deleted in the same `DB.batch` (D1 batches are transactional).
+- **Serving:** `GET /api/theme-image/<32 hex>` runs `IMAGE_IP_LIMIT` first, then the Cache API (200s only), then D1. It returns the bytes with the stored MIME,
+  `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`,
+  `Cross-Origin-Resource-Policy: same-origin` and `X-Robots-Tag: noindex`. The token is random (16 bytes), so the URL is not guessable.
+- **Read cost:** `GET /api/campaigns/<slug>` adds a `theme` map (slot → URL). It does not read the `data` column.
+- Source: `worker/themeInspect.ts`, `worker/themes.ts`, `shared/themeSlots.ts`. The chunk rules are covered by
+  `worker/themeInspect.test.ts`. The byte layouts were written from the format notes, not re-checked against the
+  published specs; review them against the PNG and WebP specs before relying on them for untrusted files.
+

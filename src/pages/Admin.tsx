@@ -23,6 +23,7 @@ import ImageLibrary from './admin/ImageLibrary.tsx'
 import ModerationSection from './admin/ModerationSection.tsx'
 import TeachersSection from './admin/TeachersSection.tsx'
 import TemplateSection from './admin/TemplateSection.tsx'
+import ThemeSection from './admin/ThemeSection.tsx'
 import WishLibrary from './admin/WishLibrary.tsx'
 
 /** Inject <meta name="robots" content="noindex"> while this component is mounted. */
@@ -51,7 +52,7 @@ function SignInPage({ message }: { message: string | null }) {
 
 // ── Section tabs ──────────────────────────────────────────────────────────
 
-type Section = 'moderation' | 'giftModeration' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins' | 'campaigns'
+type Section = 'moderation' | 'giftModeration' | 'templates' | 'teachers' | 'wishes' | 'images' | 'about' | 'admins' | 'campaigns' | 'theme'
 
 const SECTION_LABELS: Record<Section, string> = {
   moderation: 'Duyệt thiệp',
@@ -63,6 +64,7 @@ const SECTION_LABELS: Record<Section, string> = {
   about: 'Giới thiệu CLB',
   admins: 'Quản trị viên',
   campaigns: 'Chiến dịch',
+  theme: 'Chủ đề cây thông',
 }
 
 // ── Main admin page ───────────────────────────────────────────────────────
@@ -226,6 +228,9 @@ export default function Admin() {
         )}
         {section === 'campaigns' && (
           <CampaignsSection onAccessError={handleAccessError} />
+        )}
+        {section === 'theme' && (
+          <ThemeSection onAccessError={handleAccessError} />
         )}
       </div>
     </section>

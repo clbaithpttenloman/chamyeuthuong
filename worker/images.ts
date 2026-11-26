@@ -173,7 +173,7 @@ export function magicOk(mime: string, b: Uint8Array): boolean {
  * Uint8Array.prototype.toBase64 when the runtime has it, otherwise btoa over 32 KB chunks
  * (fromCharCode.apply keeps the per-byte JS work small for ~300 KB inputs).
  */
-function encodeBase64(bytes: Uint8Array): string {
+export function encodeBase64(bytes: Uint8Array): string {
   const native = (bytes as unknown as { toBase64?: () => string }).toBase64
   if (typeof native === 'function') return native.call(bytes)
   const CHUNK = 0x8000
@@ -184,7 +184,7 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
-function decodeBase64(b64: string): Uint8Array {
+export function decodeBase64(b64: string): Uint8Array {
   if (typeof (Uint8Array as unknown as { fromBase64?: unknown }).fromBase64 === 'function') {
     return (Uint8Array as unknown as { fromBase64(s: string): Uint8Array }).fromBase64(b64)
   }
@@ -197,14 +197,14 @@ function decodeBase64(b64: string): Uint8Array {
 
 // ---- Cache API types ----
 
-type CacheStore = {
+export type CacheStore = {
   default: {
     match(req: Request | string): Promise<Response | undefined>
     put(req: Request | string, resp: Response): Promise<void>
   }
 }
 
-function getCache(env: { _caches?: CacheStore }): CacheStore['default'] | undefined {
+export function getCache(env: { _caches?: CacheStore }): CacheStore['default'] | undefined {
   if (env._caches) return env._caches.default
   if (typeof caches !== 'undefined') return (caches as unknown as CacheStore).default
   return undefined

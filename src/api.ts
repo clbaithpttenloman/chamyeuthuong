@@ -83,6 +83,8 @@ export type CampaignData = {
   endsAt: string
   status: string
   open: boolean
+  /** Uploaded theme images by slot. Missing slots use the default art. */
+  theme?: Record<string, string>
 }
 
 /** Campaign row returned by GET /api/admin/campaigns. */
@@ -456,6 +458,41 @@ export async function updateAdminTemplate(id: number, input: Partial<AdminTempla
 
 export async function deleteAdminTemplate(id: number): Promise<void> {
   await expectOk(await apiFetch(`/api/admin/templates/${id}`, { method: 'DELETE' }))
+}
+
+// ── Admin theme slots (Phase 3) ───────────────────────────────────────────
+
+export type ThemeUploadResult = { ok: true; token: string } | { ok: false; errors: string[] }
+
+/** POST /api/admin/campaigns/:id/theme/:slot. 400 and 413 return the server's reasons, not a throw. */
+export async function uploadThemeImage(campaignId: number, slot: string, file: Blob): Promise<ThemeUploadResult> {
+  const res = await apiFetch(`/api/admin/campaigns/${campaignId}/theme/${slot}`, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  })
+  if (res.status === 201) return { ok: true, token: (await res.json() as { token: string }).token }
+  if (res.status === 400) {
+    const body = await res.json() as { errors?: string[] }
+    return { ok: false, errors: body.errors ?? ['Ảnh không hợp lệ.'] }
+  }
+  if (res.status === 413) return { ok: false, errors: ['Ảnh vượt quá dung lượng cho ô này.'] }
+  if (res.status === 409) {
+    return { ok: false, errors: ['Chiến dịch đã hết dung lượng ảnh chủ đề. Đặt ô khác về mặc định rồi thử lại.'] }
+  }
+  await expectOk(res)
+  return { ok: false, errors: ['Lỗi không xác định.'] }
+}
+
+/** GET /api/admin/campaigns/:id/theme — uploaded slots for one campaign (drafts included). */
+export async function getAdminThemeMap(campaignId: number): Promise<Record<string, string>> {
+  const data = await (await expectOk(await apiFetch(`/api/admin/campaigns/${campaignId}/theme`))).json() as { theme: Record<string, string> }
+  return data.theme
+}
+
+/** DELETE /api/admin/campaigns/:id/theme/:slot — the slot goes back to the default art. */
+export async function resetThemeImage(campaignId: number, slot: string): Promise<void> {
+  await expectOk(await apiFetch(`/api/admin/campaigns/${campaignId}/theme/${slot}`, { method: 'DELETE' }))
 }
 
 // ── Admin moderation ──────────────────────────────────────────────────────

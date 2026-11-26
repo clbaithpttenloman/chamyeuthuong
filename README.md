@@ -21,7 +21,7 @@ A platform that runs different campaigns. **Phase 2b** (Noel) is a 2.5D wish tre
 | `/` | Home — Noel intro, player sign-in button, "Treo quà" (create gift), "Bảng xếp hạng" (leaderboard), "Tất cả quà" (all gifts). No sign-in required to view. |
 | `/:slug` | Campaign home by slug (e.g., `/noel-2026`). Kind determines component: `gift_tree` → Noel scene, `teacher_cards` → 20/11 home (legacy). Drafts and unknown slugs show 404. Reserved: `admin`, `api`, `t`, `gui-thiep`, `ve-clb-ai`, `assets`, `theme`, `g`, `dang-ky`, `dang-nhap` |
 | `/:slug/g/:publicId` | Share link — opens the tree with that gift already opened. Sign-out users can view; actions (heart, report) prompt sign-in. |
-| `/admin` | Admin dashboard — campaigns, gift moderation, users (ban/unban, password reset, grant admin), audit log. Username/password sign-in required. |
+| `/admin` | Admin dashboard — campaigns, gift moderation, users (ban/unban, password reset, grant admin), audit log, tree theme images (**Chủ đề cây thông**, see `docs/runbooks/theme.md`). Username/password sign-in required. |
 
 **(Phase 1 legacy routes — still working):**
 
