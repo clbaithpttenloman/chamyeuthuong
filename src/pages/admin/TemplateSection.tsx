@@ -7,9 +7,8 @@
  * writing zone outlined so the admin can check the image leaves it clear.
  * Delete with 409 message "Mẫu đang được dùng — hãy tắt mẫu thay vì xóa".
  *
- * Phase 2 addition: campaign select on create/edit (from /api/admin/campaigns).
- * Requires Google session. If campaigns call returns 401 (typed-email session), the
- * select is hidden and campaign defaults to 1 (keeps existing 20/11 behaviour).
+ * Campaign select on create/edit (from /api/admin/campaigns). Requires an admin session (ADR-9).
+ * If the campaigns call fails, the select is hidden and the campaign defaults to 1.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AdminTemplate, AdminTemplateInput } from '../../../shared/api.ts'
@@ -94,7 +93,7 @@ export default function TemplateSection({
   const pendingSlot = useRef<Slot | null>(null)
 
   // Phase 2: Campaign list for the campaign select in create/edit.
-  // On 401 (typed-email session), campaigns stay empty and the select is hidden.
+  // If the campaigns call fails (for example the session expired), the select stays hidden.
   const [campaigns, setCampaigns] = useState<AdminCampaignRow[]>([])
   const [campaignsLoaded, setCampaignsLoaded] = useState(false)
 
@@ -119,14 +118,14 @@ export default function TemplateSection({
     }
   }, [onAccessError])
 
-  /** Load campaigns for the campaign select. On 401, silently leaves campaigns empty. */
+  /** Load campaigns for the campaign select. On failure, silently leaves campaigns empty. */
   const loadCampaigns = useCallback(async () => {
     if (campaignsLoaded) return
     try {
       const rows = await listAdminCampaigns()
       setCampaigns(rows)
     } catch (e) {
-      // 401 (typed-email session) → hide the select, keep campaign 1 as default.
+      // Failure → hide the select, keep campaign 1 as default.
       if (!(e instanceof ApiError && e.status === 401)) {
         // Non-401 failure: treat as non-critical; select will be hidden.
       }

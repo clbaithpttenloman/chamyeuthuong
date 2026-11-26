@@ -171,12 +171,14 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   // Templates: load error state so user can retry (review finding)
   const [templates, setTemplates] = useState<NoelTemplate[]>([])
   const [templatesLoadError, setTemplatesLoadError] = useState(false)
+  // True once the list has loaded (even if empty), so "no backgrounds" is not shown as "loading".
+  const [templatesReady, setTemplatesReady] = useState(false)
 
   const loadTemplates = useCallback(() => {
     let alive = true
     setTemplatesLoadError(false)
     getNoelTemplates(slug)
-      .then((t) => { if (alive) setTemplates(t) })
+      .then((t) => { if (alive) { setTemplates(t); setTemplatesReady(true) } })
       .catch(() => { if (alive) setTemplatesLoadError(true) })
     return () => { alive = false }
   }, [slug])
@@ -778,6 +780,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
               giftsPerUser={giftsPerUser}
               templates={templates}
               templatesLoadError={templatesLoadError}
+              templatesReady={templatesReady}
               onRetryTemplates={loadTemplates}
               isInApp={isInApp}
               onSignIn={handleSignIn}

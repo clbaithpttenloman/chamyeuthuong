@@ -86,6 +86,8 @@ export interface CreateGiftProps {
   templates: ReadonlyArray<NoelTemplate>
   /** True when the template fetch failed (shows an error with a retry button). */
   templatesLoadError?: boolean
+  /** True once the template list has loaded, even when it is empty. */
+  templatesReady?: boolean
   /** Called to retry loading templates. */
   onRetryTemplates?: () => void
   /** Whether the user is using an in-app browser. */
@@ -138,6 +140,7 @@ export default function CreateGift({
   giftsPerUser,
   templates,
   templatesLoadError,
+  templatesReady = false,
   onRetryTemplates,
   isInApp,
   onSignIn,
@@ -459,6 +462,7 @@ export default function CreateGift({
                 draft={draft}
                 templates={templates}
                 templatesLoadError={!!templatesLoadError}
+                templatesReady={templatesReady}
                 onRetryTemplates={onRetryTemplates}
                 onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
               />
@@ -547,7 +551,7 @@ export default function CreateGift({
                   <button
                     type="button"
                     className="create-gift-next-btn noel-action-btn"
-                    disabled={step === 'card' && !!templatesLoadError}
+                    disabled={step === 'card' && (!!templatesLoadError || (templatesReady && templates.length === 0))}
                     onClick={validateAndAdvance}
                   >
                     Tiếp theo →
@@ -614,12 +618,14 @@ function CardEditor({
   draft,
   templates,
   templatesLoadError,
+  templatesReady,
   onRetryTemplates,
   onChange,
 }: {
   draft: Draft
   templates: ReadonlyArray<NoelTemplate>
   templatesLoadError: boolean
+  templatesReady: boolean
   onRetryTemplates?: () => void
   onChange: (patch: Partial<Draft>) => void
 }): ReactNode {
@@ -684,6 +690,10 @@ function CardEditor({
               </button>
             ))}
           </div>
+        ) : templatesReady ? (
+          <p className="create-gift-editor-hint" role="status">
+            Chiến dịch này chưa có ảnh nền. Quản trị viên cần tạo mẫu thiệp cho chiến dịch trong trang quản lý.
+          </p>
         ) : (
           <p className="create-gift-editor-hint">Đang tải ảnh nền…</p>
         )}
