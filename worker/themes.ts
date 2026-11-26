@@ -6,7 +6,7 @@ import { json, error, readBytes, HttpError } from './http.ts'
 import { ensureSchema } from './schema.ts'
 import { parseId } from './admins.ts'
 import { encodeBase64, decodeBase64, getCache, type CacheStore } from './images.ts'
-import { getSlotSpec, validateThemeImage, type ThemeFormat } from '../shared/themeSlots.ts'
+import { getSlotSpec, validateThemeImage, themeAssetFor, type ThemeFormat } from '../shared/themeSlots.ts'
 import { inspectTheme, METADATA_MESSAGE } from './themeInspect.ts'
 import type { D1, Env as WorkerEnv } from './types.ts'
 
@@ -48,10 +48,10 @@ export async function handleThemes(request: Request, env: Env, auth: Auth): Prom
   if (slot === undefined) {
     if (request.method !== 'GET') return error('method')
     const { results } = await env.DB
-      .prepare('SELECT slot, token FROM theme_image WHERE campaign_id = ?')
+      .prepare('SELECT slot, token, frames, fps, width, height FROM theme_image WHERE campaign_id = ?')
       .bind(campaignId)
-      .all<{ slot: string; token: string }>()
-    return json({ theme: Object.fromEntries(results.map((r) => [r.slot, `/api/theme-image/${r.token}`])) })
+      .all<{ slot: string; token: string; frames: number; fps: number | null; width: number; height: number }>()
+    return json({ theme: Object.fromEntries(results.map((r) => [r.slot, themeAssetFor(r.token, r.frames, r.fps, r.width, r.height, getSlotSpec(r.slot)?.animation === 'sprite')])) })
   }
 
   const spec = getSlotSpec(slot)
@@ -79,8 +79,13 @@ export async function handleThemes(request: Request, env: Env, auth: Auth): Prom
   const info = inspected.info
   if (info.exif) return json({ error: 'bad_request', errors: [METADATA_MESSAGE] }, 400)
 
-  const check = validateThemeImage(spec, { mime: info.mime, size: bytes.length, width: info.width, height: info.height, hasAlpha: info.hasAlpha, animated: info.animated })
+  // Sprite slots declare their playback speed on the query string (?fps=12..30). Other slots ignore it.
+  const fpsParam = url.searchParams.get('fps')
+  const fps = fpsParam === null ? null : Number(fpsParam)
+  const check = validateThemeImage(spec, { mime: info.mime, size: bytes.length, width: info.width, height: info.height, hasAlpha: info.hasAlpha, animated: info.animated, frames: info.frames }, fps)
   if (!check.ok) return json({ error: 'bad_request', errors: check.errors }, 400)
+  const frames = check.frames
+  const storedFps = check.fps
 
   const token = newImageToken()
   const now = new Date().toISOString()
@@ -88,11 +93,11 @@ export async function handleThemes(request: Request, env: Env, auth: Auth): Prom
   // the previous image of this slot. The old row is only deleted when the new row exists.
   const insert = env.DB
     .prepare(
-      `INSERT INTO theme_image (campaign_id, slot, token, mime, size, width, height, data, created_at, created_by)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      `INSERT INTO theme_image (campaign_id, slot, token, mime, size, width, height, frames, fps, data, created_at, created_by)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE (SELECT COALESCE(SUM(size), 0) FROM theme_image WHERE campaign_id = ? AND slot != ?) + ? <= ?`,
     )
-    .bind(campaignId, slot, token, info.mime, bytes.length, info.width, info.height, encodeBase64(bytes), now, auth.actor,
+    .bind(campaignId, slot, token, info.mime, bytes.length, info.width, info.height, frames, storedFps, encodeBase64(bytes), now, auth.actor,
       campaignId, slot, bytes.length, THEME_CAMPAIGN_CAP)
   const cleanup = env.DB
     .prepare(
@@ -103,7 +108,7 @@ export async function handleThemes(request: Request, env: Env, auth: Auth): Prom
   const [inserted] = await env.DB.batch([insert, cleanup])
   if (inserted.meta.changes !== 1) return json({ error: 'campaign_limit' }, 409)
 
-  return json({ token, slot, mime: info.mime, width: info.width, height: info.height, size: bytes.length }, 201)
+  return json({ token, ...themeAssetFor(token, frames, storedFps, info.width, info.height, spec.animation === 'sprite'), slot, mime: info.mime, width: info.width, height: info.height, size: bytes.length }, 201)
 }
 
 /**

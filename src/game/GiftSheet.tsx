@@ -36,7 +36,8 @@ import {
   type GiftForCard,
 } from './giftHelpers.ts'
 import { errorMessage } from './errors.ts'
-import { useThemeUrls, type ThemeUrls } from './defaultTheme.ts'
+import { useThemeAsset, useThemeUrls, type ThemeUrls } from './defaultTheme.ts'
+import SpriteOpen from './SpriteOpen.tsx'
 import { ApiError } from '../api.ts'
 import type { MeUser, ReportReason } from '../api.ts'
 import site from '../content/site.json'
@@ -114,6 +115,7 @@ export default function GiftSheet({
 }: GiftSheetProps): ReactNode {
   const reduced = prefersReducedMotion()
   const theme = useThemeUrls()
+  const spriteAsset = useThemeAsset(`box_${gift.boxStyle}_open`)
   const dialogRef = useRef<HTMLDivElement>(null)
 
   // onClose ref so the focus-trap effect runs once (not on every parent re-render)
@@ -140,6 +142,8 @@ export default function GiftSheet({
 
   useEffect(() => {
     if (phase !== 'animating') return
+    // An uploaded sprite plays through SpriteOpen, which moves the phase on when it finishes.
+    if (spriteAsset) return
     const boxEl    = boxRef.current
     const lidEl    = lidRef.current
     const sparksEl = sparksRef.current
@@ -155,7 +159,7 @@ export default function GiftSheet({
       .catch(() => { clearTimeout(safety); if (alive) setPhase('card') })
     return () => { alive = false; clearTimeout(safety) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animKey, reduced])
+  }, [animKey, reduced, spriteAsset])
 
   // ── Heart action ──────────────────────────────────────────────────────
   const [heartLoading, setHeartLoading] = useState(false)
@@ -292,7 +296,20 @@ export default function GiftSheet({
         </div>
 
         {/* ── Animation phase ───────────────────────────────────────── */}
-        {phase === 'animating' && (
+        {phase === 'animating' && spriteAsset && (
+          <div className="gift-sheet-anim" aria-hidden="true">
+            <SpriteOpen
+              url={spriteAsset.url}
+              cols={spriteAsset.cols}
+              rows={spriteAsset.rows}
+              frames={spriteAsset.frames}
+              fps={spriteAsset.fps ?? 24}
+              reduced={reduced}
+              onDone={() => setPhase('card')}
+            />
+          </div>
+        )}
+        {phase === 'animating' && !spriteAsset && (
           <div className="gift-sheet-anim" aria-hidden="true">
             <div className="gift-sheet-sparks" ref={sparksRef} />
             <div className="gift-sheet-lid" ref={lidRef} />

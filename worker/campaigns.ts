@@ -20,6 +20,7 @@ import { error, json, readJson, HttpError } from './http.ts'
 import { ensureSchema } from './schema.ts'
 import { isValidSlug, isEffectivelyOpen, CAMPAIGN_KINDS, validateSettings } from '../shared/campaign.ts'
 import type { CampaignKind } from '../shared/campaign.ts'
+import { getSlotSpec, themeAssetFor, type ThemeAsset } from '../shared/themeSlots.ts'
 import type { D1, Env } from './types.ts'
 
 // ---- Response shape ----
@@ -52,11 +53,11 @@ type CampaignData = {
   endsAt: string
   status: string
   open: boolean
-  /** Uploaded theme images by slot → /api/theme-image/<token>. A slot absent here uses the default art. */
-  theme: Record<string, string>
+  /** Uploaded theme images by slot. A slot absent here uses the default art. */
+  theme: Record<string, ThemeAsset>
 }
 
-function toCampaignData(row: CampaignRow, now: Date, theme: Record<string, string>): CampaignData {
+function toCampaignData(row: CampaignRow, now: Date, theme: Record<string, ThemeAsset>): CampaignData {
   return {
     slug: row.slug,
     kind: row.kind,
@@ -74,12 +75,15 @@ function toCampaignData(row: CampaignRow, now: Date, theme: Record<string, strin
 }
 
 /** Theme slot → public image URL for one campaign (Phase 3). Bytes are not read here. */
-async function loadTheme(db: D1, campaignId: number): Promise<Record<string, string>> {
+async function loadTheme(db: D1, campaignId: number): Promise<Record<string, ThemeAsset>> {
   const { results } = await db
-    .prepare('SELECT slot, token FROM theme_image WHERE campaign_id = ?')
+    .prepare('SELECT slot, token, frames, fps, width, height FROM theme_image WHERE campaign_id = ?')
     .bind(campaignId)
-    .all<{ slot: string; token: string }>()
-  return Object.fromEntries(results.map((r) => [r.slot, `/api/theme-image/${r.token}`]))
+    .all<{ slot: string; token: string; frames: number; fps: number | null; width: number; height: number }>()
+  return Object.fromEntries(results.map((r) => [
+    r.slot,
+    themeAssetFor(r.token, r.frames, r.fps, r.width, r.height, getSlotSpec(r.slot)?.animation === 'sprite'),
+  ]))
 }
 
 function parseJson(s: string): unknown {

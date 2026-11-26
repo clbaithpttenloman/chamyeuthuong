@@ -619,7 +619,14 @@ Used on gift create, also by client-side form validation (`src/game/createGiftVa
 
 ## Theme image inspection and storage (Noel, Phase 3, 2026-11-23)
 
-- **Scope:** static PNG, JPEG and WebP only. Animated files, sprite grids and overlays are not accepted yet.
+- **Scope:** all 25 gift-tree slots. Formats: PNG, JPEG, WebP, GIF (per slot). Kinds: still, loop (GIF or animated WebP, frame limit per slot), sprite sheet (PNG or WebP, 512 px cells, 6–16 cells, fps declared on upload). APNG is refused everywhere.
+- **GIF** (`parseGif`): logical screen size; every image descriptor is counted as a frame and must lie inside the canvas; the graphic control block gives transparency; comment, plain-text and unknown application blocks count as metadata (NETSCAPE2.0 and ANIMEXTS1.0 are allowed); at most 512 blocks; every length is checked against the buffer.
+- **Animated WebP:** ANMF chunks are counted as frames; each frame rectangle must lie inside the VP8X canvas (`x/2`, `y/2`, `w-1`, `h-1` are read from the 16-byte ANMF header); a file with no frames is refused.
+- **Decoded size:** frames × width × height × 4 ≤ 64 MiB (`MAX_DECODED_BYTES`). No current slot can exceed it.
+- **Storage columns:** `frames` (1 for stills, cells for sprites, otherwise the animation frame count) and `fps` (sprites only, 12–30, CHECK constraint).
+- **Serving the grid:** the campaign theme map entry is `{ url, frames, fps, cols, rows }`. `cols` and `rows` are the sprite grid (1×1 otherwise), derived from the stored width and height. The client uses them for `background-position`.
+- **Playback:** `star` and `overlay_loop` are `<img>` tags, so the browser loops GIF and WebP natively. `box_N_open` plays through `SpriteOpen` (fps from the map, last frame held, reduced motion shows the last frame). Without an upload the code-drawn lid animation runs.
+- **Reduced motion:** the overlay loop is hidden (`display: none`). Sprite boxes show their last frame.
 - **Metadata** (EXIF, XMP, text chunks, comments) is refused. PNG: `eXIf`, `tEXt`, `zTXt`, `iTXt` chunks. JPEG: APP1, APP13 and COM
   segments before the scan, plus an Exif/XMP signature search over the whole file. The 20/11 parsers only flag EXIF, so the theme path adds this check.
 - **Format is read from bytes, not the file name or the Content-Type header.** Magic bytes first, then

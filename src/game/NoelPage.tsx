@@ -74,6 +74,7 @@ import {
 } from '../api.ts'
 import { isInAppBrowser } from '../campaign/inAppBrowser.ts'
 import { ThemeOverridesContext } from './defaultTheme.ts'
+import type { ThemeAsset } from '../../shared/themeSlots.ts'
 
 // GiftSheet is lazy to avoid loading CardView + timelines on first tree render
 const GiftSheet = lazy(() => import('./GiftSheet.tsx'))
@@ -165,7 +166,7 @@ export default function NoelPage({ slug, focusPublicId }: NoelPageProps): ReactN
   // Campaign metadata
   const [campaignName, setCampaignName] = useState('Cây Thông Điều Ước')
   const [campaignOpen, setCampaignOpen] = useState(true)
-  const [themeOverrides, setThemeOverrides] = useState<Record<string, string>>({})
+  const [themeOverrides, setThemeOverrides] = useState<Record<string, ThemeAsset>>({})
   const [treeSlots, setTreeSlots] = useState(15)
   const [groundSlots, setGroundSlots] = useState(10)
   const [giftsPerUser, setGiftsPerUser] = useState(3)

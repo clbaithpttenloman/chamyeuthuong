@@ -7,6 +7,7 @@
  */
 
 import { createContext, useContext, useMemo } from 'react'
+import type { ThemeAsset } from '../../shared/themeSlots.ts'
 
 const BASE = '/theme/gift_tree/default'
 
@@ -56,17 +57,40 @@ export type DefaultThemeSlot = keyof typeof DEFAULT_THEME_URLS
 
 export type ThemeUrls = Record<DefaultThemeSlot, string>
 
-/** Uploaded theme URLs for the current campaign (slot → /api/theme-image/<token>). Empty = all defaults. */
-export const ThemeOverridesContext = createContext<Readonly<Record<string, string>>>({})
+/** Uploaded theme assets for the current campaign, by slot. Empty = all defaults. */
+export const ThemeOverridesContext = createContext<Readonly<Record<string, ThemeAsset>>>({})
 
-/** Default URL for every slot, replaced per slot by the campaign's uploaded image when one exists. */
+/** Default URL for every static slot, replaced per slot by the campaign's upload when one exists. */
 export function useThemeUrls(): ThemeUrls {
   const overrides = useContext(ThemeOverridesContext)
   return useMemo(() => {
     const out: Record<string, string> = { ...DEFAULT_THEME_URLS }
-    for (const [slot, url] of Object.entries(overrides)) {
-      if (slot in DEFAULT_THEME_URLS && url) out[slot] = url
+    for (const [slot, asset] of Object.entries(overrides)) {
+      if (slot in DEFAULT_THEME_URLS && asset.url) out[slot] = asset.url
     }
     return out as ThemeUrls
   }, [overrides])
+}
+
+/** The upload for a slot that has no default (layer_far, overlay_loop, box_N_open), or null. */
+export function useThemeAsset(slot: string): ThemeAsset | null {
+  const overrides = useContext(ThemeOverridesContext)
+  return overrides[slot] ?? null
+}
+
+/**
+ * Grid position of one sprite frame as CSS background-position percentages. With the sheet sized to
+ * cols×rows containers, these percentages land exactly on cell (col, row).
+ */
+export function spriteFramePosition(index: number, cols: number, rows: number): { x: string; y: string } {
+  const col = index % cols
+  const row = Math.floor(index / cols)
+  const x = cols > 1 ? (col / (cols - 1)) * 100 : 0
+  const y = rows > 1 ? (row / (rows - 1)) * 100 : 0
+  return { x: `${x}%`, y: `${y}%` }
+}
+
+/** Total frames on a sprite sheet: every cell is one frame (all cells used). */
+export function spriteGridTotal(grid: { cols: number; rows: number }): number {
+  return grid.cols * grid.rows
 }

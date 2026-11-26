@@ -14,10 +14,12 @@ export type ThemeInfo = {
   height: number
   /** Real transparency: an alpha channel, a tRNS chunk, or a WebP alpha flag. */
   hasAlpha: boolean
-  /** Animated PNG (APNG), animated WebP. Refused in the static cut. */
+  /** Animated: APNG (refused everywhere), animated WebP, or a GIF with more than one frame. */
   animated: boolean
-  /** EXIF or XMP chunk present (WebP). ICC colour profiles are not metadata here. */
+  /** EXIF, XMP or a GIF comment/application block present. ICC colour profiles are not metadata here. */
   exif: boolean
+  /** Frame count: 1 for stills, WebP ANMF count, or GIF image descriptor count. */
+  frames: number
 }
 
 export type ThemeInspection = { ok: true; info: ThemeInfo } | { ok: false; error: string }
@@ -25,6 +27,8 @@ export type ThemeInspection = { ok: true; info: ThemeInfo } | { ok: false; error
 const u32be = (b: Uint8Array, o: number): number => ((b[o]! << 24) | (b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!) >>> 0
 const u32le = (b: Uint8Array, o: number): number => (b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16) | (b[o + 3]! << 24)) >>> 0
 const type4 = (b: Uint8Array, o: number): string => String.fromCharCode(b[o]!, b[o + 1]!, b[o + 2]!, b[o + 3]!)
+const u24le = (b: Uint8Array, o: number): number => (b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16)) >>> 0
+const u16le = (b: Uint8Array, o: number): number => (b[o]! | (b[o + 1]! << 8)) >>> 0
 
 /** Walks PNG chunks after the 8-byte signature. Returns flags for the chunks that matter. */
 function scanPng(b: Uint8Array): { colourType: number; tRNS: boolean; acTL: boolean } | null {
@@ -46,7 +50,9 @@ function scanPng(b: Uint8Array): { colourType: number; tRNS: boolean; acTL: bool
 }
 
 /** Walks RIFF chunks of a WebP file. Returns the first chunk type plus the flags that matter. */
-function scanWebp(b: Uint8Array): { first: string; flags: number; alphaVp8l: boolean; animChunks: boolean; metadata: boolean } | null {
+type Rect = { x: number; y: number; w: number; h: number }
+
+function scanWebp(b: Uint8Array): { first: string; flags: number; alphaVp8l: boolean; animChunks: boolean; metadata: boolean; rects: Rect[] } | null {
   if (b.length < 20) return null
   let off = 12
   let first = ''
@@ -54,6 +60,7 @@ function scanWebp(b: Uint8Array): { first: string; flags: number; alphaVp8l: boo
   let alphaVp8l = false
   let animChunks = false
   let metadata = false
+  const rects: Rect[] = []
   while (off + 8 <= b.length) {
     const size = u32le(b, off + 4)
     if (off + 8 + size > b.length) return null
@@ -61,11 +68,97 @@ function scanWebp(b: Uint8Array): { first: string; flags: number; alphaVp8l: boo
     if (!first) first = t
     if (t === 'VP8X') flags = b[off + 8]!
     if (t === 'VP8L' && size >= 5) alphaVp8l = ((u32le(b, off + 9) >>> 28) & 1) === 1
-    if (t === 'ANIM' || t === 'ANMF') animChunks = true
+    if (t === 'ANIM') animChunks = true
+    if (t === 'ANMF') {
+      // ANMF payload: X/2 (3 bytes), Y/2 (3), width-1 (3), height-1 (3), duration (3), flags (1)
+      if (size < 16) return null
+      animChunks = true
+      rects.push({ x: u24le(b, off + 8) * 2, y: u24le(b, off + 11) * 2, w: u24le(b, off + 14) + 1, h: u24le(b, off + 17) + 1 })
+    }
     if (t === 'EXIF' || t === 'XMP ') metadata = true
     off += 8 + size + (size & 1)
   }
-  return { first, flags, alphaVp8l, animChunks, metadata }
+  return { first, flags, alphaVp8l, animChunks, metadata, rects }
+}
+
+/** Skips a GIF sub-block chain. Returns the offset after the zero terminator, or -1 when it overruns. */
+function skipSubBlocks(b: Uint8Array, off: number): number {
+  for (;;) {
+    if (off >= b.length) return -1
+    const size = b[off]!
+    off += 1
+    if (size === 0) return off
+    off += size
+    if (off > b.length) return -1
+  }
+}
+
+const GIF_BROKEN = 'Tệp GIF bị hỏng hoặc không đọc được'
+const GIF_MAX_BLOCKS = 512
+
+/**
+ * Walks a GIF: logical screen size, every image descriptor (frame count, frame rectangle inside the
+ * canvas), graphic control (transparency), and extensions. Comment, plain-text and unknown
+ * application extensions count as metadata. NETSCAPE2.0 (loop count) and ANIMEXTS1.0 are allowed.
+ */
+export function parseGif(b: Uint8Array): { ok: true; width: number; height: number; frames: number; transparent: boolean; metadata: boolean } | { ok: false; error: string } {
+  if (b.length < 13) return { ok: false, error: GIF_BROKEN }
+  const width = u16le(b, 6)
+  const height = u16le(b, 8)
+  if (width === 0 || height === 0) return { ok: false, error: 'Không đọc được kích thước ảnh GIF' }
+  const flags = b[10]!
+  let off = 13
+  if (flags & 0x80) off += 3 * 2 ** ((flags & 7) + 1)
+  let frames = 0
+  let transparent = false
+  let metadata = false
+  for (let blocks = 0; ; blocks++) {
+    if (blocks > GIF_MAX_BLOCKS) return { ok: false, error: 'Tệp GIF có quá nhiều khối dữ liệu' }
+    if (off >= b.length) return { ok: false, error: GIF_BROKEN }
+    const introducer = b[off]!
+    if (introducer === 0x3b) break // trailer
+    if (introducer === 0x21) {
+      if (off + 2 > b.length) return { ok: false, error: GIF_BROKEN }
+      const label = b[off + 1]!
+      if (label === 0xf9) {
+        // Graphic control: off+2 = block size (4), off+3 = packed flags (bit 0 = transparency)
+        if (off + 4 > b.length) return { ok: false, error: GIF_BROKEN }
+        if (b[off + 3]! & 1) transparent = true
+      } else if (label === 0xff) {
+        const app = off + 3
+        const id = app + 11 <= b.length ? String.fromCharCode(...b.subarray(app, app + 11)) : ''
+        // NETSCAPE2.0 and ANIMEXTS1.0 carry loop counts. Their payload bytes are skipped, not scanned: uploads
+        // are admin-only and are served as sandboxed, nosniff images, so the bytes are never executed.
+        if (id !== 'NETSCAPE2.0' && id !== 'ANIMEXTS1.0') metadata = true
+      } else {
+        metadata = true // comment (0xfe), plain text (0x01) and unknown extensions
+      }
+      const next = skipSubBlocks(b, off + 2)
+      if (next < 0) return { ok: false, error: GIF_BROKEN }
+      off = next
+    } else if (introducer === 0x2c) {
+      if (off + 10 > b.length) return { ok: false, error: GIF_BROKEN }
+      const x = u16le(b, off + 1)
+      const y = u16le(b, off + 3)
+      const w = u16le(b, off + 5)
+      const h = u16le(b, off + 7)
+      if (w === 0 || h === 0 || x + w > width || y + h > height) {
+        return { ok: false, error: `Khung hình GIF nằm ngoài khung ảnh (${x + w}×${y + h} trên ${width}×${height})` }
+      }
+      const packed = b[off + 9]!
+      off += 10
+      if (packed & 0x80) off += 3 * 2 ** ((packed & 7) + 1)
+      off += 1 // LZW minimum code size
+      const next = skipSubBlocks(b, off)
+      if (next < 0) return { ok: false, error: GIF_BROKEN }
+      off = next
+      frames++
+    } else {
+      return { ok: false, error: GIF_BROKEN }
+    }
+  }
+  if (frames === 0) return { ok: false, error: 'Tệp GIF không có khung hình' }
+  return { ok: true, width, height, frames, transparent, metadata }
 }
 
 /**
@@ -116,6 +209,20 @@ function jpegHasMetadata(b: Uint8Array): boolean {
 }
 
 export function inspectTheme(mime: string, bytes: Uint8Array): ThemeInspection {
+  if (mime === 'image/gif') {
+    const sig = type4(bytes, 0)
+    if (sig !== 'GIF8' || (bytes[4] !== 0x37 && bytes[4] !== 0x39) || bytes[5] !== 0x61) {
+      return { ok: false, error: 'Tệp không đúng định dạng ảnh đã chọn (kiểm tra chữ ký tệp)' }
+    }
+    const gif = parseGif(bytes)
+    if (!gif.ok) return gif
+    if (gif.metadata) return { ok: false, error: METADATA_MESSAGE }
+    return {
+      ok: true,
+      info: { mime, width: gif.width, height: gif.height, hasAlpha: gif.transparent, animated: gif.frames > 1, exif: false, frames: gif.frames },
+    }
+  }
+
   if (!magicOk(mime, bytes)) {
     return { ok: false, error: 'Tệp không đúng định dạng ảnh đã chọn (kiểm tra chữ ký tệp)' }
   }
@@ -140,6 +247,7 @@ export function inspectTheme(mime: string, bytes: Uint8Array): ThemeInspection {
         hasAlpha: scan.colourType === 4 || scan.colourType === 6 || scan.tRNS,
         animated: scan.acTL,
         exif: pngHasMetadata(bytes),
+        frames: 1,
       },
     }
   }
@@ -150,7 +258,7 @@ export function inspectTheme(mime: string, bytes: Uint8Array): ThemeInspection {
     if (dims === null) return { ok: false, error: 'Không đọc được kích thước ảnh JPEG' }
     return {
       ok: true,
-      info: { mime, width: dims.w, height: dims.h, hasAlpha: false, animated: false, exif: jpegHasMetadata(bytes) },
+      info: { mime, width: dims.w, height: dims.h, hasAlpha: false, animated: false, exif: jpegHasMetadata(bytes), frames: 1 },
     }
   }
 
@@ -163,9 +271,17 @@ export function inspectTheme(mime: string, bytes: Uint8Array): ThemeInspection {
     const vp8x = scan.first === 'VP8X'
     const hasAlpha = vp8x ? (scan.flags & 0x10) !== 0 : scan.alphaVp8l
     const animated = vp8x ? (scan.flags & 0x02) !== 0 || scan.animChunks : scan.animChunks
+    if (animated) {
+      if (scan.rects.length === 0) return { ok: false, error: 'Ảnh WebP động không có khung hình' }
+      for (const r of scan.rects) {
+        if (r.x + r.w > dims.w || r.y + r.h > dims.h) {
+          return { ok: false, error: `Khung hình WebP nằm ngoài khung ảnh (${r.x + r.w}×${r.y + r.h} trên ${dims.w}×${dims.h})` }
+        }
+      }
+    }
     return {
       ok: true,
-      info: { mime, width: dims.w, height: dims.h, hasAlpha, animated, exif: scan.metadata },
+      info: { mime, width: dims.w, height: dims.h, hasAlpha, animated, exif: scan.metadata, frames: animated ? Math.max(scan.rects.length, 1) : 1 },
     }
   }
 

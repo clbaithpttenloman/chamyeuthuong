@@ -43,6 +43,28 @@ function webpVp8l(w: number, h: number, alpha: boolean): Uint8Array {
   const chunk = [...ascii('VP8L'), ...u32le(payload.length), ...payload]
   return new Uint8Array([...ascii('RIFF'), ...u32le(4 + chunk.length), ...ascii('WEBP'), ...chunk])
 }
+/** One ANMF frame chunk: offset (x/2, y/2) and the frame size. Duration and flags are zero. */
+function anmf(x: number, y: number, w: number, h: number): number[] {
+  const u24 = (n: number) => [n & 255, (n >> 8) & 255, (n >> 16) & 255]
+  const payload = [...u24(x / 2), ...u24(y / 2), ...u24(w - 1), ...u24(h - 1), 0, 0, 0, 0]
+  return [...ascii('ANMF'), ...u32le(payload.length), ...payload]
+}
+
+/** GIF builder: one image descriptor per frame, optional transparency, comment, or extra application block. */
+function gif(w: number, h: number, frames: Array<{ x?: number; y?: number; w: number; h: number }>, opts: { transparent?: boolean; comment?: boolean; app?: string } = {}): Uint8Array {
+  const u16 = (n: number) => [n & 255, (n >> 8) & 255]
+  const out: number[] = [...ascii('GIF89a'), ...u16(w), ...u16(h), 0x00, 0, 0]
+  if (opts.app) out.push(0x21, 0xff, 11, ...ascii(opts.app.padEnd(11, ' ').slice(0, 11)), 3, 1, 0, 0, 0)
+  if (opts.comment) out.push(0x21, 0xfe, 2, ...ascii('hi'), 0)
+  for (const f of frames) {
+    out.push(0x21, 0xf9, 4, opts.transparent ? 1 : 0, 0, 0, 0, 0)
+    out.push(0x2c, ...u16(f.x ?? 0), ...u16(f.y ?? 0), ...u16(f.w), ...u16(f.h), 0x00)
+    out.push(2, 2, 0x4c, 0x01, 0)
+  }
+  out.push(0x3b)
+  return new Uint8Array(out)
+}
+
 /** Baseline JPEG header with a SOF0 segment (height then width). */
 function jpeg(w: number, h: number): Uint8Array {
   return new Uint8Array([
@@ -56,7 +78,7 @@ function jpeg(w: number, h: number): Uint8Array {
 describe('PNG', () => {
   it('colour type 6 (RGBA) → alpha, not animated', () => {
     const r = inspectTheme('image/png', png(256, 256, 6))
-    expect(r).toEqual({ ok: true, info: { mime: 'image/png', width: 256, height: 256, hasAlpha: true, animated: false, exif: false } })
+    expect(r).toEqual({ ok: true, info: { mime: 'image/png', width: 256, height: 256, hasAlpha: true, animated: false, exif: false, frames: 1 } })
   })
 
   it('colour type 2 (RGB) without tRNS → no alpha', () => {
@@ -87,12 +109,22 @@ describe('PNG', () => {
 describe('WebP', () => {
   it('VP8X with the alpha flag (0x10) → alpha; animation flag (0x02) clear → static', () => {
     const r = inspectTheme('image/webp', webpVp8x(256, 256, 0x10))
-    expect(r).toEqual({ ok: true, info: { mime: 'image/webp', width: 256, height: 256, hasAlpha: true, animated: false, exif: false } })
+    expect(r).toEqual({ ok: true, info: { mime: 'image/webp', width: 256, height: 256, hasAlpha: true, animated: false, exif: false, frames: 1 } })
   })
 
-  it('VP8X animation flag (0x02) → animated', () => {
+  it('VP8X animation flag (0x02) with frames → animated, frame count from ANMF chunks', () => {
+    const r = inspectTheme('image/webp', webpVp8x(256, 256, 0x12, [...anmf(0, 0, 256, 256), ...anmf(0, 0, 128, 128)]))
+    expect(r.ok && r.info.animated && r.info.frames).toBe(2)
+  })
+
+  it('animated WebP with no frames → refused', () => {
     const r = inspectTheme('image/webp', webpVp8x(256, 256, 0x12))
-    expect(r.ok && r.info.animated).toBe(true)
+    expect(r.ok).toBe(false)
+  })
+
+  it('a frame that runs past the canvas → refused with the actual extent', () => {
+    const r = inspectTheme('image/webp', webpVp8x(256, 256, 0x12, anmf(0, 0, 300, 256)))
+    expect(r).toEqual({ ok: false, error: 'Khung hình WebP nằm ngoài khung ảnh (300×256 trên 256×256)' })
   })
 
   it('VP8X without alpha flag → no alpha', () => {
@@ -109,7 +141,7 @@ describe('WebP', () => {
 describe('JPEG', () => {
   it('SOF0 dimensions, never transparent', () => {
     const r = inspectTheme('image/jpeg', jpeg(1080, 1920))
-    expect(r).toEqual({ ok: true, info: { mime: 'image/jpeg', width: 1080, height: 1920, hasAlpha: false, animated: false, exif: false } })
+    expect(r).toEqual({ ok: true, info: { mime: 'image/jpeg', width: 1080, height: 1920, hasAlpha: false, animated: false, exif: false, frames: 1 } })
   })
 
   it('APP1 Exif segment → refused with the EXIF message, not a size error', () => {
@@ -201,6 +233,37 @@ describe('metadata beyond EXIF (text chunks, XMP, comments) is refused', () => {
   it('clean JPEG with an ICC-free header → no metadata flag', () => {
     const r = inspectTheme('image/jpeg', jpeg(256, 256))
     expect(r.ok && r.info.exif).toBe(false)
+  })
+})
+
+describe('GIF', () => {
+  it('a single-frame GIF is a still', () => {
+    const r = inspectTheme('image/gif', gif(256, 256, [{ w: 256, h: 256 }]))
+    expect(r).toEqual({ ok: true, info: { mime: 'image/gif', width: 256, height: 256, hasAlpha: false, animated: false, exif: false, frames: 1 } })
+  })
+
+  it('multi-frame GIF → animated with the frame count and transparency from the graphic control block', () => {
+    const r = inspectTheme('image/gif', gif(256, 256, [{ w: 256, h: 256 }, { w: 256, h: 256 }, { w: 128, h: 128, x: 64 }], { transparent: true, app: 'NETSCAPE2.0' }))
+    expect(r).toEqual({ ok: true, info: { mime: 'image/gif', width: 256, height: 256, hasAlpha: true, animated: true, exif: false, frames: 3 } })
+  })
+
+  it('comment extension → refused with the metadata message', () => {
+    expect(inspectTheme('image/gif', gif(256, 256, [{ w: 256, h: 256 }], { comment: true }))).toEqual({ ok: false, error: METADATA_MESSAGE })
+  })
+
+  it('application extension other than NETSCAPE2.0 → refused with the metadata message', () => {
+    expect(inspectTheme('image/gif', gif(256, 256, [{ w: 256, h: 256 }], { app: 'XMP DataXMP' }))).toEqual({ ok: false, error: METADATA_MESSAGE })
+  })
+
+  it('a frame outside the logical screen → refused', () => {
+    const r = inspectTheme('image/gif', gif(256, 256, [{ x: 200, w: 100, h: 10 }]))
+    expect(r.ok).toBe(false)
+  })
+
+  it('wrong signature or truncated data → refused, never thrown', () => {
+    expect(inspectTheme('image/gif', new Uint8Array([...ascii('GIF87b'), 1, 0, 1, 0, 0, 0, 0])).ok).toBe(false)
+    const full = gif(256, 256, [{ w: 256, h: 256 }])
+    expect(inspectTheme('image/gif', full.slice(0, full.length - 6)).ok).toBe(false)
   })
 })
 

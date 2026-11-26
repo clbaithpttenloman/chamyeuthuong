@@ -102,12 +102,56 @@ describe('upload', () => {
     let remaining = THEME_CAMPAIGN_CAP - 10
     for (let i = 0; remaining > 0; i++) {
       const size = Math.min(remaining, 1048576)
-      insertFiller.run(campaignId, `filler${i}`, size)
+      insertFiller.run(campaignId, i.toString(16).padStart(32, '0'), size)
       remaining -= size
     }
     const r = await handleThemes(upload('star', campaignId, png(256, 256)), { DB: db }, AUTH)
     expect(r.status).toBe(409)
     expect((await r.json() as { error: string }).error).toBe('campaign_limit')
+  })
+})
+
+describe('animated slots', () => {
+  function uploadWith(slot: string, query: string, bytes: Uint8Array<ArrayBuffer>, mime: string): Request {
+    return new Request(`https://x/api/admin/campaigns/${campaignId}/theme/${slot}${query}`, {
+      method: 'POST',
+      headers: { 'Content-Type': mime, 'Content-Length': String(bytes.length), 'X-Requested-With': 'fetch' },
+      body: bytes,
+    })
+  }
+
+  it('a sprite sheet without fps → 400 asking for the speed', async () => {
+    const r = await handleThemes(uploadWith('box_1_open', '', png(1024, 1536), 'image/png'), { DB: db }, AUTH)
+    expect(r.status).toBe(400)
+    expect((await r.json() as { errors: string[] }).errors.join(' ')).toContain('Khai báo tốc độ từ 12 đến 30')
+  })
+
+  it('a 2×3 sprite sheet with ?fps=24 → 201 with 6 frames and fps 24, shown in the campaign map', async () => {
+    const r = await handleThemes(uploadWith('box_1_open', '?fps=24', png(1024, 1536), 'image/png'), { DB: db }, AUTH)
+    expect(r.status).toBe(201)
+    expect(await r.json()).toMatchObject({ slot: 'box_1_open', frames: 6, fps: 24 })
+    const map = await (await handleThemes(new Request(`https://x/api/admin/campaigns/${campaignId}/theme`), { DB: db }, AUTH)).json() as { theme: Record<string, { frames: number; fps: number; cols: number; rows: number }> }
+    expect(map.theme.box_1_open).toMatchObject({ frames: 6, fps: 24, cols: 2, rows: 3 })
+  })
+
+  it('a two-frame 256×256 GIF for the star slot → 201, stored with frames 2 and no fps', async () => {
+    // Each frame: graphic control with the transparency bit (star must be transparent), then the image.
+    const frame = [0x21, 0xf9, 4, 1, 0, 0, 0, 0, 0x2c, 0, 0, 0, 0, 0x00, 0x01, 0x00, 0x01, 0x00, 2, 2, 0x4c, 0x01, 0]
+    const gif = new Uint8Array([
+      ...new TextEncoder().encode('GIF89a'), 0x00, 0x01, 0x00, 0x01, 0x00, 0, 0,
+      0x21, 0xff, 11, ...new TextEncoder().encode('NETSCAPE2.0'), 3, 1, 0, 0, 0,
+      ...frame, ...frame,
+      0x3b,
+    ])
+    const r = await handleThemes(uploadWith('star', '', gif, 'image/gif'), { DB: db }, AUTH)
+    expect(r.status).toBe(201)
+    expect(await r.json()).toMatchObject({ slot: 'star', mime: 'image/gif', frames: 2, fps: null })
+  })
+
+  it('?fps is ignored for non-sprite slots', async () => {
+    const r = await handleThemes(uploadWith('star', '?fps=24', png(256, 256), 'image/png'), { DB: db }, AUTH)
+    expect(r.status).toBe(201)
+    expect(await r.json()).toMatchObject({ frames: 1, fps: null })
   })
 })
 
@@ -190,7 +234,7 @@ describe('admin theme list', () => {
     const body = await (await handleThemes(upload('tree', campaignId, png(1200, 1600)), { DB: db }, AUTH)).json() as { token: string }
     const r = await handleThemes(new Request(`https://x/api/admin/campaigns/${campaignId}/theme`), { DB: db }, AUTH)
     expect(r.status).toBe(200)
-    expect((await r.json() as { theme: Record<string, string> }).theme).toEqual({ tree: `/api/theme-image/${body.token}` })
+    expect((await r.json() as { theme: Record<string, unknown> }).theme).toEqual({ tree: { url: `/api/theme-image/${body.token}`, frames: 1, fps: null, cols: 1, rows: 1 } })
   })
 })
 
@@ -199,7 +243,7 @@ describe('campaign read carries the theme map', () => {
     const body = await (await handleThemes(upload('star', campaignId, png(256, 256)), { DB: db }, AUTH)).json() as { token: string }
     const r = await handleCampaigns(new Request('https://x/api/campaigns/noel-theme'), { DB: db })
     expect(r.status).toBe(200)
-    const campaign = await r.json() as { theme: Record<string, string> }
-    expect(campaign.theme).toEqual({ star: `/api/theme-image/${body.token}` })
+    const campaign = await r.json() as { theme: Record<string, unknown> }
+    expect(campaign.theme).toEqual({ star: { url: `/api/theme-image/${body.token}`, frames: 1, fps: null, cols: 1, rows: 1 } })
   })
 })

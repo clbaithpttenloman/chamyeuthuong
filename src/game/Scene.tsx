@@ -72,7 +72,7 @@ import { slotLayout, type Slot } from './cone.ts'
 import { createSpin } from './spin.ts'
 import { startSnow } from './particles.ts'
 import { animateStar, flashOrnament } from './timelines.ts'
-import { useThemeUrls, TREE_GEOMETRY, type ThemeUrls } from './defaultTheme.ts'
+import { useThemeAsset, useThemeUrls, TREE_GEOMETRY, type ThemeUrls } from './defaultTheme.ts'
 import { computeSceneLayout, type SceneLayout } from './layout.ts'
 import {
   createGestureState,
@@ -182,6 +182,8 @@ function skyUrl(urls: ThemeUrls): string {
 export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicId }: SceneProps): ReactNode {
   const reduced = useMemo(() => prefersReducedMotion(), [])
   const theme = useThemeUrls()
+  const farLayer = useThemeAsset('layer_far')
+  const overlayLoop = useThemeAsset('overlay_loop')
 
   const sceneRef      = useRef<HTMLDivElement>(null)
   const treeImgRef    = useRef<HTMLImageElement>(null)
@@ -564,6 +566,11 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         )
       })}
 
+      {/* z=1 — far scenery (uploaded only): bottom-aligned behind the tree; static, no parallax yet */}
+      {farLayer && (
+        <img src={farLayer.url} className="noel-far" alt="" aria-hidden="true" draggable={false} />
+      )}
+
       {/* z=4 — tree image: left/top/width/height set by JS layout */}
       <img
         ref={treeImgRef}
@@ -582,6 +589,11 @@ export function Scene({ gifts, treeSlots, groundSlots: _gs, onOpen, focusPublicI
         aria-hidden="true"
         draggable={false}
       />
+
+      {/* z=6 — looping overlay (uploaded only): full scene, passes pointer events through */}
+      {overlayLoop && (
+        <img src={overlayLoop.url} className="noel-overlay" alt="" aria-hidden="true" draggable={false} />
+      )}
 
       {/* z=7+ — ground boxes: positioned via layout effect (bottom-centre anchor) */}
       {groundGifts.map((gift, i) => {

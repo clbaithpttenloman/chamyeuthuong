@@ -6,6 +6,7 @@
  * Auth/session endpoints (/api/auth/*, /api/me): X-Requested-With only (session cookie).
  * Campaign public endpoints (/api/campaigns/*): plain fetch, no auth.
  */
+import type { ThemeAsset } from '../shared/themeSlots.ts'
 import type {
   AboutContent,
   AdminCard,
@@ -83,8 +84,8 @@ export type CampaignData = {
   endsAt: string
   status: string
   open: boolean
-  /** Uploaded theme images by slot. Missing slots use the default art. */
-  theme?: Record<string, string>
+  /** Uploaded theme assets by slot. Missing slots use the default art. */
+  theme?: Record<string, ThemeAsset>
 }
 
 /** Campaign row returned by GET /api/admin/campaigns. */
@@ -464,9 +465,13 @@ export async function deleteAdminTemplate(id: number): Promise<void> {
 
 export type ThemeUploadResult = { ok: true; token: string } | { ok: false; errors: string[] }
 
-/** POST /api/admin/campaigns/:id/theme/:slot. 400 and 413 return the server's reasons, not a throw. */
-export async function uploadThemeImage(campaignId: number, slot: string, file: Blob): Promise<ThemeUploadResult> {
-  const res = await apiFetch(`/api/admin/campaigns/${campaignId}/theme/${slot}`, {
+/**
+ * POST /api/admin/campaigns/:id/theme/:slot. Sprite slots pass the playback speed as fps.
+ * 400 and 413 return the server's reasons, not a throw.
+ */
+export async function uploadThemeImage(campaignId: number, slot: string, file: Blob, fps?: number): Promise<ThemeUploadResult> {
+  const query = fps === undefined ? '' : `?fps=${encodeURIComponent(String(fps))}`
+  const res = await apiFetch(`/api/admin/campaigns/${campaignId}/theme/${slot}${query}`, {
     method: 'POST',
     headers: { 'Content-Type': file.type },
     body: file,
@@ -485,8 +490,8 @@ export async function uploadThemeImage(campaignId: number, slot: string, file: B
 }
 
 /** GET /api/admin/campaigns/:id/theme — uploaded slots for one campaign (drafts included). */
-export async function getAdminThemeMap(campaignId: number): Promise<Record<string, string>> {
-  const data = await (await expectOk(await apiFetch(`/api/admin/campaigns/${campaignId}/theme`))).json() as { theme: Record<string, string> }
+export async function getAdminThemeMap(campaignId: number): Promise<Record<string, ThemeAsset>> {
+  const data = await (await expectOk(await apiFetch(`/api/admin/campaigns/${campaignId}/theme`))).json() as { theme: Record<string, ThemeAsset> }
   return data.theme
 }
 
